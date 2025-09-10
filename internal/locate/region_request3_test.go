@@ -50,15 +50,21 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 )
 
@@ -720,7 +726,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		if err != nil {
 			return false
 		}
-		return IsFakeRegionError(regionErr)
+		return retry.IsFakeRegionError(regionErr)
 	}
 
 	// Normal
@@ -1167,7 +1173,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(err)
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err)
-			s.True(IsFakeRegionError(regionErr))
+			s.True(retry.IsFakeRegionError(regionErr))
 			s.Equal(1, s.regionRequestSender.Stats.GetRPCStatsCount())
 			s.Equal(uint32(3), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 3 rpc
 			s.Equal(3, len(reqTargetAddrs))                                                // each rpc to a different store.
@@ -1488,7 +1494,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
 	s.NoError(err)
 	regionErr, err = resp.GetRegionError()
 	s.NoError(err)
-	s.True(IsFakeRegionError(regionErr))
+	s.True(retry.IsFakeRegionError(regionErr))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
@@ -1634,4 +1640,123 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 		}
 	}
 	s.Require().Fail("should access recovered peer after region reloading within RegionCacheTTL")
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
+	readMetric := func(col prometheus.Collector) int {
+		ch := make(chan prometheus.Metric, 1)
+		col.Collect(ch)
+		var m dto.Metric
+		s.Nil((<-ch).Write(&m))
+		return int(*m.Counter.Value + 0.000001) // round to int and avoid floating point precision issues
+	}
+
+	// set the "zone" label for all stores.
+	for _, storeID := range s.storeIDs {
+		s.cluster.UpdateStoreLabels(storeID, []*metapb.StoreLabel{
+			{
+				Key:   "zone",
+				Value: fmt.Sprintf("zone%d", storeID),
+			},
+		})
+	}
+
+	// set the global config zone label to the first store's zone.
+	localZone := fmt.Sprintf("zone%d", s.storeIDs[0])
+	var oldZoneLabel string
+	config.UpdateGlobal(func(cfg *config.Config) {
+		oldZoneLabel = cfg.ZoneLabel
+		cfg.ZoneLabel = localZone
+	})
+	defer func() {
+		config.UpdateGlobal(func(cfg *config.Config) {
+			cfg.ZoneLabel = oldZoneLabel
+		})
+	}()
+
+	for _, staleReadHit := range []bool{false, true} {
+		for _, asyncReq := range []bool{false, true} {
+			caseName := fmt.Sprintf("async=%t, staleReadHit=%t", asyncReq, staleReadHit)
+			// Delete all vectors and recreate them before each test case.
+			metrics.TiKVStaleReadCounter.Reset()
+			metrics.TiKVStaleReadReqCounter.Reset()
+			metrics.TiKVStaleReadBytes.Reset()
+			metrics.StaleReadHitCounter = metrics.TiKVStaleReadCounter.WithLabelValues("hit")
+			metrics.StaleReadMissCounter = metrics.TiKVStaleReadCounter.WithLabelValues("miss")
+			metrics.StaleReadReqLocalCounter = metrics.TiKVStaleReadReqCounter.WithLabelValues("local")
+			metrics.StaleReadReqCrossZoneCounter = metrics.TiKVStaleReadReqCounter.WithLabelValues("cross-zone")
+			metrics.StaleReadLocalInBytes = metrics.TiKVStaleReadBytes.WithLabelValues("local", "in")
+			metrics.StaleReadLocalOutBytes = metrics.TiKVStaleReadBytes.WithLabelValues("local", "out")
+			metrics.StaleReadRemoteInBytes = metrics.TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
+			metrics.StaleReadRemoteOutBytes = metrics.TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
+
+			key := []byte("key")
+			value := []byte("value")
+
+			s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
+				if req.StaleRead && !staleReadHit {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+						DataIsNotReady: &errorpb.DataIsNotReady{},
+					}}}, nil
+				}
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
+			}}
+
+			req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
+			req.ReadReplicaScope = oracle.GlobalTxnScope
+			req.EnableStaleWithMixedReplicaRead()
+
+			ctx := context.WithValue(context.Background(), util.ExecDetailsKey, &util.ExecDetails{})
+			bo := retry.NewBackoffer(ctx, -1)
+			loc, err := s.cache.LocateKey(bo, key)
+			s.Require().Nil(err)
+			var resp *tikvrpc.Response
+			if asyncReq {
+				complete := false
+				rl := async.NewRunLoop()
+				s.regionRequestSender.SendReqAsync(bo, req, loc.Region, time.Second, async.NewCallback(rl, func(innerResp *tikvrpc.ResponseExt, innerErr error) {
+					resp, err = &innerResp.Response, innerErr
+					complete = true
+				}), WithMatchLabels(s.cluster.GetStore(s.storeIDs[0]).Labels))
+				for !complete {
+					_, err := rl.Exec(ctx)
+					s.Nil(err)
+				}
+			} else {
+				resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV, WithMatchLabels(s.cluster.GetStore(s.storeIDs[0]).Labels))
+			}
+			s.Require().Nil(err)
+			s.Equal(value, resp.Resp.(*kvrpcpb.GetResponse).Value)
+
+			hits, misses := readMetric(metrics.StaleReadHitCounter), readMetric(metrics.StaleReadMissCounter)
+			localReq, remoteReq := readMetric(metrics.StaleReadReqLocalCounter), readMetric(metrics.StaleReadReqCrossZoneCounter)
+			localInBytes, localOutBytes := readMetric(metrics.StaleReadLocalInBytes), readMetric(metrics.StaleReadLocalOutBytes)
+			remoteInBytes, remoteOutBytes := readMetric(metrics.StaleReadRemoteInBytes), readMetric(metrics.StaleReadRemoteOutBytes)
+			if staleReadHit {
+				// when stale read hitting
+				// local metrics should be counted
+				s.Equal(1, hits, caseName)
+				s.Equal(1, localReq, caseName)
+				s.Greater(localInBytes, 0, caseName)
+				s.Greater(localOutBytes, 0, caseName)
+				// remote metrics should be zero
+				s.Zero(misses, caseName)
+				s.Zero(remoteReq, caseName)
+				s.Zero(remoteInBytes, caseName)
+				s.Zero(remoteOutBytes, caseName)
+			} else {
+				// when stale read missing
+				s.Zero(hits, caseName)
+				// local replica is tried first, so local metrics will also be counted
+				s.Greater(localReq, 0, caseName)
+				s.Greater(localInBytes, 0, caseName)
+				s.Greater(localOutBytes, 0, caseName)
+				// remote metrics should be counted
+				s.Equal(1, misses, caseName)
+				s.Equal(1, remoteReq, caseName)
+				s.Greater(remoteInBytes, 0, caseName)
+				s.Greater(remoteInBytes, 0, caseName)
+			}
+		}
+	}
 }

@@ -18,7 +18,9 @@ import (
 	"context"
 	"sync"
 
+	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/internal/unionstore/art"
 	"github.com/tikv/client-go/v2/kv"
@@ -151,17 +153,49 @@ func (db *artDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.ART.IterReverse(upper, lower)
 }
 
+// SnapshotGetter implements the Getter interface, by wrapping GetSnapshot.
+func (db *artDBWithContext) SnapshotGetter() Getter {
+	return db.ART.GetSnapshot()
+}
+
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
-	return db.ART.SnapshotIter(lower, upper)
+	return db.ART.GetSnapshot().NewSnapshotIterator(lower, upper, false)
 }
 
-// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
+// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
-	return db.ART.SnapshotIterReverse(upper, lower)
+	return db.ART.GetSnapshot().NewSnapshotIterator(upper, lower, true)
 }
 
-// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *artDBWithContext) SnapshotGetter() Getter {
-	return db.ART.SnapshotGetter()
+type artSnapshot struct {
+	*art.Snapshot
+}
+
+// NewSnapshotIterator wraps `ART.NewSnapshotIterator` and cast the result into an `Iterator`.
+func (a *artSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
+	return a.Snapshot.NewSnapshotIterator(start, end, reverse)
+}
+
+// GetSnapshot returns a snapshot of the ART.
+func (db *artDBWithContext) GetSnapshot() MemBufferSnapshot {
+	if len(db.Stages()) == 0 {
+		logutil.BgLogger().Error("should not use BatchedSnapshotIter for a memdb without any staging buffer")
+	}
+	snapshotSeqNo := db.SnapshotSeqNo
+	seqCheck := func() error {
+		if snapshotSeqNo != db.SnapshotSeqNo {
+			return errors.Errorf(
+				"invalid iter: snapshotSeqNo changed, iter's=%d, db's=%d",
+				snapshotSeqNo,
+				db.SnapshotSeqNo,
+			)
+		}
+		return nil
+	}
+	return &SnapshotWithMutex[*artSnapshot]{
+		mu:       &db.RWMutex,
+		seqCheck: seqCheck,
+		snapshot: &artSnapshot{db.ART.GetSnapshot()},
+	}
 }

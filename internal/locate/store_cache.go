@@ -44,6 +44,11 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey = "zone"
+)
+
 type testingKnobs interface {
 	getMockRequestLiveness() livenessFunc
 	setMockRequestLiveness(f livenessFunc)
@@ -71,7 +76,7 @@ type storeCache interface {
 }
 
 func newStoreCache(pdClient pd.Client) *storeCacheImpl {
-	c := &storeCacheImpl{pdClient: pdClient}
+	c := &storeCacheImpl{pdClient: pdClient.WithCallerComponent("store-cache")}
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.tiflashComputeStoreMu.needReload = true
@@ -464,6 +469,9 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if addr == "" {
+		return false, errors.Errorf("empty store(%d) address", s.storeID)
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := newStore(
 			s.storeID,
@@ -761,7 +769,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
 	// access it.
-	// TODO: Pass the config in a better way, or use the connArray inner the client directly rather than creating new
+	// TODO: Pass the config in a better way, or use the connPool inner the client directly rather than creating new
 	// connection.
 
 	cfg := config.GetGlobalConfig()

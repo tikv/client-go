@@ -39,6 +39,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -46,10 +47,12 @@ import (
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -113,6 +116,72 @@ func (s *testSplitSuite) TestSplitBatchGet() {
 	s.Nil(err)
 }
 
+func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableAsyncBatchGet = true
+	})()
+
+	// init data
+	txn := s.begin()
+	s.Nil(txn.Set([]byte("a"), []byte("a")))
+	s.Nil(txn.Set([]byte("c"), []byte("c")))
+	s.Nil(txn.Commit(context.TODO()))
+
+	// split by 'b' and invalidate the region so that BatchGet('a', 'b', 'c') has to handle 2 batches.
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
+	s.Nil(err)
+	s.True(loc.Contains([]byte("a")))
+	s.True(loc.Contains([]byte("c")))
+	s.split(loc.Region.GetID(), []byte("b"))
+	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+
+	txn = s.begin()
+	m, err := txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	s.Nil(err)
+	s.Len(m, 2)
+	s.Equal([]byte("a"), m[string([]byte{'a'})])
+	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.NotContains(m, string([]byte{'b'}))
+
+	// split by 'c' without invalidating the old region, then BatchGet('a', 'b', 'c') will meet region error when handling batch{keys: ['b', 'c']}.
+	loc, err = s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
+	s.Nil(err)
+	s.False(loc.Contains([]byte("a")))
+	s.True(loc.Contains([]byte("b")))
+	s.True(loc.Contains([]byte("c")))
+	s.split(loc.Region.GetID(), []byte("c"))
+
+	txn = s.begin()
+	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	s.Nil(err)
+	s.Len(m, 2)
+	s.Equal([]byte("a"), m[string([]byte{'a'})])
+	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.NotContains(m, string([]byte{'b'}))
+
+	// leave a lock on 'a' so that BatchGet('a', 'b', 'c') will meet lock error.
+	txnW := s.begin()
+	s.Nil(txnW.Set([]byte("a"), []byte("a")))
+	commiter, err := txnW.NewCommitter(1)
+	s.Nil(err)
+	s.Nil(commiter.PrewriteAllMutations(context.TODO()))
+
+	txn = s.begin()
+	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	s.Nil(err)
+	s.Len(m, 2)
+	s.Equal([]byte("a"), m[string([]byte{'a'})])
+	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.NotContains(m, string([]byte{'b'}))
+
+	// inject an error on sending request.
+	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
+	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
+	txn = s.begin()
+	_, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	s.Error(err)
+}
+
 func (s *testSplitSuite) TestStaleEpoch() {
 	mockPDClient := &mockPDClient{client: s.store.GetRegionCache().PDClient()}
 	s.store.SetRegionCachePDClient(mockPDClient)
@@ -166,7 +235,7 @@ func (c *mockPDClient) disable() {
 	c.stop = true
 }
 
-func (c *mockPDClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
+func (c *mockPDClient) GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error) {
 	return nil, nil
 }
 
@@ -407,6 +476,14 @@ func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (
 }
 
 func (c *mockPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) GetGCInternalController(keyspaceID uint32) gc.InternalController {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
 	panic("unimplemented")
 }
 

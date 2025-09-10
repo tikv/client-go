@@ -40,11 +40,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/util/redact"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
@@ -105,7 +106,7 @@ func (s *testScanSuite) TestScan() {
 		for i := 0; i < rowNum; i++ {
 			k := scan.Key()
 			expectedKey := s.makeKey(i)
-			s.Equal(k, expectedKey, "i=%v,rowNum=%v,key=%v,val=%v,expected=%v,keyOnly=%v", i, rowNum, kv.StrKey(k), kv.StrKey(scan.Value()), kv.StrKey(expectedKey), keyOnly)
+			s.Equal(k, expectedKey, "i=%v,rowNum=%v,key=%v,val=%v,expected=%v,keyOnly=%v", i, rowNum, redact.Key(k), redact.Key(scan.Value()), redact.Key(expectedKey), keyOnly)
 			if !keyOnly {
 				v := scan.Value()
 				s.Equal(v, s.makeValue(i))
@@ -183,6 +184,10 @@ func (s *testScanSuite) TestScan() {
 		err = committer4.PrewriteAllMutations(context.Background())
 		s.Nil(err)
 		txn5 := s.beginTxn()
+		if config.NextGen {
+			// NextGen doesn't support RC yet, skip this rest part
+			return
+		}
 		txn5.GetSnapshot().SetIsolationLevel(txnsnapshot.RC)
 		var meetLocks []*txnkv.Lock
 		resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())

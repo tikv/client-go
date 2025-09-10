@@ -36,7 +36,6 @@ package kv
 
 import (
 	"bytes"
-	"encoding/hex"
 )
 
 // NextKey returns the next key in byte-order.
@@ -80,11 +79,6 @@ func PrefixNextKey(k []byte) []byte {
 // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
 func CmpKey(k, another []byte) int {
 	return bytes.Compare(k, another)
-}
-
-// StrKey returns string for key.
-func StrKey(k []byte) string {
-	return hex.EncodeToString(k)
 }
 
 // KeyRange represents a range where StartKey <= key < EndKey.

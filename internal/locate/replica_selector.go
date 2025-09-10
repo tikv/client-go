@@ -199,9 +199,9 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 				req.ReplicaRead = true
 			}
 		} else {
-			// always use replica.
+			// use replica read only if the target is not leader.
 			req.StaleRead = false
-			req.ReplicaRead = s.isReadOnlyReq
+			req.ReplicaRead = s.isReadOnlyReq && s.target.peer.Id != s.region.GetLeaderPeerID()
 		}
 		// Monitor the flows destination if selector is under `ReplicaReadPreferLeader` mode.
 		if s.option.preferLeader {
@@ -505,7 +505,7 @@ func (s *replicaSelector) onFlashbackInProgress(req *tikvrpc.Request) bool {
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
 		s.replicaReadType = kv.ReplicaReadLeader
-		req.ReplicaReadType = kv.ReplicaReadLeader
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		return true
 	}
 	return false

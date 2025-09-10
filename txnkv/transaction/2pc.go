@@ -37,7 +37,6 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	errors2 "errors"
 	"math"
 	"math/rand"
@@ -65,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	atomicutil "go.uber.org/atomic"
 	zap "go.uber.org/zap"
 )
@@ -75,6 +75,7 @@ const slowRequestThreshold = time.Minute
 type twoPhaseCommitAction interface {
 	handleSingleBatch(*twoPhaseCommitter, *retry.Backoffer, batchMutations) error
 	tiKVTxnRegionsNumHistogram() prometheus.Observer
+	isInterruptible() bool
 	String() string
 }
 
@@ -486,7 +487,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 	c.txn.GetMemBuffer().RLock()
 	defer c.txn.GetMemBuffer().RUnlock()
 	if !c.txn.us.HasPresumeKeyNotExists(err.GetKey()) {
-		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, err.GetKey())
+		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, redact.Key(err.GetKey()))
 	}
 	return errors.WithStack(err)
 }
@@ -559,6 +560,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	var err error
 	var assertionError error
+	toUpdatePrewriteOnly := make([][]byte, 0)
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -607,7 +609,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
 					op = kvrpcpb.Op_CheckNotExists
 					checkCnt++
-					memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
+					toUpdatePrewriteOnly = append(toUpdatePrewriteOnly, key)
 				} else {
 					if flags.HasNewlyInserted() {
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
@@ -682,6 +684,10 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		}
 	}
 
+	for _, key := range toUpdatePrewriteOnly {
+		memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
+	}
+
 	if c.mutations.Len() == 0 {
 		return nil
 	}
@@ -692,7 +698,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	if c.mutations.Len() > logEntryCount || size > logSize {
 		logutil.BgLogger().Info("[BIG_TXN]",
 			zap.Uint64("session", c.sessionID),
-			zap.String("key sample", kv.StrKey(c.mutations.GetKey(0))),
+			zap.String("key sample", redact.Key(c.mutations.GetKey(0))),
 			zap.Int("size", size),
 			zap.Int("keys", c.mutations.Len()),
 			zap.Int("puts", putCnt),
@@ -1064,9 +1070,10 @@ func (c *twoPhaseCommitter) doActionOnBatches(
 	// killSignal should never be nil for TiDB
 	if c.txn != nil && c.txn.vars != nil && c.txn.vars.Killed != nil {
 		// Do not reset the killed flag here. Let the upper layer reset the flag.
-		// Before it resets, any request is considered valid to be killed.
+		// Before it resets, any request is considered valid to be killed if the
+		// corresponding action is interruptible.
 		status := atomic.LoadUint32(c.txn.vars.Killed)
-		if status != 0 {
+		if status != 0 && action.isInterruptible() {
 			logutil.BgLogger().Info(
 				"query is killed", zap.Uint32(
 					"signal",
@@ -1491,14 +1498,8 @@ func sendTxnHeartBeat(
 			return 0, false, err
 		}
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return 0, false, err
-				}
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return 0, false, err
 			}
 			continue
 		}
@@ -1507,7 +1508,7 @@ func sendTxnHeartBeat(
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
-			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), tikverr.ExtractKeyErr(keyErr))
+			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, redact.Key(primary), tikverr.ExtractKeyErr(keyErr))
 		}
 		return cmdResp.GetLockTtl(), false, nil
 	}

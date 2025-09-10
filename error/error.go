@@ -35,16 +35,19 @@
 package error
 
 import (
-	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -173,16 +176,21 @@ func IsErrWriteConflict(err error) bool {
 	return errors.As(err, &e)
 }
 
+// NewErrWriteConflict generates an ErrWriteConflict with conflict and increase the TiKVTxnWriteConflictCounter metrics.
+func NewErrWriteConflict(conflict *kvrpcpb.WriteConflict) *ErrWriteConflict {
+	metrics.TiKVTxnWriteConflictCounter.Inc()
+	return &ErrWriteConflict{WriteConflict: conflict}
+}
+
 // NewErrWriteConflictWithArgs generates an ErrWriteConflict with args.
 func NewErrWriteConflictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte, reason kvrpcpb.WriteConflict_Reason) *ErrWriteConflict {
-	conflict := kvrpcpb.WriteConflict{
+	return NewErrWriteConflict(&kvrpcpb.WriteConflict{
 		StartTs:          startTs,
 		ConflictTs:       conflictTs,
 		Key:              key,
 		ConflictCommitTs: conflictCommitTs,
 		Reason:           reason,
-	}
-	return &ErrWriteConflict{WriteConflict: &conflict}
+	})
 }
 
 // ErrWriteConflictInLatch is the error when the commit meets an write conflict error when local latch is enabled.
@@ -245,6 +253,8 @@ func (e *ErrPDServerTimeout) Error() string {
 }
 
 // ErrGCTooEarly is the error that GC life time is shorter than transaction duration
+// For compatibility concerns of exported interfaces, keep the old error type.
+// Deprecated: use ErrTxnAbortedByGC instead.
 type ErrGCTooEarly struct {
 	TxnStartTS  time.Time
 	GCSafePoint time.Time
@@ -252,6 +262,23 @@ type ErrGCTooEarly struct {
 
 func (e *ErrGCTooEarly) Error() string {
 	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction starts at %v, GC safe point is %v", e.TxnStartTS, e.GCSafePoint)
+}
+
+// ErrTxnAbortedByGC is the error that GC progress has advanced to a state in which the txn is no longer safe to
+// continue.
+type ErrTxnAbortedByGC struct {
+	TxnStartTS       uint64
+	TxnStartTSTime   time.Time
+	TxnSafePoint     uint64
+	TxnSafePointTime time.Time
+}
+
+func (e *ErrTxnAbortedByGC) Error() string {
+	// In most cases, the error is caused by the transaction runs too long, instead of improper GC life time
+	// configuration. This means the description of this error is not accurate.
+	// However, as this error message is already widely acknowledged and might have become part of our diagnosing
+	// process, we keep the error message unchanged.
+	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction start ts is %v (%v), txn safe point is %v (%v)", e.TxnStartTS, e.TxnStartTSTime, e.TxnSafePoint, e.TxnSafePointTime)
 }
 
 // ErrTokenLimit is the error that token is up to the limit.
@@ -289,13 +316,13 @@ func (e *ErrAssertionFailed) Error() string {
 func (e *ErrLockOnlyIfExistsNoReturnValue) Error() string {
 	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set, "+
 		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%v}.",
-		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+		e.StartTS, e.ForUpdateTs, redact.Key(e.LockKey))
 }
 
 func (e *ErrLockOnlyIfExistsNoPrimaryKey) Error() string {
 	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set, "+
 		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%s}",
-		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+		e.StartTS, e.ForUpdateTs, redact.Key(e.LockKey))
 }
 
 // ExtractKeyErr extracts a KeyError.
@@ -307,8 +334,10 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 		}
 	}
 
+	redact.RedactKeyErrIfNecessary(keyErr)
+
 	if keyErr.Conflict != nil {
-		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
+		return errors.WithStack(NewErrWriteConflict(keyErr.GetConflict()))
 	}
 
 	if keyErr.Retryable != "" {
@@ -346,4 +375,48 @@ func Log(err error) {
 	if err != nil {
 		log.Error("encountered error", zap.Error(err), zap.Stack("stack"))
 	}
+}
+
+// ExtractDebugInfoStrFromKeyErr extracts the debug info from key error
+func ExtractDebugInfoStrFromKeyErr(keyErr *kvrpcpb.KeyError) string {
+	if keyErr.DebugInfo == nil {
+		return ""
+	}
+
+	debugInfoToMarshal := keyErr.DebugInfo
+	if redact.NeedRedact() {
+		redactMarker := []byte{'?'}
+		debugInfoToMarshal = proto.Clone(debugInfoToMarshal).(*kvrpcpb.DebugInfo)
+		for _, mvccInfo := range debugInfoToMarshal.MvccInfo {
+			mvccInfo.Key = redactMarker
+			if mvcc := mvccInfo.Mvcc; mvcc != nil {
+				if lock := mvcc.Lock; lock != nil {
+					lock.Primary = redactMarker
+					lock.ShortValue = redactMarker
+					for i := range lock.Secondaries {
+						lock.Secondaries[i] = redactMarker
+					}
+				}
+
+				for _, write := range mvcc.Writes {
+					if write != nil {
+						write.ShortValue = redactMarker
+					}
+				}
+
+				for _, value := range mvcc.Values {
+					if value != nil {
+						value.Value = redactMarker
+					}
+				}
+			}
+		}
+	}
+
+	debugStr, err := json.Marshal(debugInfoToMarshal)
+	if err != nil {
+		log.Error("encountered error when extracting debug info for keyError", zap.Error(err), zap.Stack("stack"))
+		return ""
+	}
+	return string(debugStr)
 }

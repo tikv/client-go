@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 func TestAsyncCommit(t *testing.T) {
@@ -77,6 +78,12 @@ type unistoreClientWrapper struct {
 	*unistore.RPCClient
 }
 
+func (c *unistoreClientWrapper) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		cb.Schedule(c.RPCClient.SendRequest(ctx, addr, req, tikv.ReadTimeoutShort))
+	}()
+}
+
 func (c *unistoreClientWrapper) SetEventListener(listener tikv.ClientEventListener) {}
 
 func (s *testAsyncCommitCommon) setUpTest() {
@@ -85,7 +92,7 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("", nil)
+	client, pdClient, cluster, err := unistore.New("", nil, nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)
@@ -599,7 +606,7 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 		s.Nil(err)
 		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
 		s.Nil(err)
-		if status.IsRolledBack() {
+		if s.store.GetOracle().IsExpired(lock.TxnID, status.TTL(), &oracle.Option{}) {
 			break
 		}
 		time.Sleep(time.Millisecond * 30)

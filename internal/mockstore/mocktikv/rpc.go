@@ -52,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 const requestMaxSize = 8 * 1024 * 1024
@@ -790,6 +791,12 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 				return &tikvrpc.Response{
 					Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
 				}, nil
+			case "undeterminedResult":
+				return &tikvrpc.Response{
+					Resp: &kvrpcpb.PrewriteResponse{
+						RegionError: &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}},
+					},
+				}, nil
 			}
 		}
 
@@ -840,6 +847,12 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			case "keyError":
 				return &tikvrpc.Response{
 					Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{}},
+				}, nil
+			case "undeterminedResult":
+				return &tikvrpc.Response{
+					Resp: &kvrpcpb.CommitResponse{
+						RegionError: &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}},
+					},
 				}, nil
 			}
 		}
@@ -1076,6 +1089,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		return nil, errors.Errorf("unsupported this request type %v", req.Type)
 	}
 	return resp, nil
+}
+
+// SendRequestAsync sends a request to mock cluster asynchronously.
+func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		cb.Schedule(c.SendRequest(ctx, addr, req, 0))
+	}()
 }
 
 // Close closes the client.

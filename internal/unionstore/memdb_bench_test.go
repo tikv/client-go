@@ -172,13 +172,37 @@ func BenchmarkMemDbBufferRandom(b *testing.B) {
 }
 
 func BenchmarkMemDbIter(b *testing.B) {
-	fn := func(b *testing.B, buffer MemBuffer) {
+	fnIter := func(b *testing.B, buffer MemBuffer) {
 		benchIterator(b, buffer)
 		b.ReportAllocs()
 	}
 
-	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
-	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
+	b.Run("RBT", func(b *testing.B) { fnIter(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fnIter(b, newArtDBWithContext()) })
+}
+
+func BenchmarkSnapshotIter(b *testing.B) {
+	f := func(b *testing.B, buffer MemBuffer) {
+		benchSnapshotIter(b, buffer)
+		b.ReportAllocs()
+	}
+
+	fBatched := func(b *testing.B, buffer MemBuffer) {
+		benchBatchedSnapshotIter(b, buffer)
+		b.ReportAllocs()
+	}
+
+	fForEach := func(b *testing.B, buffer MemBuffer) {
+		benchForEachInSnapshot(b, buffer)
+		b.ReportAllocs()
+	}
+
+	b.Run("RBT-SnapshotIter", func(b *testing.B) { f(b, newRbtDBWithContext()) })
+	b.Run("RBT-BatchedSnapshotIter", func(b *testing.B) { fBatched(b, newRbtDBWithContext()) })
+	b.Run("ART-ForEachInSnapshot", func(b *testing.B) { fForEach(b, newRbtDBWithContext()) })
+	b.Run("ART-SnapshotIter", func(b *testing.B) { f(b, newArtDBWithContext()) })
+	b.Run("ART-BatchedSnapshotIter", func(b *testing.B) { fBatched(b, newArtDBWithContext()) })
+	b.Run("ART-ForEachInSnapshot", func(b *testing.B) { fForEach(b, newArtDBWithContext()) })
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
@@ -225,9 +249,62 @@ func benchIterator(b *testing.B, buffer MemBuffer) {
 			b.Error(err)
 		}
 		for iter.Valid() {
+			_ = iter.Key()
+			_ = iter.Value()
 			iter.Next()
 		}
 		iter.Close()
+	}
+}
+
+func benchSnapshotIter(b *testing.B, buffer MemBuffer) {
+	for k := 0; k < opCnt; k++ {
+		buffer.Set(encodeInt(k), encodeInt(k))
+	}
+	buffer.Staging()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		iter := buffer.SnapshotIter(nil, nil)
+		for iter.Valid() {
+			_ = iter.Value()
+			_ = iter.Key()
+			iter.Next()
+		}
+		iter.Close()
+	}
+}
+
+func benchBatchedSnapshotIter(b *testing.B, buffer MemBuffer) {
+	for k := 0; k < opCnt; k++ {
+		buffer.Set(encodeInt(k), encodeInt(k))
+	}
+	buffer.Staging()
+	b.ResetTimer()
+	snapshot := buffer.GetSnapshot()
+	for i := 0; i < b.N; i++ {
+		iter := snapshot.BatchedSnapshotIter(nil, nil, false)
+		for iter.Valid() {
+			iter.Next()
+		}
+		iter.Close()
+	}
+}
+
+func benchForEachInSnapshot(b *testing.B, buffer MemBuffer) {
+	for k := 0; k < opCnt; k++ {
+		buffer.Set(encodeInt(k), encodeInt(k))
+	}
+	buffer.Staging()
+	b.ResetTimer()
+	f := func(key, value []byte) (bool, error) {
+		return false, nil
+	}
+	snapshot := buffer.GetSnapshot()
+	for i := 0; i < b.N; i++ {
+		err := snapshot.ForEachInSnapshotRange(nil, nil, f, false)
+		if err != nil {
+			b.Error(err)
+		}
 	}
 }
 

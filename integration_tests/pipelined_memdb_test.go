@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !nextgen
+
 package tikv_test
 
 import (
@@ -59,7 +61,7 @@ func (s *testPipelinedMemDBSuite) SetupTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("", nil)
+	client, pdClient, cluster, err := unistore.New("", nil, nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)

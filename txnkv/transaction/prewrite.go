@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/hex"
 	"math"
 	"strconv"
 	"sync/atomic"
@@ -57,6 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -153,7 +153,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			ttl = 1
 			keys := make([]string, 0, len(mutations))
 			for _, m := range mutations {
-				keys = append(keys, hex.EncodeToString(m.Key))
+				keys = append(keys, redact.Key(m.Key))
 			}
 			logutil.BgLogger().Info(
 				"[failpoint] injected lock ttl = 1 on prewrite",
@@ -280,6 +280,10 @@ func (action actionPrewrite) handleSingleBatchFailpoint(c *twoPhaseCommitter, bo
 		time.Sleep(time.Millisecond * time.Duration(val.(int)))
 	}
 	return nil
+}
+
+func (actionPrewrite) isInterruptible() bool {
+	return true
 }
 
 func (c *twoPhaseCommitter) prewriteMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
@@ -416,14 +420,16 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 //     doActionOnMutations directly and return retryable false regardless of success or failure.
 //  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
-	// For other region error and the fake region error, backoff because
-	// there's something wrong.
-	// For the real EpochNotMatch error, don't backoff.
-	if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-		err := handler.bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-		if err != nil {
-			return false, err
-		}
+	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) {
+		// If the current transaction is async commit and prewrite fails for `UndeterminedResult`,
+		// It means the transaction's commit state is unknown.
+		// We should return the error `ErrResultUndetermined` to the caller
+		// to for further handling (.i.e disconnect the connection).
+		return false, errors.WithStack(tikverr.ErrResultUndetermined)
+	}
+
+	if err = retry.MayBackoffForRegionError(regionErr, handler.bo); err != nil {
+		return false, err
 	}
 	if regionErr.GetDiskFull() != nil {
 		storeIds := regionErr.GetDiskFull().GetStoreId()

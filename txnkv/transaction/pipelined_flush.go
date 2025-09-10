@@ -155,14 +155,8 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			return err
 		}
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return err
-				}
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return err
 			}
 			if regionErr.GetDiskFull() != nil {
 				storeIds := regionErr.GetDiskFull().GetStoreId()
@@ -288,6 +282,10 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			}
 		}
 	}
+}
+
+func (actionPipelinedFlush) isInterruptible() bool {
+	return true
 }
 
 func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutations CommitterMutations, generation uint64) error {
@@ -438,7 +436,13 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 			if keyErr := cmdResp.GetError(); keyErr != nil {
 				err = errors.Errorf("unexpected resolve err: %s", keyErr)
-				logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+				logutil.BgLogger().Error(
+					"resolveLock error",
+					zap.Error(err),
+					zap.Uint64("startVer", lreq.StartVersion),
+					zap.Uint64("commitVer", lreq.CommitVersion),
+					zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+				)
 				return res, err
 			}
 			resolved.Add(1)
@@ -484,6 +488,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		handler,
 	)
 	runner.SetStatLogInterval(30 * time.Second)
+	runner.SetRegionsPerTask(1)
 
 	c.txn.spawnWithStorePool(func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {

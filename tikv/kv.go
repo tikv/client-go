@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
 	pdhttp "github.com/tikv/pd/client/http"
 	"github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/client/pkg/caller"
@@ -75,12 +76,14 @@ import (
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	grpcStatus "google.golang.org/grpc/status"
 )
 
 const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
-	DCLabelKey           = "zone"
+	DCLabelKey           = locate.DCLabelKey
 	safeTSUpdateInterval = time.Second * 2
 
 	defaultPipelinedFlushConcurrency       = 128
@@ -133,10 +136,16 @@ type KVStore struct {
 
 	mock bool
 
-	kv        SafePointKV
-	safePoint uint64
-	spTime    time.Time
-	spMutex   sync.RWMutex // this is used to update safePoint and spTime
+	kv SafePointKV
+
+	gcStatesClient gc.GCStatesClient
+	gcStateCacheMu struct {
+		sync.RWMutex
+		cachedTxnSafePoint uint64
+		lastCacheTime      time.Time
+	}
+	gcStatesAPIUnavailable       atomic.Bool
+	compatibleTxnSafePointLoader *compatibleTxnSafePointLoader
 
 	// storeID -> safeTS, stored as map[uint64]uint64
 	// safeTS here will be used during the Stale Read process,
@@ -162,32 +171,69 @@ func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
 }
 
-// UpdateSPCache updates cached safepoint.
-func (s *KVStore) UpdateSPCache(cachedSP uint64, cachedTime time.Time) {
-	s.spMutex.Lock()
-	s.safePoint = cachedSP
-	s.spTime = cachedTime
-	s.spMutex.Unlock()
+// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
+// operations to prevent accessing GC-ed inconsistent data.
+func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+	s.gcStateCacheMu.Lock()
+	defer s.gcStateCacheMu.Unlock()
+
+	s.gcStateCacheMu.lastCacheTime = now
+	s.gcStateCacheMu.cachedTxnSafePoint = txnSafePoint
+}
+
+func (s *KVStore) loadTxnSafePointInCompatibleMode(ctx context.Context) (uint64, error) {
+	res, err := s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
+	if err != nil {
+		logutil.BgLogger().Error("failed to load current txn safe point from PD in compatible mode", zap.Error(err))
+		metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("fail_compatible").Inc()
+		return 0, errors.WithStack(err)
+	}
+	metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("ok_compatible").Inc()
+	return res, nil
+}
+
+func (s *KVStore) loadTxnSafePoint(ctx context.Context) (uint64, error) {
+	if s.gcStatesAPIUnavailable.Load() {
+		// Print in debug level to avoid being too verbose. A warning log will be printed when the first fallback occurs.
+		logutil.Logger(ctx).Debug("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.")
+		return s.loadTxnSafePointInCompatibleMode(ctx)
+	}
+
+	gcStates, err := s.gcStatesClient.GetGCState(ctx)
+	if err != nil {
+		if status, ok := grpcStatus.FromError(err); ok && status.Code() == codes.Unimplemented {
+			logutil.Logger(ctx).Warn("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.", zap.Error(err))
+			s.gcStatesAPIUnavailable.Store(true)
+			return s.loadTxnSafePointInCompatibleMode(ctx)
+		}
+		logutil.Logger(ctx).Error("failed to load current txn safe point from PD", zap.Error(err))
+		metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("fail").Inc()
+		return 0, err
+	}
+	metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("ok").Inc()
+	return gcStates.TxnSafePoint, nil
 }
 
 // CheckVisibility checks if it is safe to read using given ts.
-func (s *KVStore) CheckVisibility(startTime uint64) error {
-	s.spMutex.RLock()
-	cachedSafePoint := s.safePoint
-	cachedTime := s.spTime
-	s.spMutex.RUnlock()
-	diff := time.Since(cachedTime)
+func (s *KVStore) CheckVisibility(startTS uint64) error {
+	s.gcStateCacheMu.RLock()
+	lastCacheTime := s.gcStateCacheMu.lastCacheTime
+	cachedTxnSafePoint := s.gcStateCacheMu.cachedTxnSafePoint
+	s.gcStateCacheMu.RUnlock()
+	diff := time.Since(lastCacheTime)
 
-	if diff > (GcSafePointCacheInterval - gcCPUTimeInaccuracyBound) {
+	if diff > (GcStateCacheInterval - gcCPUTimeInaccuracyBound) {
 		return tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point")
 	}
 
-	if startTime < cachedSafePoint {
-		t1 := oracle.GetTimeFromTS(startTime)
-		t2 := oracle.GetTimeFromTS(cachedSafePoint)
-		return &tikverr.ErrGCTooEarly{
-			TxnStartTS:  t1,
-			GCSafePoint: t2,
+	if startTS < cachedTxnSafePoint {
+		t1 := oracle.GetTimeFromTS(startTS)
+		t2 := oracle.GetTimeFromTS(cachedTxnSafePoint)
+		return &tikverr.ErrTxnAbortedByGC{
+			TxnStartTS:       startTS,
+			TxnStartTSTime:   t1,
+			TxnSafePoint:     cachedTxnSafePoint,
+			TxnSafePointTime: t2,
 		}
 	}
 
@@ -278,23 +324,37 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
-		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
-	}))
-	store := &KVStore{
-		clusterID:       pdClient.GetClusterID(context.TODO()),
-		uuid:            uuid,
-		oracle:          o,
-		pdClient:        pdClient,
-		regionCache:     regionCache,
-		kv:              spkv,
-		safePoint:       0,
-		spTime:          time.Now(),
-		replicaReadSeed: rand.Uint32(),
-		ctx:             ctx,
-		cancel:          cancel,
-		gP:              NewSpool(128, 10*time.Second),
+	var opts []locate.RegionCacheOpt
+	if config.NextGen {
+		opts = append(opts, locate.RegionCacheNoHealthTick)
+	} else {
+		opts = append(opts, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+			return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+		}))
 	}
+	regionCache := locate.NewRegionCache(pdClient, opts...)
+	codec := pdClient.(*CodecPDClient).GetCodec()
+	etcdAddrs, etcdTlsCfg := spkv.extractConnectionInfo()
+	store := &KVStore{
+		clusterID:                    pdClient.GetClusterID(context.TODO()),
+		uuid:                         uuid,
+		oracle:                       o,
+		pdClient:                     pdClient.WithCallerComponent("kv-store"),
+		regionCache:                  regionCache,
+		kv:                           spkv,
+		gcStatesClient:               pdClient.GetGCStatesClient(uint32(codec.GetKeyspaceID())),
+		compatibleTxnSafePointLoader: newCompatibleTxnSafePointLoader(codec, etcdAddrs, etcdTlsCfg),
+		replicaReadSeed:              rand.Uint32(),
+		ctx:                          ctx,
+		cancel:                       cancel,
+		gP:                           NewSpool(128, 10*time.Second),
+	}
+
+	txnSafePoint, err := store.loadTxnSafePoint(context.Background())
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	store.UpdateTxnSafePointCache(txnSafePoint, time.Now())
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -302,7 +362,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	loadOption(store, opt...)
 
 	store.wg.Add(2)
-	go store.runSafePointChecker()
+	go store.runTxnSafePointUpdater()
 	go store.safeTSUpdater()
 
 	return store, nil
@@ -347,21 +407,21 @@ func (s *KVStore) IsLatchEnabled() bool {
 	return s.txnLatches != nil
 }
 
-func (s *KVStore) runSafePointChecker() {
+func (s *KVStore) runTxnSafePointUpdater() {
 	defer s.wg.Done()
-	d := gcSafePointUpdateInterval
+	if _, e := util.EvalFailpoint("noBuiltInTxnSafePointUpdater"); e == nil {
+		return
+	}
+	d := pollTxnSafePointInterval
 	for {
 		select {
-		case spCachedTime := <-time.After(d):
-			cachedSafePoint, err := loadSafePoint(s.GetSafePointKV())
+		case now := <-time.After(d):
+			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
 			if err == nil {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("ok").Inc()
-				s.UpdateSPCache(cachedSafePoint, spCachedTime)
-				d = gcSafePointUpdateInterval
+				s.UpdateTxnSafePointCache(txnSafePoint, now)
+				d = pollTxnSafePointInterval
 			} else {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("fail").Inc()
-				logutil.BgLogger().Error("fail to load safepoint from pd", zap.Error(err))
-				d = gcSafePointQuickRepeatInterval
+				d = pollTxnSafePointQuickRepeatInterval
 			}
 		case <-s.ctx.Done():
 			return
@@ -441,6 +501,9 @@ func (s *KVStore) Close() error {
 	s.regionCache.Close()
 
 	if err := s.kv.Close(); err != nil {
+		return err
+	}
+	if err := s.compatibleTxnSafePointLoader.Close(); err != nil {
 		return err
 	}
 	return nil
@@ -906,7 +969,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...opt.C
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdCli = util.InterceptedPDClient{Client: pdCli}
+	pdCli = util.NewInterceptedPDClient(pdCli)
 	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
 
 	tlsConfig, err := security.ToTLSConfig()

@@ -103,7 +103,6 @@ var (
 	LockResolverCountWithResolve                  prometheus.Counter
 	LockResolverCountWithResolveForWrite          prometheus.Counter
 	LockResolverCountWithResolveAsync             prometheus.Counter
-	LockResolverCountWithWriteConflict            prometheus.Counter
 	LockResolverCountWithQueryTxnStatus           prometheus.Counter
 	LockResolverCountWithQueryTxnStatusCommitted  prometheus.Counter
 	LockResolverCountWithQueryTxnStatusRolledBack prometheus.Counter
@@ -177,6 +176,22 @@ var (
 	BatchRequestDurationSend prometheus.Observer
 	BatchRequestDurationRecv prometheus.Observer
 	BatchRequestDurationDone prometheus.Observer
+
+	AsyncSendReqCounterWithOK          prometheus.Counter
+	AsyncSendReqCounterWithRegionError prometheus.Counter
+	AsyncSendReqCounterWithRPCError    prometheus.Counter
+	AsyncSendReqCounterWithSendError   prometheus.Counter
+	AsyncSendReqCounterWithOtherError  prometheus.Counter
+
+	AsyncBatchGetCounterWithOK          prometheus.Counter
+	AsyncBatchGetCounterWithRegionError prometheus.Counter
+	AsyncBatchGetCounterWithLockError   prometheus.Counter
+	AsyncBatchGetCounterWithOtherError  prometheus.Counter
+
+	ReadRequestLeaderLocalBytes    prometheus.Observer
+	ReadRequestLeaderRemoteBytes   prometheus.Observer
+	ReadRequestFollowerLocalBytes  prometheus.Observer
+	ReadRequestFollowerRemoteBytes prometheus.Observer
 )
 
 func initShortcuts() {
@@ -244,7 +259,6 @@ func initShortcuts() {
 	LockResolverCountWithResolve = TiKVLockResolverCounter.WithLabelValues("resolve")
 	LockResolverCountWithResolveForWrite = TiKVLockResolverCounter.WithLabelValues("resolve_for_write")
 	LockResolverCountWithResolveAsync = TiKVLockResolverCounter.WithLabelValues("resolve_async_commit")
-	LockResolverCountWithWriteConflict = TiKVLockResolverCounter.WithLabelValues("write_conflict")
 	LockResolverCountWithQueryTxnStatus = TiKVLockResolverCounter.WithLabelValues("query_txn_status")
 	LockResolverCountWithQueryTxnStatusCommitted = TiKVLockResolverCounter.WithLabelValues("query_txn_status_committed")
 	LockResolverCountWithQueryTxnStatusRolledBack = TiKVLockResolverCounter.WithLabelValues("query_txn_status_rolled_back")
@@ -323,4 +337,20 @@ func initShortcuts() {
 	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
 	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
 	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
+
+	AsyncSendReqCounterWithOK = TiKVAsyncSendReqCounter.WithLabelValues("ok")
+	AsyncSendReqCounterWithRegionError = TiKVAsyncSendReqCounter.WithLabelValues("region_error")
+	AsyncSendReqCounterWithRPCError = TiKVAsyncSendReqCounter.WithLabelValues("rpc_error")
+	AsyncSendReqCounterWithSendError = TiKVAsyncSendReqCounter.WithLabelValues("send_error")
+	AsyncSendReqCounterWithOtherError = TiKVAsyncSendReqCounter.WithLabelValues("other_error")
+
+	AsyncBatchGetCounterWithOK = TiKVAsyncBatchGetCounter.WithLabelValues("ok")
+	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
+	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
+	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
+
+	ReadRequestLeaderLocalBytes = TiKVReadRequestBytes.WithLabelValues("leader", "local")
+	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
+	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
+	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
 }

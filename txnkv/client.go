@@ -75,7 +75,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	pdClient = util.InterceptedPDClient{Client: pdClient}
+	pdClient = util.NewInterceptedPDClient(pdClient)
 
 	// Construct codec from options.
 	var codecCli *tikv.CodecPDClient

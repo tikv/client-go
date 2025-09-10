@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/hex"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -55,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -172,7 +172,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			ttl = 1
 			keys := make([]string, 0, len(mutations))
 			for _, m := range mutations {
-				keys = append(keys, hex.EncodeToString(m.Key))
+				keys = append(keys, redact.Key(m.Key))
 			}
 			logutil.BgLogger().Debug(
 				"[failpoint] injected lock ttl = 1 on pessimistic lock",
@@ -182,7 +182,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
 			time.Sleep(300 * time.Millisecond)
-			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
+			return errors.WithStack(tikverr.NewErrWriteConflict(nil))
 		}
 		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 		startTime := time.Now()
@@ -220,14 +220,8 @@ func (action actionPessimisticLock) handleSingleBatch(
 func (action actionPessimisticLock) handleRegionError(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error,
 ) (finished bool, err error) {
-	// For other region error and the fake region error, backoff because
-	// there's something wrong.
-	// For the real EpochNotMatch error, don't backoff.
-	if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-		err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-		if err != nil {
-			return true, err
-		}
+	if err := retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+		return true, err
 	}
 	same, err := batch.relocate(bo, c.store.GetRegionCache())
 	if err != nil {
@@ -381,9 +375,6 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 				return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 			}
 		}
-		if action.LockCtx.PessimisticLockWaited != nil {
-			atomic.StoreInt32(action.LockCtx.PessimisticLockWaited, 1)
-		}
 	}
 
 	return false, nil
@@ -510,9 +501,6 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 						return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 					}
 				}
-				if action.LockCtx.PessimisticLockWaited != nil {
-					atomic.StoreInt32(action.LockCtx.PessimisticLockWaited, 1)
-				}
 			}
 			return false, nil
 		}
@@ -535,6 +523,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	}
 
 	return true, nil
+}
+
+func (actionPessimisticLock) isInterruptible() bool {
+	return true
 }
 
 func (actionPessimisticRollback) handleSingleBatch(
@@ -570,6 +562,10 @@ func (actionPessimisticRollback) handleSingleBatch(
 		return c.pessimisticRollbackMutations(bo, batch.mutations)
 	}
 	return nil
+}
+
+func (actionPessimisticRollback) isInterruptible() bool {
+	return false
 }
 
 func (c *twoPhaseCommitter) pessimisticLockMutations(

@@ -55,12 +55,13 @@ const (
 	// This is almost the same as 'tikv_gc_safe_point' in the table 'mysql.tidb',
 	// save this to pd instead of tikv, because we can't use interface of table
 	// if the safepoint on tidb is expired.
+	// Deprecated: All use this is no longer recommended and should be replaced by using the txn safe point.
 	GcSavedSafePoint = "/tidb/store/gcworker/saved_safe_point"
 
-	GcSafePointCacheInterval       = time.Second * 100
-	gcCPUTimeInaccuracyBound       = time.Second
-	gcSafePointUpdateInterval      = time.Second * 10
-	gcSafePointQuickRepeatInterval = time.Second
+	GcStateCacheInterval                = time.Second * 100
+	gcCPUTimeInaccuracyBound            = time.Second * 10
+	pollTxnSafePointInterval            = time.Second * 10
+	pollTxnSafePointQuickRepeatInterval = time.Second
 )
 
 // SafePointKV is used for a seamingless integration for mockTest and runtime.
@@ -69,6 +70,8 @@ type SafePointKV interface {
 	Get(k string) (string, error)
 	GetWithPrefix(k string) ([]*mvccpb.KeyValue, error)
 	Close() error
+
+	extractConnectionInfo() (endpoints []string, tlsConfig *tls.Config)
 }
 
 // MockSafePointKV implements SafePointKV at mock test
@@ -118,6 +121,10 @@ func (w *MockSafePointKV) Close() error {
 	return nil
 }
 
+func (w *MockSafePointKV) extractConnectionInfo() (endpoints []string, tlsConfig *tls.Config) {
+	return nil, nil
+}
+
 // option represents safePoint kv configuration.
 type option struct {
 	prefix string
@@ -134,7 +141,9 @@ func WithPrefix(prefix string) SafePointKVOpt {
 
 // EtcdSafePointKV implements SafePointKV at runtime
 type EtcdSafePointKV struct {
-	cli *clientv3.Client
+	addrs     []string
+	tlsConfig *tls.Config
+	cli       *clientv3.Client
 }
 
 // NewEtcdSafePointKV creates an instance of EtcdSafePointKV
@@ -154,7 +163,11 @@ func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config, opts ...SafePoint
 		etcdCli.Watcher = namespace.NewWatcher(etcdCli.Watcher, opt.prefix)
 		etcdCli.Lease = namespace.NewLease(etcdCli.Lease, opt.prefix)
 	}
-	return &EtcdSafePointKV{cli: etcdCli}, nil
+	return &EtcdSafePointKV{
+		addrs:     addrs,
+		tlsConfig: tlsConfig,
+		cli:       etcdCli,
+	}, nil
 }
 
 // Put implements the Put method for SafePointKV
@@ -195,6 +208,11 @@ func (w *EtcdSafePointKV) Close() error {
 	return errors.WithStack(w.cli.Close())
 }
 
+func (w *EtcdSafePointKV) extractConnectionInfo() (endpoints []string, tlsConfig *tls.Config) {
+	return w.addrs, w.tlsConfig
+}
+
+// Deprecated: Do not use
 func saveSafePoint(kv SafePointKV, t uint64) error {
 	s := strconv.FormatUint(t, 10)
 	err := kv.Put(GcSavedSafePoint, s)
@@ -205,6 +223,7 @@ func saveSafePoint(kv SafePointKV, t uint64) error {
 	return nil
 }
 
+// Deprecated: Do not use
 func loadSafePoint(kv SafePointKV) (uint64, error) {
 	str, err := kv.Get(GcSavedSafePoint)
 

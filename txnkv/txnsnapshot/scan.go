@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -193,8 +194,8 @@ func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *kvrpcpb.KvPai
 
 func (s *Scanner) getData(bo *retry.Backoffer) error {
 	logutil.BgLogger().Debug("txn getData",
-		zap.String("nextStartKey", kv.StrKey(s.nextStartKey)),
-		zap.String("nextEndKey", kv.StrKey(s.nextEndKey)),
+		zap.String("nextStartKey", redact.Key(s.nextStartKey)),
+		zap.String("nextEndKey", redact.Key(s.nextEndKey)),
 		zap.Bool("reverse", s.reverse),
 		zap.Uint64("txnStartTS", s.startTS()))
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient(), s.snapshot.store.GetOracle())
@@ -273,14 +274,8 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		if regionErr != nil {
 			logutil.BgLogger().Debug("scanner getData failed",
 				zap.Stringer("regionErr", regionErr))
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return err
-				}
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return err
 			}
 			continue
 		}

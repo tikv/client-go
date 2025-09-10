@@ -37,7 +37,6 @@ package locate
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -66,6 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
@@ -136,9 +136,9 @@ func nextTTL(ts int64) int64 {
 
 var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker("region-meta",
 	circuitbreaker.Settings{
-		ErrorRateWindow:      30,
+		ErrorRateWindow:      30 * time.Second,
 		MinQPSForOpen:        10,
-		CoolDownInterval:     10,
+		CoolDownInterval:     10 * time.Second,
 		HalfOpenSuccessCount: 1,
 	})
 
@@ -660,6 +660,8 @@ type RegionCache struct {
 	bg *bgRunner
 
 	clusterID uint64
+
+	inflightUpdateBuckets sync.Map
 }
 
 type regionCacheOptions struct {
@@ -687,7 +689,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient:                      pdClient,
+		pdClient:                      pdClient.WithCallerComponent("region-cache"),
 		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
@@ -1126,7 +1128,7 @@ func (l *KeyLocation) Contains(key []byte) bool {
 
 // String implements fmt.Stringer interface.
 func (l *KeyLocation) String() string {
-	return fmt.Sprintf("region %s,startKey:%s,endKey:%s", l.Region.String(), kv.StrKey(l.StartKey), kv.StrKey(l.EndKey))
+	return fmt.Sprintf("region %s,startKey:%s,endKey:%s", l.Region.String(), redact.Key(l.StartKey), redact.Key(l.EndKey))
 }
 
 // GetBucketVersion gets the bucket version of the region.
@@ -1181,7 +1183,7 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	}
 	// unreachable
 	logutil.Logger(context.Background()).Info(
-		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", hex.EncodeToString(key)))
+		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", redact.Key(key)))
 	panic("Unreachable")
 }
 
@@ -1320,10 +1322,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		containsAll := false
 	outer:
 		for {
-			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
-			if err != nil {
-				return nil, err
-			}
+			batchRegionInCache := c.scanRegionsFromCache(keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
 			for _, r = range batchRegionInCache {
 				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
 					break outer
@@ -1350,7 +1349,16 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 
 	// 2. load remaining regions from pd client
 	for len(uncachedRanges) > 0 {
-		regions, err := c.BatchLoadRegionsWithKeyRanges(bo, uncachedRanges, defaultRegionsPerBatch, opts...)
+		// If we send too many ranges to PD, it may exceed the size of grpc limitation or cause a timeout error.
+		// So we limit the number of ranges per batch to avoid this issue.
+		maxRangesPerBatch := 16 * defaultRegionsPerBatch
+		var toBeSentRanges []router.KeyRange
+		if len(uncachedRanges) > maxRangesPerBatch {
+			toBeSentRanges = uncachedRanges[:maxRangesPerBatch]
+		} else {
+			toBeSentRanges = uncachedRanges
+		}
+		regions, err := c.BatchLoadRegionsWithKeyRanges(bo, toBeSentRanges, defaultRegionsPerBatch, opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -1547,8 +1555,10 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
-				zap.String("key", util.HexRegionKeyStr(key)), zap.Error(err),
-				zap.String("encode-key", util.HexRegionKeyStr(c.codec.EncodeRegionKey(key))))
+				zap.String("key", redact.Key(key)), zap.Error(err),
+				zap.String("encode-key", redact.Key(c.codec.EncodeRegionKey(key))))
+			// mark as need sync reload
+			r.setSyncFlags(needReloadOnAccess)
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			reloadOnAccess := flags&needReloadOnAccess > 0
@@ -1564,7 +1574,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
 	var expired bool
 	r, expired = c.searchCachedRegionByKey(key, isEndKey)
-	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess|needDelayedReloadReady) {
 		return nil
 	}
 	return r
@@ -1693,6 +1703,8 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 				// ignore error and use old region info.
 				logutil.Logger(bo.GetCtx()).Error("load region failure",
 					zap.Uint64("regionID", regionID), zap.Error(err))
+				// mark as need sync reload
+				r.setSyncFlags(needReloadOnAccess)
 			} else {
 				r = lr
 				c.mu.Lock()
@@ -1801,8 +1813,8 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	}
 	if len(regions) == 0 {
 		err = errors.Errorf("PD returned no region, start_key: %q, end_key: %q, encode_start_key: %q, encode_end_key: %q",
-			util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey),
-			util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)))
+			redact.Key(startKey), redact.Key(endKey),
+			redact.Key(c.codec.EncodeRegionKey(startKey)), redact.Key(c.codec.EncodeRegionKey(endKey)))
 		return
 	}
 
@@ -1812,7 +1824,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
-		c.insertRegionToCache(region, true, false)
+		c.insertRegionToCache(region, false, false)
 	}
 
 	return
@@ -1837,7 +1849,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRang
 	defer c.mu.Unlock()
 
 	for _, region := range regions {
-		c.insertRegionToCache(region, true, false)
+		c.insertRegionToCache(region, false, false)
 	}
 	return
 }
@@ -2103,13 +2115,13 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v, encode_key: %q",
-					util.HexRegionKeyStr(key), err, util.HexRegionKey(c.codec.EncodeRegionKey(key)))
+					redact.Key(key), err, redact.KeyBytes(c.codec.EncodeRegionKey(key)))
 			}
-			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
+			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", redact.Key(key), err)
 			continue
 		}
 		if reg == nil || reg.Meta == nil {
-			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", util.HexRegionKeyStr(key), util.HexRegionKey(c.codec.EncodeRegionKey(key)))
+			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", redact.Key(key), redact.KeyBytes(c.codec.EncodeRegionKey(key)))
 			continue
 		}
 		if len(reg.Meta.Peers) == 0 {
@@ -2166,17 +2178,25 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 
 // For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
 // It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
-func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) []*Region {
 	if limit == 0 {
-		return nil, nil
+		return nil
 	}
 
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-
-	return regions, nil
+	// in-place filter out the regions which need reload.
+	i := 0
+	for _, region := range regions {
+		if !region.checkSyncFlags(needReloadOnAccess | needDelayedReloadReady) {
+			regions[i] = region
+			i++
+		}
+	}
+	regions = regions[:i]
+	return regions
 }
 
 func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
@@ -2219,7 +2239,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
-		//nolint:staticcheck
+		// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
 		regionsInfo, err := c.pdClient.ScanRegions(withPDCircuitBreaker(ctx), startKey, endKey, limit, opt.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2285,7 +2305,10 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 			}
 		}
 		start := time.Now()
-		pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle()}
+		pdOpts := []opt.GetRegionOption{
+			opt.WithAllowFollowerHandle(),
+			opt.WithOutputMustContainAllKeyRange(),
+		}
 		if batchOpt.needBuckets {
 			pdOpts = append(pdOpts, opt.WithBuckets())
 		}
@@ -2340,7 +2363,8 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 
 // regionsHaveGapInRanges checks if the loaded regions can fully cover the key ranges.
 // If there are any gaps between the regions, it returns true, then the requests might be retried.
-// TODO: remove this function after PD client supports gap detection and handling it.
+// TODO: PD client now supports gap detection. Currently retained it as double verification.
+// Remove this function after validation completes.
 func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Region, limit int) bool {
 	if len(ranges) == 0 {
 		return false
@@ -2711,9 +2735,13 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		bucketsVer = buckets.GetVersion()
 	}
 	if bucketsVer < latestBucketsVer {
-		// TODO(youjiali1995): use singleflight.
-		go func() {
-			bo := retry.NewBackoffer(context.Background(), 20000)
+		_, inflight := c.inflightUpdateBuckets.LoadOrStore(regionID.id, struct{}{})
+		if inflight {
+			return
+		}
+		c.bg.run(func(ctx context.Context) {
+			defer c.inflightUpdateBuckets.Delete(regionID.id)
+			bo := retry.NewBackoffer(ctx, 20000)
 			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
@@ -2725,7 +2753,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 			c.mu.Lock()
 			c.insertRegionToCache(new, true, true)
 			c.mu.Unlock()
-		}()
+		})
 	}
 }
 
