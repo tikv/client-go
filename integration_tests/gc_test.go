@@ -173,7 +173,7 @@ func (s *testGCWithTiKVSuite) dropKeyspace(keyspaceMeta *keyspacepb.KeyspaceMeta
 }
 
 func genKeyspaceName() string {
-	return uuid.New().String()
+	return strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
 }
 
 func (s *testGCWithTiKVSuite) prepareClients(storeKeyspaceTypes ...storeKeyspaceType) {

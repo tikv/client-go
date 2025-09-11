@@ -1131,7 +1131,7 @@ func (s *sendReqState) send() (canceled bool) {
 
 		var execDetails *util.ExecDetails
 		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
-			execDetails := stmtExec.(*util.ExecDetails)
+			execDetails = stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
 		}
 		collector := networkCollector{
