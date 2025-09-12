@@ -41,10 +41,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cznic/mathutil"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/twmb/murmur3"
 	"go.uber.org/zap"
+	"modernc.org/mathutil"
 )
 
 type node struct {
