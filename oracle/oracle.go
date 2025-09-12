@@ -41,8 +41,8 @@ import (
 )
 
 // Option represents available options for the oracle.Oracle.
+// TODO: remove this struct
 type Option struct {
-	TxnScope string
 }
 
 // Oracle is the interface that provides strictly ascending timestamps.
@@ -58,7 +58,7 @@ type Oracle interface {
 	// WARNING: This method does not guarantee whether the generated timestamp is legal for accessing the data.
 	// Neither is it safe to use it for verifying the legality of another calculated timestamp.
 	// Be sure to validate the timestamp before using it to access the data.
-	GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (uint64, error)
+	GetStaleTimestamp(ctx context.Context, prevSecond uint64) (uint64, error)
 	IsExpired(lockTimestamp, TTL uint64, opt *Option) bool
 	UntilExpired(lockTimeStamp, TTL uint64, opt *Option) int64
 	Close()

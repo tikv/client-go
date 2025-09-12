@@ -105,7 +105,7 @@ func (o *MockOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, e
 }
 
 // GetStaleTimestamp implements oracle.Oracle interface.
-func (o *MockOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (ts uint64, err error) {
+func (o *MockOracle) GetStaleTimestamp(ctx context.Context, prevSecond uint64) (ts uint64, err error) {
 	return oracle.GoTimeToTS(time.Now().Add(-time.Second * time.Duration(prevSecond))), nil
 }
 
