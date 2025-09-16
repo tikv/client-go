@@ -17,6 +17,7 @@ package transaction
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -1113,22 +1114,43 @@ func (c *twoPhaseCommitter) reportFailureMetrics() {
 }
 
 var (
-	once sync.Once
-	cli  *http.Client
+	once   sync.Once
+	scheme string
+	cli    *http.Client
+	errCli error
 )
 
-func getHTTPClient() *http.Client {
+func getHTTPClient() (*http.Client, error) {
 	once.Do(func() {
-		timeout := time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
-		cli = &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 20,
-			},
+		var (
+			cfg       = config.GetGlobalConfig()
+			timeout   = time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
+			tlsConfig *tls.Config
+		)
+
+		scheme = "http://"
+		transport := &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 20,
+		}
+		if len(cfg.Security.ClusterSSLCA) != 0 {
+			scheme = "https://"
+
+			tlsConfig, errCli = cfg.Security.ToTLSConfig()
+			if errCli == nil {
+				transport.TLSClientConfig = tlsConfig
+				transport.ForceAttemptHTTP2 = true
+			}
+		}
+
+		if errCli == nil {
+			cli = &http.Client{
+				Timeout:   timeout,
+				Transport: transport,
+			}
 		}
 	})
-	return cli
+	return cli, errCli
 }
 
 type chunkWriterClient struct {
@@ -1137,23 +1159,12 @@ type chunkWriterClient struct {
 }
 
 func newChunkWriterClient(keyspaceID apicodec.KeyspaceID) (*chunkWriterClient, error) {
-	var (
-		cfg    = config.GetGlobalConfig()
-		scheme = "http://"
-		client = getHTTPClient()
-	)
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		scheme = "https://"
-		client.Transport = &http.Transport{
-			TLSClientConfig:   tlsConfig,
-			ForceAttemptHTTP2: true,
-		}
+	client, err := getHTTPClient()
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
+
+	cfg := config.GetGlobalConfig()
 	serviceAddr := fmt.Sprintf("%s%s/txn_chunk?keyspace_id=%v", scheme, cfg.TiKVClient.TxnChunkWriterAddr, keyspaceID)
 	return &chunkWriterClient{client, serviceAddr}, nil
 }
