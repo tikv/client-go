@@ -26,6 +26,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -1111,6 +1112,25 @@ func (c *twoPhaseCommitter) reportFailureMetrics() {
 	metrics.TxnFileRequestsError.Inc()
 }
 
+var (
+	once sync.Once
+	cli  *http.Client
+)
+
+func getHTTPClient() *http.Client {
+	once.Do(func() {
+		timeout := time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
+		cli = &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 20,
+			},
+		}
+	})
+	return cli
+}
+
 type chunkWriterClient struct {
 	cli         *http.Client
 	serviceAddr string
@@ -1118,10 +1138,9 @@ type chunkWriterClient struct {
 
 func newChunkWriterClient(keyspaceID apicodec.KeyspaceID) (*chunkWriterClient, error) {
 	var (
-		cfg     = config.GetGlobalConfig()
-		scheme  = "http://"
-		timeout = time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
-		client  = &http.Client{Timeout: timeout}
+		cfg    = config.GetGlobalConfig()
+		scheme = "http://"
+		client = getHTTPClient()
 	)
 	if len(cfg.Security.ClusterSSLCA) != 0 {
 		tlsConfig, err := cfg.Security.ToTLSConfig()
