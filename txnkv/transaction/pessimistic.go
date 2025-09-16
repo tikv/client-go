@@ -382,6 +382,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	if len(locks) == 0 {
 		return false, nil
 	}
+	if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+		return true, err
+	}
 
 	// Because we already waited on tikv, no need to Backoff here.
 	// tikv default will wait 3s(also the maximum wait value) when lock error occurs
@@ -514,6 +517,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 
 	if isMutationFailed {
 		if len(locks) > 0 {
+			if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+				return true, err
+			}
+
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 			if diagCtx.resolvingRecordToken == nil {
