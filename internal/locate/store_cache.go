@@ -44,6 +44,11 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey = "zone"
+)
+
 type testingKnobs interface {
 	getMockRequestLiveness() livenessFunc
 	setMockRequestLiveness(f livenessFunc)
@@ -464,6 +469,9 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if addr == "" {
+		return false, errors.Errorf("empty store(%d) address", s.storeID)
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := newStore(
 			s.storeID,

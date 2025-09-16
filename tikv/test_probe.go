@@ -159,7 +159,7 @@ outerLoop:
 }
 
 func (s StoreProbe) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
-	s.KVStore.updateTxnSafePointCache(txnSafePoint, now)
+	s.KVStore.UpdateTxnSafePointCache(txnSafePoint, now)
 }
 
 func (s StoreProbe) GetGCStatesClient() pdgc.GCStatesClient {

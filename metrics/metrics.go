@@ -121,6 +121,7 @@ var (
 	TiKVTxnWriteConflictCounter                    prometheus.Counter
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
 	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
+	TiKVReadRequestBytes                           *prometheus.SummaryVec
 )
 
 // Label constants.
@@ -889,6 +890,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
+	TiKVReadRequestBytes = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "read_request_bytes",
+			Help:      "Summary of read requests bytes",
+		}, []string{LblType, LblResult})
+
 	initShortcuts()
 }
 
@@ -988,6 +997,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
 	prometheus.MustRegister(TiKVAsyncSendReqCounter)
 	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
+	prometheus.MustRegister(TiKVReadRequestBytes)
 }
 
 // readCounter reads the value of a prometheus.Counter.

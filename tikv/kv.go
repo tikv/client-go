@@ -83,7 +83,7 @@ import (
 
 const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
-	DCLabelKey           = "zone"
+	DCLabelKey           = locate.DCLabelKey
 	safeTSUpdateInterval = time.Second * 2
 
 	defaultPipelinedFlushConcurrency       = 128
@@ -171,13 +171,9 @@ func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
 }
 
-func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
-	s.updateTxnSafePointCache(txnSafePoint, now)
-}
-
-// updateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
+// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
 // operations to prevent accessing GC-ed inconsistent data.
-func (s *KVStore) updateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
 	s.gcStateCacheMu.Lock()
 	defer s.gcStateCacheMu.Unlock()
 
@@ -358,7 +354,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	store.updateTxnSafePointCache(txnSafePoint, time.Now())
+	store.UpdateTxnSafePointCache(txnSafePoint, time.Now())
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -422,7 +418,7 @@ func (s *KVStore) runTxnSafePointUpdater() {
 		case now := <-time.After(d):
 			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
 			if err == nil {
-				s.updateTxnSafePointCache(txnSafePoint, now)
+				s.UpdateTxnSafePointCache(txnSafePoint, now)
 				d = pollTxnSafePointInterval
 			} else {
 				d = pollTxnSafePointQuickRepeatInterval
@@ -1073,3 +1069,10 @@ type SchemaVer = transaction.SchemaVer
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = transaction.MaxTxnTimeUse
+
+// SetIsTempIndexKey inject the function to check whether a key is a temporary index key.
+// Call this function before using this package.
+// If not set, all keys will be treated as non-temporary index keys.
+func SetIsTempIndexKey(fn func([]byte) bool) {
+	transaction.IsTempIndexKey = fn
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -705,6 +706,14 @@ func (c *codecV2) EncodeKey(key []byte) []byte {
 }
 
 func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
+	if len(encodedKey) == 0 {
+		if !intest.InTest {
+			logutil.BgLogger().Warn(
+				"codecV2.DecodeKey called with empty key. This shouldn't happen in prod",
+				zap.Stack("stack"))
+		}
+		return nil, nil
+	}
 	// If the given key does not start with the correct prefix,
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
