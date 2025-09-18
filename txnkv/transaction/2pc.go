@@ -566,7 +566,6 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		flags := it.Flags()
 		var value []byte
 		var op kvrpcpb.Op
-
 		if !it.HasValue() {
 			if !flags.HasLocked() {
 				continue

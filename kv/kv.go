@@ -79,6 +79,8 @@ type LockCtx struct {
 	// LockCtx specially.
 	ResourceGroupTagger func(*kvrpcpb.PessimisticLockRequest) []byte
 	OnDeadlock          func(*tikverr.ErrDeadlock)
+	// max_execution_time support - if zero, timeout checking is disabled
+	MaxExecutionDeadline time.Time
 }
 
 // LockWaitTime returns lockWaitTimeInMs
