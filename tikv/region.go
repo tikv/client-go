@@ -249,3 +249,16 @@ var (
 	// the region info contains old leader during the election, this variable affects nothing in most time.
 	WithNeedRegionHasLeaderPeer = locate.WithNeedRegionHasLeaderPeer
 )
+
+const (
+	CodecV2TxnKeyspacePrefix = apicodec.TxnModePrefix
+	CodecV2RawKeyspacePrefix = apicodec.RawModePrefix
+)
+
+func CodecV2Prefixes() [][]byte {
+	return apicodec.CodecV2Prefixes()
+}
+
+func CodecV1ExcludePrefixes() [][]byte {
+	return apicodec.CodecV1ExcludePrefixes()
+}
