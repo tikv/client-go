@@ -75,9 +75,10 @@ type Config struct {
 	OpenTracingEnable     bool
 	Path                  string
 	EnableForwarding      bool
-	TxnScope              string
-	EnableAsyncCommit     bool
-	Enable1PC             bool
+	// FIXME: rename TxnScope to ReadReplicaScope or Zone
+	TxnScope          string
+	EnableAsyncCommit bool
+	Enable1PC         bool
 	// RegionsRefreshInterval indicates the interval of loading regions info, the unit is second, if RegionsRefreshInterval == 0, it will be disabled.
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.

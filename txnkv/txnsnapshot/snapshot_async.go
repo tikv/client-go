@@ -118,7 +118,6 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 	replicaReadAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
 
-	req.TxnScope = readReplicaScope
 	req.ReadReplicaScope = readReplicaScope
 	if isStaleness {
 		req.EnableStaleWithMixedReplicaRead()
@@ -255,7 +254,6 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 		replicaReadAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
 
-		req.TxnScope = readReplicaScope
 		req.ReadReplicaScope = readReplicaScope
 		if isStaleness {
 			req.EnableStaleWithMixedReplicaRead()
