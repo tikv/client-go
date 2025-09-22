@@ -213,9 +213,12 @@ func (a *connPool) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response
 	m := a.metrics.Load()
 	storeID := req.Context.GetPeer().GetStoreId()
 	if m == nil || m.storeID != storeID {
-		mm := newStoreMetrics(storeID)
-		a.metrics.CompareAndSwap(m, mm)
-		m = mm
+		// The client selects a connPool by addr via RPCClient.getConnPool, so it's possible that the storeID of the
+		// selected connPool is not the same as the storeID in req.Context. We need to create a new storeMetrics for the
+		// new storeID. Note that connPool.metrics just works as a cache, the metric data is stored in corresponding
+		// MetricVec, so it's ok to overwrite it here.
+		m := newStoreMetrics(storeID)
+		a.metrics.Store(m)
 	}
 	m.updateRPCMetrics(req, resp, latency)
 }

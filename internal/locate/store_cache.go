@@ -451,7 +451,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 			}
 			continue
 		}
-		s.initByStoreMeta(store)
+		if err := s.initByStoreMeta(store); err != nil {
+			return "", err
+		}
 		return s.addr, nil
 	}
 }
@@ -1188,7 +1190,7 @@ func (u *storeCacheUpdater) cleanUpStaleStoreMetrics(ctx context.Context, storeL
 
 	// confirm that the store is indeed stale from pd
 	store, err := u.stores.fetchStore(ctx, id)
-	if err != nil {
+	if err != nil && !isStoreNotFoundError(err) {
 		logutil.Logger(ctx).Info("cannot confirm store state", zap.Uint64("storeID", id), zap.Error(err))
 		return
 	}
