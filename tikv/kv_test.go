@@ -276,6 +276,7 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 }
 
 func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
+	// this is a leak test, TestMain will check goroutine leak
 	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
 	require.Error(s.T(), err)
 }
