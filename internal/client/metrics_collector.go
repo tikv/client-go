@@ -52,17 +52,15 @@ func (s *networkCollector) onReq(req *tikvrpc.Request) {
 	if req == nil {
 		return
 	}
-	size := req.GetSize()
-	if size == 0 {
+	s.reqSize = req.GetSize()
+	if s.reqSize == 0 {
 		return
 	}
-	size += req.Context.Size()
-	s.reqSize = size
 
 	isCrossZoneTraffic := req.AccessLocation == kv.AccessCrossZone
 	// stale read metrics
 	if req.StaleRead {
-		s.staleReadMetricsCollector.onReq(float64(size), isCrossZoneTraffic)
+		s.staleReadMetricsCollector.onReq(float64(s.reqSize), isCrossZoneTraffic)
 	}
 }
 
