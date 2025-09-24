@@ -1035,3 +1035,109 @@ func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
 
 	return &spanRPC
 }
+<<<<<<< HEAD
+=======
+
+func deriveRPCMetrics(root prometheus.ObserverVec) *rpcMetrics {
+	return &rpcMetrics{
+		root:        root,
+		latGet:      root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdGet.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+		latCop:      root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdCop.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+		latBatchGet: root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdBatchGet.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+	}
+}
+
+type rpcMetrics struct {
+	root prometheus.ObserverVec
+
+	// static metrics
+	latGet      prometheus.Observer
+	latCop      prometheus.Observer
+	latBatchGet prometheus.Observer
+
+	latOther sync.Map
+}
+
+func (m *rpcMetrics) get(cmd tikvrpc.CmdType, stale bool, internal bool) prometheus.Observer {
+	if !stale && !internal {
+		switch cmd {
+		case tikvrpc.CmdGet:
+			return m.latGet
+		case tikvrpc.CmdCop:
+			return m.latCop
+		case tikvrpc.CmdBatchGet:
+			return m.latBatchGet
+		}
+	}
+	key := uint64(cmd)
+	if stale {
+		key |= 1 << 16
+	}
+	if internal {
+		key |= 1 << 17
+	}
+	lat, ok := m.latOther.Load(key)
+	if !ok {
+		lat = m.root.With(prometheus.Labels{
+			metrics.LblType:      cmd.String(),
+			metrics.LblStaleRead: strconv.FormatBool(stale),
+			metrics.LblScope:     strconv.FormatBool(internal),
+		})
+		m.latOther.Store(key, lat)
+	}
+	return lat.(prometheus.Observer)
+}
+
+type storeMetrics struct {
+	storeID           uint64
+	rpcLatHist        *rpcMetrics
+	rpcSrcLatSum      sync.Map
+	rpcNetLatExternal prometheus.Observer
+	rpcNetLatInternal prometheus.Observer
+}
+
+func newStoreMetrics(storeID uint64) *storeMetrics {
+	store := strconv.FormatUint(storeID, 10)
+	m := &storeMetrics{
+		storeID:           storeID,
+		rpcLatHist:        deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: store})),
+		rpcNetLatExternal: metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(store, "false"),
+		rpcNetLatInternal: metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(store, "true"),
+	}
+	return m
+}
+
+func (m *storeMetrics) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {
+	seconds := latency.Seconds()
+	stale := req.GetStaleRead()
+	source := req.GetRequestSource()
+	internal := util.IsInternalRequest(req.GetRequestSource())
+
+	m.rpcLatHist.get(req.Type, stale, internal).Observe(seconds)
+
+	srcLatSum, ok := m.rpcSrcLatSum.Load(source)
+	if !ok {
+		srcLatSum = deriveRPCMetrics(metrics.TiKVSendReqBySourceSummary.MustCurryWith(
+			prometheus.Labels{metrics.LblStore: strconv.FormatUint(m.storeID, 10), metrics.LblSource: source}))
+		m.rpcSrcLatSum.Store(source, srcLatSum)
+	}
+	srcLatSum.(*rpcMetrics).get(req.Type, stale, internal).Observe(seconds)
+
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
+		var totalRpcWallTimeNs uint64
+		if execDetail.TimeDetailV2 != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
+		} else if execDetail.TimeDetail != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
+		}
+		if totalRpcWallTimeNs > 0 {
+			lat := latency - time.Duration(totalRpcWallTimeNs)
+			if internal {
+				m.rpcNetLatInternal.Observe(lat.Seconds())
+			} else {
+				m.rpcNetLatExternal.Observe(lat.Seconds())
+			}
+		}
+	}
+}
+>>>>>>> 0fdd2555 (metrics: clean up metrics when a store is removed from the cluster (#1751))
