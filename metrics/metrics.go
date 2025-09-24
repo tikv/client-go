@@ -35,6 +35,9 @@
 package metrics
 
 import (
+	"strconv"
+	"sync/atomic"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -103,6 +106,7 @@ var (
 	TiKVPrewriteAssertionUsageCounter              *prometheus.CounterVec
 	TiKVGrpcConnectionState                        *prometheus.GaugeVec
 	TiKVAggressiveLockedKeysCounter                *prometheus.CounterVec
+	TiKVStoreLivenessGauge                         *prometheus.GaugeVec
 	TiKVStoreSlowScoreGauge                        *prometheus.GaugeVec
 	TiKVFeedbackSlowScoreGauge                     *prometheus.GaugeVec
 	TiKVHealthFeedbackOpsCounter                   *prometheus.CounterVec
@@ -144,6 +148,8 @@ const (
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
+	var storeMetrics []MetricVec
+
 	TiKVTxnCmdHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
@@ -173,6 +179,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 24), // 0.5ms ~ 1.2h
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
+	storeMetrics = append(storeMetrics, TiKVSendReqHistogram)
 
 	TiKVSendReqBySourceSummary = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -182,6 +189,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Summary of sending request with multi dimensions.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope, LblSource})
+	storeMetrics = append(storeMetrics, TiKVSendReqBySourceSummary)
 
 	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -192,6 +200,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
+	storeMetrics = append(storeMetrics, TiKVRPCNetLatencyHistogram)
 
 	TiKVLockResolverCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -210,6 +219,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of region errors.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVRegionErrorCounter)
 
 	TiKVRPCErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -219,6 +229,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of rpc errors.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVRPCErrorCounter)
 
 	TiKVTxnWriteKVCountHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -333,7 +344,8 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "duration for kv status api.",
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 20), // 0.5ms ~ 262s
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStatusDuration)
 
 	TiKVStatusCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -579,6 +591,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "store token is up to the limit, probably because one of the stores is the hotspot or unavailable",
 			ConstLabels: constLabels,
 		}, []string{LblAddress, LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreLimitErrorCounter)
 
 	TiKVGRPCConnTransientFailureCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -588,6 +601,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of gRPC connection transient failure",
 			ConstLabels: constLabels,
 		}, []string{LblAddress, LblStore})
+	storeMetrics = append(storeMetrics, TiKVGRPCConnTransientFailureCounter)
 
 	TiKVPanicCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -625,6 +639,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of tikv safe_ts being updated.",
 			ConstLabels: constLabels,
 		}, []string{LblResult, LblStore})
+	storeMetrics = append(storeMetrics, TiKVSafeTSUpdateCounter)
 
 	TiKVMinSafeTSGapSeconds = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -634,6 +649,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "The minimal (non-zero) SafeTS gap for each store.",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVMinSafeTSGapSeconds)
 
 	TiKVReplicaSelectorFailureCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -729,6 +745,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
+	TiKVStoreLivenessGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "store_liveness_state",
+			Help:        "Liveness state of each tikv",
+			ConstLabels: constLabels,
+		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreLivenessGauge)
+
 	TiKVStoreSlowScoreGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -737,6 +763,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Slow scores of each tikv node based on RPC timecosts",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreSlowScoreGauge)
 
 	TiKVFeedbackSlowScoreGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -746,6 +773,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Slow scores of each tikv node that is calculated by TiKV and sent to the client by health feedback",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVFeedbackSlowScoreGauge)
 
 	TiKVHealthFeedbackOpsCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -764,6 +792,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of flows under PreferLeader mode.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVPreferLeaderFlowsGauge)
 
 	TiKVStaleReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -841,6 +870,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 		}, []string{LblType, LblResult})
 
 	initShortcuts()
+	storeMetricVecList.Store(&storeMetrics)
 }
 
 func init() {
@@ -922,6 +952,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVGrpcConnectionState)
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
+	prometheus.MustRegister(TiKVStoreLivenessGauge)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVFeedbackSlowScoreGauge)
 	prometheus.MustRegister(TiKVHealthFeedbackOpsCounter)
@@ -990,4 +1021,55 @@ func ObserveReadSLI(readKeys uint64, readTime float64, readSize float64) {
 			TiKVReadThroughput.Observe(readSize / readTime)
 		}
 	}
+}
+
+type MetricVec interface {
+	prometheus.Collector
+	DeletePartialMatch(labels prometheus.Labels) int
+}
+
+var storeMetricVecList atomic.Pointer[[]MetricVec]
+
+// GetStoreMetricVecList returns the list of store-level MetricVec.
+func GetStoreMetricVecList() []MetricVec {
+	lst := storeMetricVecList.Load()
+	if lst == nil {
+		return nil
+	}
+	return *lst
+}
+
+// FindNextStaleStoreID finds a stale store ID which is not in validStoreIDs but may still be tracked by the collector.
+func FindNextStaleStoreID(collector prometheus.Collector, validStoreIDs map[uint64]struct{}) uint64 {
+	if collector == nil {
+		return 0
+	}
+	ch := make(chan prometheus.Metric, 8)
+	go func() {
+		collector.Collect(ch)
+		close(ch)
+	}()
+	var (
+		data dto.Metric
+		id   uint64
+	)
+	for m := range ch {
+		if id != 0 {
+			continue
+		}
+		if err := m.Write(&data); err != nil {
+			continue
+		}
+		var thisID uint64
+		for _, l := range data.Label {
+			if l.GetName() == LblStore {
+				thisID, _ = strconv.ParseUint(l.GetValue(), 10, 64)
+				break
+			}
+		}
+		if _, ok := validStoreIDs[thisID]; !ok && thisID != 0 {
+			id = thisID
+		}
+	}
+	return id
 }
