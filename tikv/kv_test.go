@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -272,4 +273,9 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	s.Require().Equal(mockClient.tikvSafeTs, s.store.GetMinSafeTS("z1"))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z2"))
+}
+
+func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
+	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
+	require.Error(s.T(), err)
 }
