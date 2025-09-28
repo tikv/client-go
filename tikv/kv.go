@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/gc"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -316,13 +317,24 @@ func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvCli
 }
 
 // NewKVStore creates a new TiKV store instance.
-func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
+func NewKVStore(
+	uuid string,
+	pdClient pd.Client,
+	spkv SafePointKV,
+	tikvclient Client,
+	opt ...Option,
+) (_ *KVStore, retErr error) {
 	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
 		UpdateInterval: defaultOracleUpdateInterval,
 	})
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			o.Close()
+		}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	var opts []locate.RegionCacheOpt
 	if config.NextGen {
@@ -349,8 +361,18 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:                       cancel,
 		gP:                           NewSpool(128, 10*time.Second),
 	}
+	defer func() {
+		if retErr != nil {
+			regionCache.Close()
+		}
+	}()
 
 	txnSafePoint, err := store.loadTxnSafePoint(context.Background())
+	if intest.InTest {
+		if uuid == "TestErrorHalfwayInNewKVStore" {
+			err = errors.New("mock error for TestErrorHalfwayInNewKVStore")
+		}
+	}
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
