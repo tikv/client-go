@@ -99,10 +99,10 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			Value:     m.GetValue(i),
 			Assertion: assertion,
 		}
+		forceConstraintCheck := config.NextGen && (IsTempIndexKey == nil || !IsTempIndexKey(m.GetKey(i)))
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) ||
-			(config.NextGen && IsTempIndexKey != nil && !IsTempIndexKey(m.GetKey(i))) {
+		} else if m.NeedConstraintCheckInPrewrite(i) || forceConstraintCheck {
 			// For next-gen builds, we need to perform constraint checks on all non-temporary index keys.
 			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
 			// which can be problematic for CDC and could potentially break correctness.
