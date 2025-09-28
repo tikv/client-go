@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
@@ -258,13 +259,24 @@ func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvCli
 }
 
 // NewKVStore creates a new TiKV store instance.
-func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
+func NewKVStore(
+	uuid string,
+	pdClient pd.Client,
+	spkv SafePointKV,
+	tikvclient Client,
+	opt ...Option,
+) (_ *KVStore, retErr error) {
 	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
 		UpdateInterval: defaultOracleUpdateInterval,
 	})
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			o.Close()
+		}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
 		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
@@ -282,6 +294,20 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		ctx:             ctx,
 		cancel:          cancel,
 		gP:              NewSpool(128, 10*time.Second),
+	}
+	defer func() {
+		if retErr != nil {
+			regionCache.Close()
+		}
+	}()
+
+	if intest.InTest {
+		// although there's no exit branch after creating KVStore, we just pick the same
+		// logic from master, in case in future this function will return error from here
+		if uuid == "TestErrorHalfwayInNewKVStore" {
+			err = errors.New("mock error for TestErrorHalfwayInNewKVStore")
+			return nil, errors.WithStack(err)
+		}
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
