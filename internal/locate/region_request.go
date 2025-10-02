@@ -1957,6 +1957,9 @@ func (s *RegionRequestSender) onRegionError(
 	// if the region error is from follower, can we mark the peer unavailable and reload region asynchronously?
 	if regionErr.GetRegionNotFound() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onRegionNotFound(bo, ctx, req)
+		}
 		return false, nil
 	}
 
