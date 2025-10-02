@@ -517,6 +517,18 @@ func (s *replicaSelector) onDataIsNotReady() {
 	}
 }
 
+func (s *replicaSelector) onRegionNotFound(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (shouldRetry bool, err error) {
+	leaderIdx := s.region.getStore().workTiKVIdx
+	leader := s.replicas[leaderIdx]
+	if leader.isExhausted(1, 0) {
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
+		return true, nil
+	}
+	return false, nil
+}
+
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
