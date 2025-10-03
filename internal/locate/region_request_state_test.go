@@ -303,11 +303,11 @@ func testRegionCacheStaleRead(t *testing.T) {
 			leaderAsyncReload:     util.Some(false),
 			leaderSuccessReplica:  []string{"z1"},
 			leaderSuccessReadType: SuccessStaleRead,
-			followerRegionValid:   false,
-			followerAsyncReload:   util.Some(false),
+			followerRegionValid:   true,
+			followerAsyncReload:   util.Some(true),
 			// may async reload region and access it from leader.
-			followerSuccessReplica:  []string{},
-			followerSuccessReadType: ReadFail,
+			followerSuccessReplica:  []string{"z1"},
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                evictLeader,
