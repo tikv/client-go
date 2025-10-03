@@ -1149,12 +1149,24 @@ func testReplicaReadAccessPathByBasicCase(s *testReplicaSelectorSuite) {
 						respErr = "region 0 is not prepared for the flashback"
 						respRegionError = nil
 						regionIsValid = true
+					case RegionNotFoundErr:
+						regionIsValid = false
 					}
 					switch readType {
 					case kv.ReplicaReadLeader:
 						accessPath = []string{"{addr: store1, replica-read: false, stale-read: false}"}
 					case kv.ReplicaReadFollower:
-						accessPath = []string{"{addr: store2, replica-read: true, stale-read: false}"}
+						// For RegionNotFoundErr from follower, it will retry on leader
+						if tp == RegionNotFoundErr {
+							accessPath = []string{
+								"{addr: store2, replica-read: true, stale-read: false}",
+								"{addr: store1, replica-read: true, stale-read: false}",
+							}
+							respRegionError = nil
+							regionIsValid = true
+						} else {
+							accessPath = []string{"{addr: store2, replica-read: true, stale-read: false}"}
+						}
 					case kv.ReplicaReadMixed:
 						if staleRead {
 							accessPath = []string{"{addr: store1, replica-read: false, stale-read: true}"}
