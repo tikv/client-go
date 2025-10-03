@@ -508,10 +508,12 @@ func (s *replicaSelector) onRegionNotFound(
 ) (shouldRetry bool, err error) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	leader := s.replicas[leaderIdx]
-	if leader.isExhausted(1, 0) {
-		req.SetReplicaReadType(kv.ReplicaReadLeader)
+	if !leader.isExhausted(1, 0) {
+		s.replicaReadType = kv.ReplicaReadLeader
+		s.regionCache.AsyncInvalidateCachedRegion(ctx.Region)
 		return true, nil
 	}
+	s.regionCache.InvalidateCachedRegion(ctx.Region)
 	return false, nil
 }
 
