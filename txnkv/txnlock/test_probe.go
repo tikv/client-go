@@ -27,6 +27,7 @@ type LockProbe struct{}
 // NewLockStatus returns a txn state that has been locked.
 func (l LockProbe) NewLockStatus(keys [][]byte, useAsyncCommit bool, minCommitTS uint64) TxnStatus {
 	return TxnStatus{
+		ttl: 1,
 		primaryLock: &kvrpcpb.LockInfo{
 			Secondaries:    keys,
 			UseAsyncCommit: useAsyncCommit,

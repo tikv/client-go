@@ -58,6 +58,51 @@ import (
 	"go.uber.org/zap"
 )
 
+// MaxExecTimeExceededSignal represents the signal value for max_execution_time exceeded errors.
+// This must match the value of MaxExecTimeExceeded in TiDB's sqlkiller package.
+const MaxExecTimeExceededSignal uint32 = 2
+
+// checkMaxExecutionTimeExceeded checks if the max_execution_time deadline has been exceeded.
+// Returns an error if exceeded, nil otherwise.
+func checkMaxExecutionTimeExceeded(lockCtx *kv.LockCtx, now time.Time) error {
+	if !lockCtx.MaxExecutionDeadline.IsZero() && now.After(lockCtx.MaxExecutionDeadline) {
+		return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: MaxExecTimeExceededSignal})
+	}
+	return nil
+}
+
+// calculateEffectiveWaitTime calculates the effective timeout considering both lockWaitTime and max_execution_time.
+// Returns the minimum timeout that should be applied, or kv.LockAlwaysWait if no timeout constraints apply.
+func calculateEffectiveWaitTime(lockCtx *kv.LockCtx, lockWaitTime int64, lockWaitStartTime time.Time, now time.Time) int64 {
+	if lockWaitTime == kv.LockNoWait || lockWaitTime <= 0 {
+		return kv.LockNoWait
+	}
+
+	effectiveTimeout := lockWaitTime
+
+	// Consider lockWaitTime if set
+	if lockWaitTime > 0 && lockWaitTime != kv.LockAlwaysWait {
+		lockTimeLeft := lockWaitTime - (now.Sub(lockWaitStartTime)).Milliseconds()
+		if lockTimeLeft <= 0 {
+			return kv.LockNoWait
+		}
+		effectiveTimeout = lockTimeLeft
+	}
+
+	// Consider max_execution_time deadline
+	if !lockCtx.MaxExecutionDeadline.IsZero() {
+		maxExecTimeLeft := lockCtx.MaxExecutionDeadline.Sub(now).Milliseconds()
+		if maxExecTimeLeft <= 0 {
+			return kv.LockNoWait
+		}
+		if effectiveTimeout == kv.LockAlwaysWait || maxExecTimeLeft < effectiveTimeout {
+			effectiveTimeout = maxExecTimeLeft
+		}
+	}
+
+	return effectiveTimeout
+}
+
 type actionPessimisticLock struct {
 	*kv.LockCtx
 	wakeUpMode kvrpcpb.PessimisticLockWakeUpMode
@@ -157,15 +202,11 @@ func (action actionPessimisticLock) handleSingleBatch(
 		}
 	}()
 	for {
-		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
-		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
-			timeLeft := action.LockWaitTime() - (time.Since(lockWaitStartTime)).Milliseconds()
-			if timeLeft <= 0 {
-				req.PessimisticLock().WaitTimeout = kv.LockNoWait
-			} else {
-				req.PessimisticLock().WaitTimeout = timeLeft
-			}
+		now := time.Now()
+		if err := checkMaxExecutionTimeExceeded(action.LockCtx, now); err != nil {
+			return err
 		}
+		req.PessimisticLock().WaitTimeout = calculateEffectiveWaitTime(action.LockCtx, action.LockWaitTime(), lockWaitStartTime, now)
 		elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
 		ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
 		if _, err := util.EvalFailpoint("shortPessimisticLockTTL"); err == nil {
@@ -197,7 +238,8 @@ func (action actionPessimisticLock) handleSingleBatch(
 			return err
 		}
 
-		if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+		switch action.wakeUpMode {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal:
 			finished, err := action.handlePessimisticLockResponseNormalMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -205,7 +247,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			if finished {
 				return nil
 			}
-		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock:
 			finished, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -340,6 +382,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	if len(locks) == 0 {
 		return false, nil
 	}
+	if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+		return true, err
+	}
 
 	// Because we already waited on tikv, no need to Backoff here.
 	// tikv default will wait 3s(also the maximum wait value) when lock error occurs
@@ -365,6 +410,11 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 	// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 	if resolveLockRes.TTL > 0 {
+		// Check max_execution_time deadline first
+		if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+			return true, err
+		}
+
 		if action.LockWaitTime() == kv.LockNoWait {
 			return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 		} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -467,6 +517,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 
 	if isMutationFailed {
 		if len(locks) > 0 {
+			if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+				return true, err
+			}
+
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 			if diagCtx.resolvingRecordToken == nil {
@@ -491,6 +545,11 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 			// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 			// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 			if resolveLockRes.TTL > 0 {
+				// Check max_execution_time deadline first
+				if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+					return true, err
+				}
+
 				if action.LockWaitTime() == kv.LockNoWait {
 					return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 				} else if action.LockWaitTime() == kv.LockAlwaysWait {

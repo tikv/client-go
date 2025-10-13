@@ -70,6 +70,7 @@ import (
 type inspectedPDClient struct {
 	pd.Client
 	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error)
+	getRegionByID    func(ctx context.Context, cli pd.Client, id uint64, opts ...opt.GetRegionOption) (*router.Region, error)
 	batchScanRegions func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
 }
 
@@ -78,6 +79,13 @@ func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...o
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
+}
+
+func (c *inspectedPDClient) GetRegionByID(ctx context.Context, id uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
+	if c.getRegionByID != nil {
+		return c.getRegionByID(ctx, c.Client, id, opts...)
+	}
+	return c.Client.GetRegionByID(ctx, id, opts...)
 }
 
 func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
@@ -2288,14 +2296,20 @@ func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)
 	markRegion(r1)
 
 	// locate key
-	loc, err := s.cache.LocateKey(s.bo, k)
+	s.Nil(s.cache.TryLocateKey(r1.StartKey()))
+	s.Nil(s.cache.TryLocateKey(k))
+	s.Len(s.cache.scanRegionsFromCache(r1.StartKey(), nil, 2), 0)
+	loc1, err := s.cache.LocateKey(s.bo, r1.StartKey())
 	s.NoError(err)
-	s.True(loc.Contains(k))
+	s.False(loc1.Contains(k))
+	loc2, err := s.cache.LocateKey(s.bo, k)
+	s.NoError(err)
+	s.True(loc2.Contains(k))
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r := s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
@@ -2306,7 +2320,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 
 	// Since region cache doesn't remove the first intersected region(it scan intersected region by AscendGreaterOrEqual), the outdated region (-inf, inf) is still alive.
 	// The new inserted valid region [{2}, inf) is ignored because the first seen region (-inf, inf) contains all the required ranges.
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 	s.Equal(r[0].StartKey(), []byte(nil))
 
@@ -2314,24 +2328,24 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	v3 := region.Region.confVer + 2
 	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v3}, StartKey: []byte{}, EndKey: []byte{2}}
 	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 2)
 
 	// regions: (-inf,1), [2, +inf).  Get region (-inf, 1).
 	v4 := region.Region.confVer + 3
 	r4 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v4}, StartKey: []byte{}, EndKey: []byte{1}}
 	s.cache.insertRegionToCache(&Region{meta: &r4, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r := s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
@@ -2347,7 +2361,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	// region cache after insert: [[1, +inf)]
 
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 0)
 }
 
@@ -2448,7 +2462,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	stale = !s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
-	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
+	rs := s.cache.scanRegionsFromCache([]byte(""), []byte(""), 100)
 	s.NoError(err)
 	s.Greater(len(rs), 1)
 	s.NotEqual(rs[0].EndKey(), "")
@@ -3107,4 +3121,40 @@ func (s *testRegionCacheSuite) TestBatchLoadLimitRanges() {
 	}
 	_, err := s.cache.BatchLocateKeyRanges(s.bo, ranges)
 	s.Nil(err)
+}
+
+func (s *testRegionCacheSuite) TestUpdateBucketsConcurrently() {
+	var (
+		bucketsVer uint64
+		count      uint64
+	)
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		getRegionByID: func(ctx context.Context, cli pd.Client, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
+			time.Sleep(500 * time.Millisecond)
+			atomic.AddUint64(&count, 1)
+			return cli.GetRegionByID(ctx, regionID, opts...)
+		},
+	}
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NoError(err)
+	r := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(r)
+	if buckets := r.getStore().buckets; buckets != nil {
+		bucketsVer = buckets.GetVersion()
+	}
+
+	// update buckets twice concurrently
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.Equal(uint64(0), atomic.LoadUint64(&count))
+	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 0 }, 3*time.Second, 100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	s.Equal(uint64(1), atomic.LoadUint64(&count))
+
+	// update buckets again after the previous update is done
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 1 }, 3*time.Second, 100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	s.Equal(uint64(2), atomic.LoadUint64(&count))
 }

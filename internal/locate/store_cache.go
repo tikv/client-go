@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -34,6 +35,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -44,6 +46,11 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey = "zone"
+)
+
 type testingKnobs interface {
 	getMockRequestLiveness() livenessFunc
 	setMockRequestLiveness(f livenessFunc)
@@ -51,7 +58,7 @@ type testingKnobs interface {
 
 type storeRegistry interface {
 	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
-	fetchAllStores(ctx context.Context) ([]*metapb.Store, error)
+	fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error)
 }
 
 type storeCache interface {
@@ -117,8 +124,8 @@ func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64) (*metapb.Sto
 	return c.pdClient.GetStore(ctx, id)
 }
 
-func (c *storeCacheImpl) fetchAllStores(ctx context.Context) ([]*metapb.Store, error) {
-	return c.pdClient.GetAllStores(ctx)
+func (c *storeCacheImpl) fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
+	return c.pdClient.GetAllStores(ctx, opts...)
 }
 
 func (c *storeCacheImpl) get(id uint64) (store *Store, exists bool) {
@@ -381,6 +388,36 @@ func (s resolveState) String() string {
 	}
 }
 
+// initByStoreMeta initializes the store fields by the given store meta. It should be protected by `resolveMutex`.
+func (s *Store) initByStoreMeta(store *metapb.Store) error {
+	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
+		// The store is a tombstone.
+		s.setResolveState(tombstone)
+		return nil
+	}
+	addr := store.GetAddress()
+	if addr == "" {
+		return errors.Errorf("empty store(%d) address", s.storeID)
+	}
+	s.addr = addr
+	s.peerAddr = store.GetPeerAddress()
+	s.saddr = store.GetStatusAddress()
+	s.storeType = tikvrpc.GetStoreTypeByMeta(store)
+	s.labels = store.GetLabels()
+	// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
+	s.changeResolveStateTo(unresolved, resolved)
+
+	return nil
+}
+
+// initResolveLite likes initResolve but initializes the store by the given store meta directly.
+func (s *Store) initResolveLite(store *metapb.Store) error {
+	s.resolveMutex.Lock()
+	err := s.initByStoreMeta(store)
+	s.resolveMutex.Unlock()
+	return err
+}
+
 // initResolve resolves the address of the store that never resolved and returns an
 // empty string if it's a tombstone.
 func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err error) {
@@ -414,22 +451,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 			}
 			continue
 		}
-		// The store is a tombstone.
-		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
-			s.setResolveState(tombstone)
-			return "", nil
+		if err := s.initByStoreMeta(store); err != nil {
+			return "", err
 		}
-		addr = store.GetAddress()
-		if addr == "" {
-			return "", errors.Errorf("empty store(%d) address", s.storeID)
-		}
-		s.addr = addr
-		s.peerAddr = store.GetPeerAddress()
-		s.saddr = store.GetStatusAddress()
-		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
-		s.labels = store.GetLabels()
-		// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
-		s.changeResolveStateTo(unresolved, resolved)
 		return s.addr, nil
 	}
 }
@@ -464,6 +488,9 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if addr == "" {
+		return false, errors.Errorf("empty store(%d) address", s.storeID)
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := newStore(
 			s.storeID,
@@ -607,6 +634,7 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
+		updateStoreLivenessGauge(s)
 		s.unreachableSince = time.Now()
 		reResolveInterval := storeReResolveInterval
 		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
@@ -644,6 +672,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 
 		liveness = requestLiveness(ctx, s, c)
 		atomic.StoreUint32(&s.livenessState, uint32(liveness))
+		updateStoreLivenessGauge(s)
 		if liveness == reachable {
 			logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
 			return true
@@ -1089,4 +1118,91 @@ func (s *Store) resetReplicaFlowsStats(destType replicaFlowsType) {
 // recordReplicaFlowsStats records the statistics on the related replicaFlowsType.
 func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 	atomic.AddUint64(&s.replicaFlowsStats[destType], 1)
+}
+
+func updateStoreLivenessGauge(store *Store) {
+	if store.storeType != tikvrpc.TiKV || store.getResolveState() != resolved {
+		return
+	}
+	metrics.TiKVStoreLivenessGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(store.getLivenessState()))
+}
+
+type storeCacheUpdater struct {
+	stores storeCache
+
+	lastCleanUpTime  time.Time
+	nextCleanUpStore uint64
+}
+
+func (u *storeCacheUpdater) tick(ctx context.Context, now time.Time) bool {
+	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone())
+	if err != nil {
+		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
+		return false
+	}
+	u.insertMissingStores(ctx, storeList)
+	u.cleanUpStaleStoreMetrics(ctx, storeList, now)
+	return false
+}
+
+// insertMissingStores adds the stores that are not in the cache.
+func (u *storeCacheUpdater) insertMissingStores(ctx context.Context, storeList []*metapb.Store) {
+	for _, store := range storeList {
+		// storeList is supposed to contains only Up and Offline stores.
+		// This check is being defensive and to make it consistent with store resolve code.
+		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
+			continue
+		}
+		_, exist := u.stores.get(store.GetId())
+		if exist {
+			continue
+		}
+		s := u.stores.getOrInsertDefault(store.GetId())
+		if err := s.initResolveLite(store); err != nil {
+			logutil.Logger(ctx).Warn("init resolve store failed", zap.Uint64("storeID", store.GetId()), zap.Error(err))
+			continue
+		}
+		updateStoreLivenessGauge(s)
+	}
+}
+
+func (u *storeCacheUpdater) cleanUpStaleStoreMetrics(ctx context.Context, storeList []*metapb.Store, now time.Time) {
+	if now.Sub(u.lastCleanUpTime) < cleanStoreMetricsInterval {
+		return
+	}
+	u.lastCleanUpTime = now
+
+	// find a stale store id
+	id := u.nextCleanUpStore
+	if id == 0 {
+		validStoreIDs := make(map[uint64]struct{}, len(storeList))
+		for _, store := range storeList {
+			if store.GetId() != 0 && store.GetState() != metapb.StoreState_Tombstone {
+				validStoreIDs[store.GetId()] = struct{}{}
+			}
+		}
+		u.nextCleanUpStore = metrics.FindNextStaleStoreID(metrics.TiKVStoreLivenessGauge, validStoreIDs)
+		// delay cleaning up this store for one cleanStoreMetricsInterval
+		return
+	} else {
+		u.nextCleanUpStore = 0
+	}
+
+	// confirm that the store is indeed stale from pd
+	store, err := u.stores.fetchStore(ctx, id)
+	if err != nil && !isStoreNotFoundError(err) {
+		logutil.Logger(ctx).Info("cannot confirm store state", zap.Uint64("storeID", id), zap.Error(err))
+		return
+	}
+	if store != nil && store.GetState() != metapb.StoreState_Tombstone {
+		logutil.Logger(ctx).Info("skip cleaning up metrics of a valid store", zap.Uint64("storeID", id), zap.String("state", store.GetState().String()))
+		return
+	}
+
+	// clean up metrics which are associated with the stale store id
+	logutil.Logger(ctx).Info("clean up store metrics", zap.Uint64("storeID", id))
+	filter := prometheus.Labels{metrics.LblStore: strconv.FormatUint(id, 10)}
+	for _, m := range metrics.GetStoreMetricVecList() {
+		m.DeletePartialMatch(filter)
+	}
 }
