@@ -511,6 +511,7 @@ func (s *replicaSelector) onRegionNotFound(
 	if !leader.isExhausted(1, 0) {
 		// if the request is not sent to leader, we can retry it with leader and invalidate the region cache asynchronously. It helps in the scenario
 		// where region is split by the leader but not yet created in replica due to replica down.
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		s.replicaReadType = kv.ReplicaReadLeader
 		s.regionCache.AsyncInvalidateCachedRegion(ctx.Region)
 		return true, nil
