@@ -1160,7 +1160,7 @@ func testReplicaReadAccessPathByBasicCase(s *testReplicaSelectorSuite) {
 						if tp == RegionNotFoundErr {
 							accessPath = []string{
 								"{addr: store2, replica-read: true, stale-read: false}",
-								"{addr: store1, replica-read: true, stale-read: false}",
+								"{addr: store1, replica-read: false, stale-read: false}",
 							}
 							respRegionError = nil
 							regionIsValid = true
