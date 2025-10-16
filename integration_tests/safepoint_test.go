@@ -85,9 +85,9 @@ func mymakeKeys(rowNum int, prefix string) [][]byte {
 
 func (s *testSafePointSuite) waitUntilErrorPlugIn(t uint64) {
 	for {
-		s.store.SaveSafePoint(t + 10)
+		s.store.SaveSafePointToSafePointKV(t + 10)
 		cachedTime := time.Now()
-		newSafePoint, err := s.store.LoadSafePoint()
+		newSafePoint, err := s.store.LoadSafePointFromSafePointKV()
 		if err == nil {
 			s.store.UpdateTxnSafePointCache(newSafePoint, cachedTime)
 			break

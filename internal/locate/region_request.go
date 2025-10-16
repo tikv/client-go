@@ -470,6 +470,14 @@ func (s *RegionRequestSender) SendReqAsync(
 	cb async.Callback[*tikvrpc.ResponseExt],
 	opts ...StoreSelectorOption,
 ) {
+	if resp, err := failpointSendReqResult(req, tikvrpc.TiKV); err != nil || resp != nil {
+		var re *tikvrpc.ResponseExt
+		if resp != nil {
+			re = &tikvrpc.ResponseExt{Response: *resp}
+		}
+		cb.Invoke(re, err)
+		return
+	}
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
@@ -495,7 +503,8 @@ func (s *RegionRequestSender) SendReqAsync(
 			opts:     opts,
 		},
 		invariants: reqInvariants{
-			staleRead: req.StaleRead,
+			staleRead:       req.StaleRead,
+			replicaReadType: req.ReplicaReadType,
 		},
 	}
 
@@ -895,7 +904,8 @@ type sendReqState struct {
 // If the tikvrpc.Request is changed during the retries or other operations.
 // the reqInvariants can tell the initial state.
 type reqInvariants struct {
-	staleRead bool
+	staleRead       bool
+	replicaReadType kv.ReplicaReadType
 }
 
 // next encapsulates one iteration of the retry loop. calling `next` will handle send error (s.vars.err) or region error
@@ -1121,11 +1131,12 @@ func (s *sendReqState) send() (canceled bool) {
 
 		var execDetails *util.ExecDetails
 		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
-			execDetails := stmtExec.(*util.ExecDetails)
+			execDetails = stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
 		}
 		collector := networkCollector{
-			staleRead: s.invariants.staleRead,
+			staleRead:       s.invariants.staleRead,
+			replicaReadType: s.invariants.replicaReadType,
 		}
 		collector.onReq(req, execDetails)
 		collector.onResp(req, s.vars.resp, execDetails)
@@ -1234,6 +1245,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	// set access location based on source and target "zone" label.
 	s.setReqAccessLocation(req)
+
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1263,8 +1275,8 @@ func (s *sendReqState) setReqAccessLocation(req *tikvrpc.Request) {
 	// set access location based on source and target "zone" label.
 	if s.replicaSelector != nil && s.replicaSelector.target != nil {
 		selfZoneLabel := config.GetGlobalConfig().ZoneLabel
-		targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue("zone")
-		// if either "zone" label is "", we actually don't known if it involves cross AZ traffic.
+		targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue(DCLabelKey)
+		// if either "zone" label is "", we actually don't know if it involves cross AZ traffic.
 		if selfZoneLabel == "" || targetZoneLabel == "" {
 			req.AccessLocation = kv.AccessUnknown
 		} else if selfZoneLabel == targetZoneLabel {
@@ -1297,7 +1309,8 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
 	}
 	collector := networkCollector{
-		staleRead: s.invariants.staleRead,
+		staleRead:       s.invariants.staleRead,
+		replicaReadType: s.invariants.replicaReadType,
 	}
 	collector.onReq(req, execDetails)
 	collector.onResp(req, resp, execDetails)
@@ -1434,7 +1447,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			opts:     opts,
 		},
 		invariants: reqInvariants{
-			staleRead: req.StaleRead,
+			staleRead:       req.StaleRead,
+			replicaReadType: req.ReplicaReadType,
 		},
 	}
 

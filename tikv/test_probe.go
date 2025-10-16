@@ -46,6 +46,8 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
+	pdgc "github.com/tikv/pd/client/clients/gc"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // StoreProbe wraps KVStore and exposes internal states for testing purpose.
@@ -91,14 +93,18 @@ func (s StoreProbe) SendTxnHeartbeat(ctx context.Context, key []byte, startTS ui
 	return newTTL, err
 }
 
-// LoadSafePoint from safepoint kv.
-func (s StoreProbe) LoadSafePoint() (uint64, error) {
+// LoadSafePointFromSafePointKV from safepoint kv.
+func (s StoreProbe) LoadSafePointFromSafePointKV() (uint64, error) {
 	return loadSafePoint(s.GetSafePointKV())
 }
 
-// SaveSafePoint saves safepoint to kv.
-func (s StoreProbe) SaveSafePoint(v uint64) error {
+// SaveSafePointToSafePointKV saves safepoint to kv.
+func (s StoreProbe) SaveSafePointToSafePointKV(v uint64) error {
 	return saveSafePoint(s.GetSafePointKV(), v)
+}
+
+func (s StoreProbe) LoadTxnSafePoint(ctx context.Context) (uint64, error) {
+	return s.KVStore.loadTxnSafePoint(ctx)
 }
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
@@ -150,6 +156,22 @@ outerLoop:
 	}
 
 	return result, nil
+}
+
+func (s StoreProbe) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+	s.KVStore.UpdateTxnSafePointCache(txnSafePoint, now)
+}
+
+func (s StoreProbe) GetGCStatesClient() pdgc.GCStatesClient {
+	return s.gcStatesClient
+}
+
+func (s StoreProbe) ReplaceGCStatesClient(c pdgc.GCStatesClient) {
+	s.KVStore.gcStatesClient = c
+}
+
+func (s StoreProbe) GetCompatibleTxnSafePointLoaderUnderlyingEtcdClient() *clientv3.Client {
+	return s.KVStore.compatibleTxnSafePointLoader.etcdCli.Load()
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.

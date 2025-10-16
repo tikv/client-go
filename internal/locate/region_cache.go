@@ -353,6 +353,11 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 		if err != nil {
 			return nil, err
 		}
+
+		if !exists {
+			updateStoreLivenessGauge(store)
+		}
+
 		// Filter out the peer on a tombstone or down store.
 		if addr == "" || slices.ContainsFunc(pdRegion.DownPeers, func(dp *metapb.Peer) bool { return isSamePeer(dp, p) }) {
 			continue
@@ -660,6 +665,8 @@ type RegionCache struct {
 	bg *bgRunner
 
 	clusterID uint64
+
+	inflightUpdateBuckets sync.Map
 }
 
 type regionCacheOptions struct {
@@ -747,45 +754,9 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 		// cache GC is incompatible with cache refresh
 		c.bg.schedule(c.gcRoundFunc(cleanRegionNumPerRound), cleanCacheInterval)
 	}
-	c.bg.schedule(
-		func(ctx context.Context, _ time.Time) bool {
-			refreshFullStoreList(ctx, c.stores)
-			return false
-		}, refreshStoreListInterval,
-	)
+	updater := &storeCacheUpdater{stores: c.stores}
+	c.bg.schedule(updater.tick, refreshStoreListInterval)
 	return c
-}
-
-// Try to refresh full store list. Errors are ignored.
-func refreshFullStoreList(ctx context.Context, stores storeCache) {
-	storeList, err := stores.fetchAllStores(ctx)
-	if err != nil {
-		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
-		return
-	}
-	for _, store := range storeList {
-		_, exist := stores.get(store.GetId())
-		if exist {
-			continue
-		}
-		// GetAllStores is supposed to return only Up and Offline stores.
-		// This check is being defensive and to make it consistent with store resolve code.
-		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
-			continue
-		}
-		addr := store.GetAddress()
-		if addr == "" {
-			continue
-		}
-		s := stores.getOrInsertDefault(store.GetId())
-		// TODO: maybe refactor this, together with other places initializing Store
-		s.addr = addr
-		s.peerAddr = store.GetPeerAddress()
-		s.saddr = store.GetStatusAddress()
-		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
-		s.labels = store.GetLabels()
-		s.changeResolveStateTo(unresolved, resolved)
-	}
 }
 
 // only used fot test.
@@ -1320,10 +1291,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		containsAll := false
 	outer:
 		for {
-			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
-			if err != nil {
-				return nil, err
-			}
+			batchRegionInCache := c.scanRegionsFromCache(keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
 			for _, r = range batchRegionInCache {
 				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
 					break outer
@@ -1558,6 +1526,8 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
 				zap.String("key", redact.Key(key)), zap.Error(err),
 				zap.String("encode-key", redact.Key(c.codec.EncodeRegionKey(key))))
+			// mark as need sync reload
+			r.setSyncFlags(needReloadOnAccess)
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			reloadOnAccess := flags&needReloadOnAccess > 0
@@ -1573,7 +1543,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
 	var expired bool
 	r, expired = c.searchCachedRegionByKey(key, isEndKey)
-	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess|needDelayedReloadReady) {
 		return nil
 	}
 	return r
@@ -1702,6 +1672,8 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 				// ignore error and use old region info.
 				logutil.Logger(bo.GetCtx()).Error("load region failure",
 					zap.Uint64("regionID", regionID), zap.Error(err))
+				// mark as need sync reload
+				r.setSyncFlags(needReloadOnAccess)
 			} else {
 				r = lr
 				c.mu.Lock()
@@ -2175,17 +2147,25 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 
 // For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
 // It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
-func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) []*Region {
 	if limit == 0 {
-		return nil, nil
+		return nil
 	}
 
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-
-	return regions, nil
+	// in-place filter out the regions which need reload.
+	i := 0
+	for _, region := range regions {
+		if !region.checkSyncFlags(needReloadOnAccess | needDelayedReloadReady) {
+			regions[i] = region
+			i++
+		}
+	}
+	regions = regions[:i]
+	return regions
 }
 
 func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
@@ -2724,9 +2704,13 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		bucketsVer = buckets.GetVersion()
 	}
 	if bucketsVer < latestBucketsVer {
-		// TODO(youjiali1995): use singleflight.
-		go func() {
-			bo := retry.NewBackoffer(context.Background(), 20000)
+		_, inflight := c.inflightUpdateBuckets.LoadOrStore(regionID.id, struct{}{})
+		if inflight {
+			return
+		}
+		c.bg.run(func(ctx context.Context) {
+			defer c.inflightUpdateBuckets.Delete(regionID.id)
+			bo := retry.NewBackoffer(ctx, 20000)
 			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
@@ -2738,13 +2722,14 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 			c.mu.Lock()
 			c.insertRegionToCache(new, true, true)
 			c.mu.Unlock()
-		}()
+		})
 	}
 }
 
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
 const refreshStoreListInterval = 10 * time.Second
+const cleanStoreMetricsInterval = time.Minute
 
 // gcScanItemHook is only used for testing
 var gcScanItemHook = new(atomic.Pointer[func(*btreeItem)])

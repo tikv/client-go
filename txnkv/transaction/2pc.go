@@ -567,7 +567,6 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		flags := it.Flags()
 		var value []byte
 		var op kvrpcpb.Op
-
 		if !it.HasValue() {
 			if !flags.HasLocked() {
 				continue
@@ -1818,7 +1817,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		// RPCs fails. However, if there are multiple errors and some of the errors
 		// are not RPC failures, we can return the actual error instead of undetermined.
 		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Error("Async commit/1PC result undetermined",
+			logutil.Logger(ctx).Warn("Async commit/1PC result undetermined",
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
@@ -2009,7 +2008,7 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 	}
 	if err != nil {
 		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Error("2PC commit result undetermined",
+			logutil.Logger(ctx).Warn("2PC commit result undetermined",
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))

@@ -80,11 +80,12 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		commitRole = kvrpcpb.CommitRole_Secondary
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		StartVersion:  c.startTS,
-		Keys:          keys,
-		PrimaryKey:    c.primary(),
-		CommitVersion: c.commitTS,
-		CommitRole:    commitRole,
+		StartVersion:   c.startTS,
+		Keys:           keys,
+		PrimaryKey:     c.primary(),
+		CommitVersion:  c.commitTS,
+		CommitRole:     commitRole,
+		UseAsyncCommit: c.isAsyncCommit(),
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,

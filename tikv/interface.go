@@ -60,6 +60,7 @@ type Storage interface {
 
 	// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
 	// operations to prevent accessing GC-ed inconsistent data.
+	// WARNING: Exported only for test purpose. Avoid using it when possible.
 	UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time)
 
 	// SetOracle sets the Oracle.

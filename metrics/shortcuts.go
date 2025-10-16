@@ -187,6 +187,11 @@ var (
 	AsyncBatchGetCounterWithRegionError prometheus.Counter
 	AsyncBatchGetCounterWithLockError   prometheus.Counter
 	AsyncBatchGetCounterWithOtherError  prometheus.Counter
+
+	ReadRequestLeaderLocalBytes    prometheus.Observer
+	ReadRequestLeaderRemoteBytes   prometheus.Observer
+	ReadRequestFollowerLocalBytes  prometheus.Observer
+	ReadRequestFollowerRemoteBytes prometheus.Observer
 )
 
 func initShortcuts() {
@@ -343,4 +348,9 @@ func initShortcuts() {
 	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
 	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
 	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
+
+	ReadRequestLeaderLocalBytes = TiKVReadRequestBytes.WithLabelValues("leader", "local")
+	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
+	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
+	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
 }
