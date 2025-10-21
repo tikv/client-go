@@ -1660,6 +1660,23 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 }
 
+// LocateRegionByIDFromPD loads region from PD directly, bypassing cache.
+// This is useful for diagnostics when cache may be stale or incorrect.
+// The loaded region will NOT be inserted into cache.
+func (c *RegionCache) LocateRegionByIDFromPD(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
+	r, err := c.loadRegionByID(bo, regionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KeyLocation{
+		Region:   r.VerID(),
+		StartKey: r.StartKey(),
+		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
+	}, nil
+}
+
 // LocateRegionByID searches for the region with ID.
 func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
 	r, expired := c.searchCachedRegionByID(regionID)
