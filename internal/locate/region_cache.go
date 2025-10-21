@@ -1660,6 +1660,23 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 }
 
+// LocateRegionByIDFromPD loads region from PD directly, bypassing cache.
+// This is useful for diagnostics when cache may be stale or incorrect.
+// The loaded region will NOT be inserted into cache.
+func (c *RegionCache) LocateRegionByIDFromPD(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
+	r, err := c.loadRegionByID(bo, regionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KeyLocation{
+		Region:   r.VerID(),
+		StartKey: r.StartKey(),
+		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
+	}, nil
+}
+
 // LocateRegionByID searches for the region with ID.
 func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
 	r, expired := c.searchCachedRegionByID(regionID)
@@ -2433,6 +2450,10 @@ func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*rout
 	for _, r := range regionsInfo {
 		// Leader id = 0 indicates no leader.
 		if needLeader && (r.Leader == nil || r.Leader.GetId() == 0) {
+			logutil.BgLogger().Warn("filter out region without leader",
+				zap.Uint64("regionId", r.Meta.Id),
+				zap.String("startKey", redact.Key(r.Meta.StartKey)),
+				zap.String("endKey", redact.Key(r.Meta.EndKey)))
 			continue
 		}
 		region, err := newRegion(bo, c, r)
@@ -2445,7 +2466,7 @@ func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*rout
 		return nil, nil
 	}
 	if len(regions) < len(regionsInfo) {
-		logutil.Logger(context.Background()).Debug(
+		logutil.Logger(context.Background()).Warn(
 			"regionCache: scanRegion finished but some regions has no leader.")
 	}
 	return regions, nil
