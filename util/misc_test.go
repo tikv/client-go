@@ -97,3 +97,38 @@ func TestBytesToString(t *testing.T) {
 		assert.Equal(str, String(bytes))
 	}
 }
+
+func TestGetMaxStartKey(t *testing.T) {
+	assert := assert.New(t)
+
+	cases := []struct {
+		lhs, rhs, expected string
+	}{
+		{"", "", ""},
+		{"", "a", "a"},
+		{"a", "a", "a"},
+	}
+
+	for _, c := range cases {
+		assert.Equal([]byte(c.expected), GetMaxStartKey([]byte(c.lhs), []byte(c.rhs)))
+		assert.Equal([]byte(c.expected), GetMaxStartKey([]byte(c.rhs), []byte(c.lhs)))
+	}
+}
+
+func TestGetMinEndKey(t *testing.T) {
+	assert := assert.New(t)
+
+	cases := []struct {
+		lhs, rhs, expected string
+	}{
+		{"", "", ""},
+		{"a", "", "a"},
+		{"a", "a", "a"},
+		{"a", "b", "a"},
+	}
+
+	for _, c := range cases {
+		assert.Equal([]byte(c.expected), GetMinEndKey([]byte(c.lhs), []byte(c.rhs)))
+		assert.Equal([]byte(c.expected), GetMinEndKey([]byte(c.rhs), []byte(c.lhs)))
+	}
+}

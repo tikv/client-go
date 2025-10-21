@@ -50,17 +50,26 @@ type Variables struct {
 	// When its value is not 0, it's killed, the value indicates concrete reason.
 	Killed *uint32
 
-	// EnableTxnFile specifies whether file-based txn is enabled.
-	EnableTxnFile bool
+	// DisableTxnFile specifies whether file-based txn is disabled.
+	DisableTxnFile bool
+
+	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
+	// When its value is 0, use the config of "txn-file-min-mutation-size".
+	TxnFileMinMutationSize uint64
+
+	// EnableColumnarExecution specifies whether columnar execution is enabled.
+	EnableColumnarExecution bool
 }
 
 // NewVariables create a new Variables instance with default values.
 func NewVariables(killed *uint32) *Variables {
 	return &Variables{
-		BackoffLockFast: DefBackoffLockFast,
-		BackOffWeight:   DefBackOffWeight,
-		Killed:          killed,
-		EnableTxnFile:   false,
+		BackoffLockFast:         DefBackoffLockFast,
+		BackOffWeight:           DefBackOffWeight,
+		Killed:                  killed,
+		DisableTxnFile:          false,
+		TxnFileMinMutationSize:  0,
+		EnableColumnarExecution: false,
 	}
 }
 

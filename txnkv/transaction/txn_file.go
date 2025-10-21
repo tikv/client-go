@@ -69,8 +69,9 @@ type txnFileCtx struct {
 
 type chunkBatch struct {
 	txnChunkSlice
-	region    *locate.KeyLocation
-	isPrimary bool
+	region     *locate.KeyLocation
+	sampleKeys [][]byte
+	isPrimary  bool
 }
 
 func (b chunkBatch) String() string {
@@ -78,22 +79,8 @@ func (b chunkBatch) String() string {
 		b.region.Region.GetID(), b.isPrimary, b.txnChunkSlice.chunkIDs)
 }
 
-// chunkBatch.txnChunkSlice should be sorted by smallest.
 func (b *chunkBatch) getSampleKeys() [][]byte {
-	keys := make([][]byte, 0)
-	start := sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
-		return bytes.Compare(b.region.StartKey, b.txnChunkSlice.chunkRanges[i].smallest) <= 0
-	})
-	end := b.txnChunkSlice.Len()
-	if len(b.region.EndKey) > 0 {
-		end = sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
-			return bytes.Compare(b.txnChunkSlice.chunkRanges[i].smallest, b.region.EndKey) >= 0
-		})
-	}
-	for i := start; i < end; i++ {
-		keys = append(keys, b.txnChunkSlice.chunkRanges[i].smallest)
-	}
-	return keys
+	return b.sampleKeys
 }
 
 // txnChunkSlice should be sorted by txnChunkRange.smallest and no overlapping.
@@ -176,19 +163,29 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	}
 	batchMap := make(map[batchMapKey]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
-		regions, err := chunkRange.getOverlapRegions(c, bo, mutations)
+		chunkID := cs.chunkIDs[i]
+
+		regions, firstKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 
-		for _, r := range regions {
-			key := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
-			if batchMap[key] == nil {
-				batchMap[key] = &chunkBatch{
-					region: r,
+		for j, r := range regions {
+			firstKey := firstKeys[j]
+
+			bk := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
+			if batchMap[bk] == nil {
+				batchMap[bk] = &chunkBatch{
+					region:     r,
+					sampleKeys: make([][]byte, 0, 1),
 				}
 			}
-			batchMap[key].append(cs.chunkIDs[i], chunkRange)
+
+			batch := batchMap[bk]
+			batch.append(chunkID, chunkRange)
+			if len(firstKey) > 0 {
+				batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			}
 		}
 	}
 
@@ -197,12 +194,13 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		batches = append(batches, *batch)
 	}
 	sort.Slice(batches, func(i, j int) bool {
-		// Sort by both chunks and region, to make sure that primary key is in the first batch:
+		// Sort by chunks first, and then by region, to make sure that primary key is in the first batch:
 		// 1. Different batches may contain the same chunks.
 		// 2. Different batches may have regions with same start key (if region merge happens during grouping).
-		cmp := bytes.Compare(batches[i].region.StartKey, batches[j].region.StartKey)
+		// 3. Bigger batches may have regions with smaller start key (if region merge happens during grouping).
+		cmp := bytes.Compare(batches[i].Smallest(), batches[j].Smallest())
 		if cmp == 0 {
-			return bytes.Compare(batches[i].Smallest(), batches[j].Smallest()) < 0
+			return bytes.Compare(batches[i].region.StartKey, batches[j].region.StartKey) < 0
 		}
 		return cmp < 0
 	})
@@ -227,24 +225,32 @@ func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 	}
 }
 
-func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, error) {
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, error) {
 	regions := make([]*locate.KeyLocation, 0)
+	firstKeys := make([][]byte, 0)
 	startKey := r.smallest
+	exclusiveBiggest := kv.NextKey(r.biggest)
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
-			return nil, errors.Wrap(err, "locate key failed")
+			return nil, nil, errors.Wrap(err, "locate key failed")
 		}
-		if MutationsHasDataInRange(mutations, loc.StartKey, loc.EndKey) {
+		firstKey, ok := MutationsHasDataInRange(
+			mutations,
+			util.GetMaxStartKey(r.smallest, loc.StartKey),
+			util.GetMinEndKey(exclusiveBiggest, loc.EndKey),
+		)
+		if ok {
 			regions = append(regions, loc)
+			firstKeys = append(firstKeys, firstKey)
 		}
 		if len(loc.EndKey) == 0 {
 			break
 		}
 		startKey = loc.EndKey
 	}
-	return regions, nil
+	return regions, firstKeys, nil
 }
 
 type txnFileAction interface {
@@ -381,9 +387,7 @@ func (a txnFilePrewriteAction) String() string {
 	return "txnFilePrewrite"
 }
 
-type txnFileCommitAction struct {
-	commitTS uint64
-}
+type txnFileCommitAction struct{}
 
 var _ txnFileAction = (*txnFileCommitAction)(nil)
 
@@ -391,7 +395,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
 		StartVersion:  c.startTS,
-		CommitVersion: a.commitTS,
+		CommitVersion: c.commitTS,
 		IsTxnFile:     true,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
@@ -601,7 +605,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
+	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{})
 	stepDone("commit")
 	if err != nil {
 		return
@@ -921,16 +925,20 @@ func (c *twoPhaseCommitter) getKeyspaceID() apicodec.KeyspaceID {
 }
 
 func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
-	if c.txn == nil || !c.txn.vars.EnableTxnFile {
+	if c.txn == nil || c.txn.vars.DisableTxnFile {
 		return false, nil
 	}
 	conf := config.GetGlobalConfig()
+	minMutationSize := c.txn.vars.TxnFileMinMutationSize
+	if minMutationSize == 0 {
+		minMutationSize = conf.TiKVClient.TxnFileMinMutationSize
+	}
 	// Don't use txn file for internal request to avoid affect system tables or metadata before it is stable enough.
 	// TODO: use txn file for internal TTL & DDL tasks.
 	if c.txn.isPessimistic ||
 		c.txn.isInternal() ||
 		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
-		uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
+		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize {
 		return false, nil
 	}
 	return true, nil

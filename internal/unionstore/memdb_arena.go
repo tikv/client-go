@@ -384,9 +384,11 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
 			// If there are no flags associated with this key, we need to delete this node.
 			keptFlags := node.getKeyFlags().AndPersistent()
 			if keptFlags == 0 {
-				db.deleteNode(node)
+				node.markDelete()
+				db.count--
+				db.size -= int(node.klen)
 			} else {
-				node.setKeyFlags(keptFlags)
+				node.resetKeyFlags(keptFlags)
 				db.dirty = true
 			}
 		} else {

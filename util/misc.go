@@ -35,6 +35,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -206,4 +207,24 @@ func HexRegionKey(key []byte) []byte {
 // logs.
 func HexRegionKeyStr(key []byte) string {
 	return String(HexRegionKey(key))
+}
+
+func GetMaxStartKey(lhs []byte, rhs []byte) []byte {
+	if bytes.Compare(lhs, rhs) > 0 {
+		return lhs
+	}
+	return rhs
+}
+
+func GetMinEndKey(lhs []byte, rhs []byte) []byte {
+	if len(rhs) == 0 {
+		return lhs
+	}
+	if len(lhs) == 0 {
+		return rhs
+	}
+	if bytes.Compare(lhs, rhs) < 0 {
+		return lhs
+	}
+	return rhs
 }
