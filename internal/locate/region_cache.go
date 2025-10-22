@@ -1851,6 +1851,14 @@ func (c *RegionCache) BatchLoadRegionsFromKey(bo *retry.Backoffer, startKey []by
 	return regions[len(regions)-1].EndKey(), nil
 }
 
+func (c *RegionCache) AsyncInvalidateCachedRegion(id RegionVerID) {
+	cachedRegion := c.GetCachedRegionWithRLock(id)
+	if cachedRegion == nil {
+		return
+	}
+	cachedRegion.setSyncFlags(needDelayedReloadPending)
+}
+
 // InvalidateCachedRegion removes a cached Region.
 func (c *RegionCache) InvalidateCachedRegion(id RegionVerID) {
 	c.InvalidateCachedRegionWithReason(id, Other)
