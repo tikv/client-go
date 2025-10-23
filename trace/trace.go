@@ -33,76 +33,81 @@ const (
 	CategoryKVRequest
 )
 
-// EventTracer is the interface for recording trace events.
-// This allows TiDB to inject its trace event implementation without creating a dependency.
-type EventTracer interface {
-	// TraceEvent records a trace event with the given category, name, and fields.
-	TraceEvent(ctx context.Context, category Category, name string, fields ...zap.Field)
-}
+// TraceEventFunc is the function signature for recording trace events.
+type TraceEventFunc func(ctx context.Context, category Category, name string, fields ...zap.Field)
 
-// CategoryChecker is an optional interface that EventTracer implementations can provide
-// to allow efficient category enablement checks before expensive event construction.
-type CategoryChecker interface {
-	// IsCategoryEnabled returns true if the specified category is currently enabled for tracing.
-	IsCategoryEnabled(category Category) bool
-}
+// IsCategoryEnabledFunc is the function signature for checking if a category is enabled.
+type IsCategoryEnabledFunc func(category Category) bool
 
-// TraceIDProvider is an optional interface that EventTracer implementations can provide
-// to enable trace ID extraction from context. This allows client-go to propagate trace IDs
-// to TiKV without knowing about the application's (e.g., TiDB's) context key implementation.
-type TraceIDProvider interface {
-	// ExtractTraceID extracts the trace ID from the context.
-	// Returns nil if no trace ID is present.
-	ExtractTraceID(ctx context.Context) []byte
-}
+// Default no-op implementations
+func noopTraceEvent(context.Context, Category, string, ...zap.Field) {}
+func noopIsCategoryEnabled(Category) bool                            { return false }
 
-// noopTracer is a no-op implementation used when no tracer is set.
-type noopTracer struct{}
-
-func (noopTracer) TraceEvent(context.Context, Category, string, ...zap.Field) {}
-
-var globalTracer atomic.Value // stores EventTracer
+// Global function pointers stored independently
+var (
+	globalTraceEventFunc        atomic.Pointer[TraceEventFunc]
+	globalIsCategoryEnabledFunc atomic.Pointer[IsCategoryEnabledFunc]
+)
 
 func init() {
-	globalTracer.Store(EventTracer(noopTracer{}))
+	// Set default no-op implementations
+	defaultTraceEvent := TraceEventFunc(noopTraceEvent)
+	defaultIsCategoryEnabled := IsCategoryEnabledFunc(noopIsCategoryEnabled)
+	globalTraceEventFunc.Store(&defaultTraceEvent)
+	globalIsCategoryEnabledFunc.Store(&defaultIsCategoryEnabled)
 }
 
-// SetGlobalTracer sets the global tracer implementation.
-// This should be called once during initialization by the TiDB layer.
-func SetGlobalTracer(tracer EventTracer) {
-	if tracer == nil {
-		tracer = noopTracer{}
+// SetTraceEventFunc registers the trace event handler function.
+// This is typically called once during application initialization (e.g., by TiDB).
+// Passing nil will use a no-op implementation.
+func SetTraceEventFunc(fn TraceEventFunc) {
+	if fn == nil {
+		fn = noopTraceEvent
 	}
-	globalTracer.Store(tracer)
+	globalTraceEventFunc.Store(&fn)
 }
 
-// TraceEvent records a trace event using the global tracer.
+// SetIsCategoryEnabledFunc registers the category enablement check function.
+// This can be updated independently of the trace event function.
+// Passing nil will use a no-op implementation that returns false.
+func SetIsCategoryEnabledFunc(fn IsCategoryEnabledFunc) {
+	if fn == nil {
+		fn = noopIsCategoryEnabled
+	}
+	globalIsCategoryEnabledFunc.Store(&fn)
+}
+
+// TraceEvent records a trace event using the registered function.
 func TraceEvent(ctx context.Context, category Category, name string, fields ...zap.Field) {
-	tracer := globalTracer.Load().(EventTracer)
-	tracer.TraceEvent(ctx, category, name, fields...)
+	fn := globalTraceEventFunc.Load()
+	(*fn)(ctx, category, name, fields...)
 }
 
-// IsCategoryEnabled checks if a category is enabled for tracing.
-// Returns true if the tracer supports category checking and the category is enabled,
-// or true if the tracer doesn't support checking (conservative default).
+// IsCategoryEnabled checks if a category is enabled for tracing using the registered function.
 func IsCategoryEnabled(category Category) bool {
-	tracer := globalTracer.Load().(EventTracer)
-	if checker, ok := tracer.(CategoryChecker); ok {
-		return checker.IsCategoryEnabled(category)
-	}
-	// default to off, for safety and performance
-	return false
+	fn := globalIsCategoryEnabledFunc.Load()
+	return (*fn)(category)
 }
 
-// TraceIDFromContext extracts the trace ID from the context using the global tracer.
-// Returns nil if the tracer doesn't implement TraceIDProvider or if no trace ID is present.
+// Trace ID context management
+
+// traceIDKey is the context key for storing trace IDs.
+// This key is shared between TiDB and client-go for trace ID propagation.
+type traceIDKey struct{}
+
+// ContextWithTraceID returns a new context with the given trace ID attached.
+func ContextWithTraceID(ctx context.Context, traceID []byte) context.Context {
+	return context.WithValue(ctx, traceIDKey{}, traceID)
+}
+
+// TraceIDFromContext extracts the trace ID from the context.
+// Returns nil if no trace ID is present.
 func TraceIDFromContext(ctx context.Context) []byte {
 	if ctx == nil {
 		return nil
 	}
-	tracer := globalTracer.Load().(EventTracer)
-	if provider, ok := tracer.(TraceIDProvider); ok {
-		return provider.ExtractTraceID(ctx)
+	if traceID, ok := ctx.Value(traceIDKey{}).([]byte); ok {
+		return traceID
 	}
 	return nil
 }
