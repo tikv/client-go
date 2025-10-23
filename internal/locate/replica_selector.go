@@ -517,6 +517,23 @@ func (s *replicaSelector) onDataIsNotReady() {
 	}
 }
 
+func (s *replicaSelector) onRegionNotFound(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (shouldRetry bool, err error) {
+	leaderIdx := s.region.getStore().workTiKVIdx
+	leader := s.replicas[leaderIdx]
+	if !leader.isExhausted(1, 0) {
+		// if the request is not sent to leader, we can retry it with leader and invalidate the region cache asynchronously. It helps in the scenario
+		// where region is split by the leader but not yet created in replica due to replica down.
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
+		s.replicaReadType = kv.ReplicaReadLeader
+		s.regionCache.AsyncInvalidateCachedRegion(ctx.Region)
+		return true, nil
+	}
+	s.regionCache.InvalidateCachedRegion(ctx.Region)
+	return false, nil
+}
+
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
