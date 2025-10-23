@@ -90,8 +90,8 @@ func IsCategoryEnabled(category Category) bool {
 	if checker, ok := tracer.(CategoryChecker); ok {
 		return checker.IsCategoryEnabled(category)
 	}
-	// If tracer doesn't implement CategoryChecker, assume enabled
-	return true
+	// default to off, for safety and performance
+	return false
 }
 
 // TraceIDFromContext extracts the trace ID from the context using the global tracer.
