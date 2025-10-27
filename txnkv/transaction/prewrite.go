@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
@@ -238,12 +239,21 @@ func (action actionPrewrite) handleSingleBatch(
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
 
+	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
+		zap.Uint64("startTS", c.startTS),
+		zap.Uint64("regionID", batch.region.GetID()),
+		zap.Bool("isPrimary", batch.isPrimary),
+		zap.Int("keyCount", batch.mutations.Len()))
+
 	var retryable bool
 	for {
 		// It will return false if the request is success or meet an unretryable error.
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
+			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
+				zap.Uint64("regionID", batch.region.GetID()),
+				zap.Bool("success", err == nil))
 			handler.drop(err)
 			return err
 		}
