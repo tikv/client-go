@@ -39,6 +39,8 @@ const (
 	InternalTxnGC = "gc"
 	// InternalTxnMeta is the type of the miscellaneous meta usage.
 	InternalTxnMeta = InternalTxnOthers
+	// InternalTxnStats is the type of statistics txn.
+	InternalTxnStats = "stats"
 )
 
 // explicit source types.
