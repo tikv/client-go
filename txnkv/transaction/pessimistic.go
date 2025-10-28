@@ -150,10 +150,14 @@ func (action actionPessimisticLock) handleSingleBatch(
 ) error {
 	convertMutationsToPb := func(committerMutations CommitterMutations) []*kvrpcpb.Mutation {
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
+		op := kvrpcpb.Op_PessimisticLock
+		if action.LockCtx.InShareMode {
+			op = kvrpcpb.Op_Shared
+		}
 		c.txn.GetMemBuffer().RLock()
 		for i := 0; i < committerMutations.Len(); i++ {
 			mut := &kvrpcpb.Mutation{
-				Op:  kvrpcpb.Op_PessimisticLock,
+				Op:  op,
 				Key: committerMutations.GetKey(i),
 			}
 			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) {

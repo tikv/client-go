@@ -589,7 +589,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// If the key was locked before, we should prewrite the lock even if
 					// the KV needn't be committed according to the filter. Otherwise, we
 					// were forgetting removing pessimistic locks added before.
-					op = kvrpcpb.Op_Lock
+					if flags.HasLockedInShareMode() {
+						op = kvrpcpb.Op_Shared
+					} else {
+						op = kvrpcpb.Op_Lock
+					}
 					lockCnt++
 				} else {
 					op = kvrpcpb.Op_Put
@@ -615,7 +619,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
 						// the logic is same as the pessimistic mode.
 						if flags.HasLocked() {
-							op = kvrpcpb.Op_Lock
+							if flags.HasLockedInShareMode() {
+								op = kvrpcpb.Op_Shared
+							} else {
+								op = kvrpcpb.Op_Lock
+							}
 							lockCnt++
 						} else {
 							continue
@@ -677,7 +685,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			}
 		}
 
-		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_Shared {
 			c.primaryKey = key
 		}
 	}

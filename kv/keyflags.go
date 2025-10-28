@@ -78,6 +78,9 @@ const (
 	// ends when the lock is acquired.
 	flagPreviousPresumeKNE
 
+	// flagKeyLockedInShareMode indicates the key is locked in share mode.
+	flagKeyLockedInShareMode
+
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
@@ -109,6 +112,11 @@ func (f KeyFlags) HasPresumeKeyNotExists() bool {
 // HasLocked returns whether the associated key has acquired pessimistic lock.
 func (f KeyFlags) HasLocked() bool {
 	return f&flagKeyLocked != 0
+}
+
+// HasLockedInShareMode returns whether the associated key has been locked in share mode.
+func (f KeyFlags) HasLockedInShareMode() bool {
+	return f&flagKeyLockedInShareMode != 0
 }
 
 // HasNeedLocked return whether the key needed to be locked
@@ -206,6 +214,10 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagNeedConstraintCheckInPrewrite
 		case SetPreviousPresumeKNE:
 			origin |= flagPreviousPresumeKNE
+		case SetKeyLockedInShareMode:
+			origin |= flagKeyLockedInShareMode
+		case DelKeyLockedInShareMode:
+			origin &= ^flagKeyLockedInShareMode
 		}
 	}
 	return origin
@@ -257,4 +269,8 @@ const (
 	DelNeedConstraintCheckInPrewrite
 	// SetPreviousPresumeKNE sets flagPreviousPresumeKNE.
 	SetPreviousPresumeKNE
+	// SetKeyLockedInShareMode marks the associated key is locked in share mode.
+	SetKeyLockedInShareMode
+	// DelKeyLockedInShareMode reverts SetKeyLockedInShareMode.
+	DelKeyLockedInShareMode
 )

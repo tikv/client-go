@@ -278,6 +278,10 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	for _, l := range expiredLocks {
 		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
 
+		if l.LockType == kvrpcpb.Op_Shared {
+			return false, errors.New("cannot handle shared lock at this time")
+		}
+
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
 		}
@@ -798,6 +802,11 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	// 2.3 No lock -- pessimistic lock rollback, concurrence prewrite.
 
 	var status TxnStatus
+
+	if lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_Shared {
+		return status, errors.New("cannot handle shared lock at this time")
+	}
+
 	resolvingPessimisticLock := lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_PessimisticLock
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
