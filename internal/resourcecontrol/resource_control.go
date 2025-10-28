@@ -63,9 +63,17 @@ func shouldBypass(req *tikvrpc.Request) bool {
 	// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
 	// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
 	// This bypass currently only works with NextGen.
-	if config.NextGen && (req.BatchCop().GetTp() == reqTypeAnalyze || req.Cop().GetTp() == reqTypeAnalyze) &&
-		strings.Contains(requestSource, util.InternalTxnStats) {
-		return true
+	if config.NextGen && strings.Contains(requestSource, util.InternalTxnStats) {
+		var tp int64
+		switch req.Type {
+		case tikvrpc.CmdBatchCop:
+			tp = req.BatchCop().GetTp()
+		case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+			tp = req.Cop().GetTp()
+		}
+		if tp == reqTypeAnalyze {
+			return true
+		}
 	}
 	// Some internal requests should be bypassed, which may affect the user experience.
 	// For example, the `alter user password` request completely bypasses resource control.
