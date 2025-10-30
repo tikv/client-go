@@ -31,7 +31,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/mem"
 )
 
 type connPool struct {
@@ -140,6 +142,9 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
+		}
 		conn, err := a.monitoredDial(
 			ctx,
 			fmt.Sprintf("%s-%d", a.target, i),
