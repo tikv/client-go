@@ -129,7 +129,7 @@ func (s *testAsyncCommitCommon) mustGetFromTxn(txn transaction.TxnProbe, key, ex
 }
 
 func (s *testAsyncCommitCommon) mustGetLock(key []byte) *txnkv.Lock {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 		Key:     key,
@@ -237,7 +237,7 @@ func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, pr
 	s.Nil(err)
 
 	if commitPrimary {
-		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 		s.Nil(err)
 		tpc.SetCommitTS(commitTS)
 		err = tpc.CommitMutations(ctx)
@@ -264,7 +264,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, []byte("z"), []byte("z"), false)
 	lock := s.mustGetLock([]byte("z"))
 	lock.UseAsyncCommit = true
-	ts, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	ts, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	var lockutil txnlock.LockProbe
 	status := lockutil.NewLockStatus(nil, true, ts)
@@ -272,7 +272,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	err = resolver.ResolveAsyncCommitLock(s.bo, lock, status)
 	s.Nil(err)
-	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	status, err = resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("z"), currentTS, currentTS, true, false, nil)
 	s.Nil(err)
@@ -280,7 +280,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	s.Equal(status.CommitTS(), ts)
 
 	// One key is committed (i), one key is locked (a). Should get committed.
-	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	commitTs := ts + 10
 
@@ -357,7 +357,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	s.Equal(gotResolve, int64(1))
 
 	// One key has been rolled back (b), one is locked (a). Should be rolled back.
-	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	commitTs = ts + 10
 
@@ -407,7 +407,7 @@ func (s *testAsyncCommitSuite) TestRepeatableRead() {
 		txn1.Set([]byte("k1"), []byte("v2"))
 
 		for i := 0; i < 20; i++ {
-			_, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			_, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 			s.Nil(err)
 		}
 
@@ -450,31 +450,6 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability() {
 	commitTS1 := t1.CommitTS()
 	commitTS2 := t2.CommitTS()
 	s.Less(commitTS2, commitTS1)
-}
-
-// TestAsyncCommitWithMultiDC tests that async commit can only be enabled in global transactions
-func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
-	// It requires setting placement rules to run with TiKV
-	if *withTiKV {
-		return
-	}
-
-	localTxn := s.beginAsyncCommit()
-	err := localTxn.Set([]byte("a"), []byte("a1"))
-	localTxn.SetScope("bj")
-	s.Nil(err)
-	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
-	err = localTxn.Commit(ctx)
-	s.Nil(err)
-	s.False(localTxn.IsAsyncCommit())
-
-	globalTxn := s.beginAsyncCommit()
-	err = globalTxn.Set([]byte("b"), []byte("b1"))
-	globalTxn.SetScope(oracle.GlobalTxnScope)
-	s.Nil(err)
-	err = globalTxn.Commit(ctx)
-	s.Nil(err)
-	s.True(globalTxn.IsAsyncCommit())
 }
 
 func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
@@ -627,11 +602,11 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 	lock := s.mustGetLock([]byte("a"))
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	for {
-		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 		s.Nil(err)
 		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
 		s.Nil(err)
-		if s.store.GetOracle().IsExpired(lock.TxnID, status.TTL(), &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+		if s.store.GetOracle().IsExpired(lock.TxnID, status.TTL(), &oracle.Option{}) {
 			break
 		}
 		time.Sleep(time.Millisecond * 30)

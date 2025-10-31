@@ -549,7 +549,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		} else if err != nil {
 			return TxnStatus{}, err
 		}
-		ttlExpired := (lr.store == nil) || (lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope}))
+		ttlExpired := (lr.store == nil) || (lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{}))
 		expiredAsyncCommitLocks := status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit && ttlExpired
 		if status.ttl != 0 && !expiredAsyncCommitLocks {
 			return status, nil
@@ -627,7 +627,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		if !forRead {
 			if status.ttl != 0 {
 				metrics.LockResolverCountWithNotExpired.Inc()
-				msBeforeLockExpired := lr.store.GetOracle().UntilExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+				msBeforeLockExpired := lr.store.GetOracle().UntilExpired(l.TxnID, status.ttl, &oracle.Option{})
 				msBeforeTxnExpired.update(msBeforeLockExpired)
 				continue
 			}
@@ -645,7 +645,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			canAccess = append(canAccess, l.TxnID)
 		} else {
 			metrics.LockResolverCountWithNotExpired.Inc()
-			msBeforeLockExpired := lr.store.GetOracle().UntilExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			msBeforeLockExpired := lr.store.GetOracle().UntilExpired(l.TxnID, status.ttl, &oracle.Option{})
 			msBeforeTxnExpired.update(msBeforeLockExpired)
 		}
 	}
@@ -712,7 +712,7 @@ func (t *txnExpireTime) value() int64 {
 func (lr *LockResolver) GetTxnStatus(txnID uint64, callerStartTS uint64, primary []byte) (TxnStatus, error) {
 	var status TxnStatus
 	bo := retry.NewBackoffer(context.Background(), getTxnStatusMaxBackoff)
-	currentTS, err := lr.store.GetOracle().GetLowResolutionTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	currentTS, err := lr.store.GetOracle().GetLowResolutionTimestamp(bo.GetCtx(), &oracle.Option{})
 	if err != nil {
 		return status, err
 	}
@@ -731,7 +731,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 		// Set currentTS to max uint64 to make the lock expired.
 		currentTS = math.MaxUint64
 	} else {
-		currentTS, err = lr.store.GetOracle().GetLowResolutionTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		currentTS, err = lr.store.GetOracle().GetLowResolutionTimestamp(bo.GetCtx(), &oracle.Option{})
 		if err != nil {
 			return TxnStatus{}, err
 		}
@@ -756,7 +756,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 			return TxnStatus{ttl: l.TTL, action: kvrpcpb.Action_NoAction}, nil
 		}
 
-		if lr.store.GetOracle().UntilExpired(l.TxnID, l.TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) <= 0 {
+		if lr.store.GetOracle().UntilExpired(l.TxnID, l.TTL, &oracle.Option{}) <= 0 {
 			logutil.Logger(bo.GetCtx()).Warn("lock txn not found, lock has expired",
 				zap.Uint64("CallerStartTs", callerStartTS),
 				zap.Stringer("lock str", l),
