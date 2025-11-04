@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
@@ -101,9 +102,8 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) ||
-			(config.NextGen && IsTempIndexKey != nil && !IsTempIndexKey(m.GetKey(i))) {
-			// For next-gen builds, we need to perform constraint checks on all non-temporary index keys.
+		} else if m.NeedConstraintCheckInPrewrite(i) || config.NextGen {
+			// For next-gen builds, we need to perform constraint checks on all non-locked keys.
 			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
 			// which can be problematic for CDC and could potentially break correctness.
 			// see https://github.com/tikv/tikv/issues/11187.
@@ -238,12 +238,21 @@ func (action actionPrewrite) handleSingleBatch(
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
 
+	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
+		zap.Uint64("startTS", c.startTS),
+		zap.Uint64("regionID", batch.region.GetID()),
+		zap.Bool("isPrimary", batch.isPrimary),
+		zap.Int("keyCount", batch.mutations.Len()))
+
 	var retryable bool
 	for {
 		// It will return false if the request is success or meet an unretryable error.
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
+			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
+				zap.Uint64("regionID", batch.region.GetID()),
+				zap.Bool("success", err == nil))
 			handler.drop(err)
 			return err
 		}
@@ -620,5 +629,3 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 	}
 	return nil
 }
-
-var IsTempIndexKey func([]byte) bool

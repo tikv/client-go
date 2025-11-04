@@ -64,8 +64,10 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
+	"github.com/tikv/client-go/v2/util/redact"
 	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
 )
@@ -993,6 +995,10 @@ func (s *sendReqState) next() (done bool) {
 	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, s.args.regionID.id, s.vars.rpcCtx.Addr)
 	s.storeAddr = s.vars.rpcCtx.Addr
 
+	// Extract trace ID from context and propagate to TiKV
+	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
+		req.Context.TraceId = traceID
+	}
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1122,9 +1128,73 @@ func (s *sendReqState) send() (canceled bool) {
 	}
 
 	if !injectFailOnSend {
+		// Emit kv.request.send trace event before sending
+		if trace.IsCategoryEnabled(trace.CategoryKVRequest) {
+			var storeID uint64
+			var storeAddr string
+			if rpcCtx.Store != nil {
+				storeID = rpcCtx.Store.StoreID()
+				storeAddr = rpcCtx.Store.GetAddr()
+			}
+			fields := []zap.Field{
+				zap.Stringer("cmd", req.Type),
+				zap.Uint64("region_id", rpcCtx.Region.id),
+				zap.Uint64("region_ver", rpcCtx.Region.ver),
+				zap.Uint64("region_confVer", rpcCtx.Region.confVer),
+				zap.Uint64("store_id", storeID),
+				zap.String("store_addr", storeAddr),
+				zap.Duration("timeout", s.args.timeout),
+			}
+			if rpcCtx.Meta != nil {
+				fields = append(fields,
+					zap.String("region_start_key", redact.Key(rpcCtx.Meta.GetStartKey())),
+					zap.String("region_end_key", redact.Key(rpcCtx.Meta.GetEndKey())),
+				)
+			}
+			trace.TraceEvent(ctx, trace.CategoryKVRequest, "kv.request.send", fields...)
+		}
+
 		start := time.Now()
 		s.vars.resp, s.vars.err = s.client.SendRequest(ctx, sendToAddr, req, s.args.timeout)
 		rpcDuration := time.Since(start)
+
+		// Emit kv.request.result trace event after receiving response
+		if trace.IsCategoryEnabled(trace.CategoryKVRequest) {
+			fields := []zap.Field{
+				zap.Stringer("cmd", req.Type),
+				zap.Duration("latency", rpcDuration),
+				zap.Bool("success", s.vars.err == nil && s.vars.resp != nil),
+			}
+			if s.vars.err != nil {
+				fields = append(fields, zap.Error(s.vars.err))
+			}
+			if s.vars.resp != nil && s.vars.resp.Resp != nil {
+				if regionErr, _ := s.vars.resp.GetRegionError(); regionErr != nil {
+					fields = append(fields, zap.String("region_error", regionErr.String()))
+				}
+			}
+			trace.TraceEvent(ctx, trace.CategoryKVRequest, "kv.request.result", fields...)
+		}
+
+		if trace.IsCategoryEnabled(trace.CategoryKVRequest) && s.vars.resp != nil && s.vars.resp.Resp != nil {
+			if copResp, ok := s.vars.resp.Resp.(*coprocessor.Response); ok && copResp.OtherError != "" {
+				var storeID uint64
+				var storeAddr string
+				if rpcCtx.Store != nil {
+					storeID = rpcCtx.Store.StoreID()
+					storeAddr = rpcCtx.Store.GetAddr()
+				}
+				trace.TraceEvent(ctx, trace.CategoryKVRequest, "cop.other_error",
+					zap.String("other_error", copResp.OtherError),
+					zap.Uint64("region_id", rpcCtx.Region.id),
+					zap.Uint64("region_ver", rpcCtx.Region.ver),
+					zap.Uint64("region_confVer", rpcCtx.Region.confVer),
+					zap.Uint64("store_id", storeID),
+					zap.String("store_addr", storeAddr),
+				)
+			}
+		}
+
 		if s.replicaSelector != nil {
 			recordAttemptedTime(s.replicaSelector, rpcDuration)
 		}
@@ -1246,6 +1316,10 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 	// set access location based on source and target "zone" label.
 	s.setReqAccessLocation(req)
 
+	// Extract trace ID from context and propagate to TiKV
+	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
+		req.Context.TraceId = traceID
+	}
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1956,8 +2030,12 @@ func (s *RegionRequestSender) onRegionError(
 	// This peer is removed from the region. Invalidate the region since it's too stale.
 	// if the region error is from follower, can we mark the peer unavailable and reload region asynchronously?
 	if regionErr.GetRegionNotFound() != nil {
-		s.regionCache.InvalidateCachedRegion(ctx.Region)
-		return false, nil
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onRegionNotFound(bo, ctx, req)
+		} else {
+			s.regionCache.InvalidateCachedRegion(ctx.Region)
+			return false, nil
+		}
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {

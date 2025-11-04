@@ -35,6 +35,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
@@ -485,7 +486,7 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Unlock()
 }
 
-func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
+func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (result ResolveLockResult, err error) {
 	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve
 	util.EvalFailpoint("tryResolveLock")
 	if lr.testingKnobs.meetLock != nil {
@@ -497,6 +498,29 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			TTL: msBeforeTxnExpired.value(),
 		}, nil
 	}
+	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.start",
+		zap.Uint64("callerStartTS", callerStartTS),
+		zap.Int("lockCount", len(locks)),
+		zap.Bool("forRead", forRead),
+		zap.Bool("lite", lite))
+
+	// trace the results
+	defer func() {
+		if trace.IsCategoryEnabled(trace.CategoryTxnLockResolve) {
+			fields := []zap.Field{
+				zap.Uint64("callerStartTS", callerStartTS),
+				zap.Int("lockCount", len(locks)),
+				zap.Int64("ttl", result.TTL),
+				zap.Int("ignoredLocks", len(result.IgnoreLocks)),
+				zap.Int("accessibleLocks", len(result.AccessLocks)),
+			}
+			if err != nil {
+				fields = append(fields, zap.Error(err))
+			}
+			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.finish", fields...)
+		}
+	}()
+
 	metrics.LockResolverCountWithResolve.Inc()
 	// This is the origin resolve lock time.
 	// TODO(you06): record the more details and calculate the total time by calculating the sum of details.

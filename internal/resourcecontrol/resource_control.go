@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -53,15 +54,36 @@ func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessL
 	}
 }
 
-// MakeRequestInfo extracts the relevant information from a BatchRequest.
-func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
-	var bypass bool
+// reqTypeAnalyze is the type of analyze coprocessor request.
+// ref: https://github.com/pingcap/tidb/blob/ee4eac2ccb83e1ea653b8131d9a43495019cb5ac/pkg/kv/kv.go#L340
+const reqTypeAnalyze = 104
+
+func shouldBypass(req *tikvrpc.Request) bool {
 	requestSource := req.Context.GetRequestSource()
-	if len(requestSource) > 0 {
-		if strings.Contains(requestSource, util.InternalRequestPrefix+util.InternalTxnOthers) {
-			bypass = true
+	// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
+	// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
+	// This bypass currently only works with NextGen.
+	if config.NextGen && strings.Contains(requestSource, util.InternalTxnStats) {
+		var tp int64
+		switch req.Type {
+		case tikvrpc.CmdBatchCop:
+			tp = req.BatchCop().GetTp()
+		case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+			tp = req.Cop().GetTp()
+		}
+		if tp == reqTypeAnalyze {
+			return true
 		}
 	}
+	// Some internal requests should be bypassed, which may affect the user experience.
+	// For example, the `alter user password` request completely bypasses resource control.
+	// Although it does not consume many resources, it can still impact the user experience.
+	return strings.Contains(requestSource, util.InternalRequestPrefix+util.InternalTxnOthers)
+}
+
+// MakeRequestInfo extracts the relevant information from a BatchRequest.
+func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
+	bypass := shouldBypass(req)
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
 		return &RequestInfo{
