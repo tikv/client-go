@@ -77,6 +77,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	//nolint:SA1019
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
