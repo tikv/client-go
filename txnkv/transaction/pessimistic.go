@@ -152,7 +152,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
 		op := kvrpcpb.Op_PessimisticLock
 		if action.LockCtx.InShareMode {
-			op = kvrpcpb.Op_Shared
+			op = kvrpcpb.Op_SharedLock
 		}
 		c.txn.GetMemBuffer().RLock()
 		for i := 0; i < committerMutations.Len(); i++ {

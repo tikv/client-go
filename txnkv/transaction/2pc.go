@@ -590,7 +590,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// the KV needn't be committed according to the filter. Otherwise, we
 					// were forgetting removing pessimistic locks added before.
 					if flags.HasLockedInShareMode() {
-						op = kvrpcpb.Op_Shared
+						op = kvrpcpb.Op_SharedLock
 					} else {
 						op = kvrpcpb.Op_Lock
 					}
@@ -620,7 +620,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 						// the logic is same as the pessimistic mode.
 						if flags.HasLocked() {
 							if flags.HasLockedInShareMode() {
-								op = kvrpcpb.Op_Shared
+								op = kvrpcpb.Op_SharedLock
 							} else {
 								op = kvrpcpb.Op_Lock
 							}
@@ -685,7 +685,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			}
 		}
 
-		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_Shared {
+		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_SharedLock {
 			c.primaryKey = key
 		}
 	}

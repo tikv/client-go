@@ -23,8 +23,8 @@ import (
 // ExtractLockFromKeyErr extracts the KeyError.
 func ExtractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*Lock, error) {
 	if locked := keyErr.GetLocked(); locked != nil {
-		if locked.LockType == kvrpcpb.Op_Shared {
-			return nil, errors.New("cannot handle shared lock at this time")
+		if locked.LockType == kvrpcpb.Op_SharedLock {
+			return nil, errors.New("shared lock should not be in key error")
 		}
 		return NewLock(locked), nil
 	}
