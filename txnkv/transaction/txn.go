@@ -578,6 +578,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			var value []byte
 			var op kvrpcpb.Op
 
+			// TODO(slock): pipelined DML do not prewrite shared lock even when flags.HasLockedInShareMode() is true.
 			if !it.HasValue() {
 				if !flags.HasLocked() {
 					continue
@@ -1393,7 +1394,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 		if txn.committer.primaryKey == nil {
 			if lockCtx.InShareMode {
-				return errors.New("pessimistic lock in share mode requires primary key to be set")
+				// TODO(slock): currently a shared locked key can not be selected as primary key, that is, some keys
+				// should be locked in exclusive mode before acquiring shared locks.
+				return errors.New("pessimistic lock in share mode requires primary key to be selected")
 			}
 			assignedPrimaryKey = true
 			txn.selectPrimaryForPessimisticLock(keys)
@@ -1565,11 +1568,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			if !valExists {
 				setValExists = tikv.SetKeyLockedValueNotExists
 			}
-			setInShareMode := tikv.DelKeyLockedInShareMode
+			setLockMode := tikv.SetKeyLockedInExclusiveMode
 			if lockCtx.InShareMode {
-				setInShareMode = tikv.SetKeyLockedInShareMode
+				setLockMode = tikv.SetKeyLockedInShareMode
 			}
-			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setInShareMode)
+			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setLockMode)
 		}
 	}
 	if err != nil {

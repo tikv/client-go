@@ -137,6 +137,7 @@ type twoPhaseCommitter struct {
 	detail              unsafe.Pointer
 	txnSize             int
 	hasNoNeedCommitKeys bool
+	hasSharedLocks      bool
 	resourceGroupName   string
 
 	primaryKey  []byte
@@ -548,8 +549,18 @@ func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, asse
 	return assertionFailed
 }
 
+// getLockTypeFromFlags gets the lock type from the key flags. It should be called only when flags.HasLocked() is true.
+func (c *twoPhaseCommitter) getLockTypeFromFlags(flags kv.KeyFlags) kvrpcpb.Op {
+	// TODO(slock): currently we do not allow acquiring shared locks in optimistic transactions.
+	if c.isPessimistic && flags.HasLockedInShareMode() {
+		return kvrpcpb.Op_SharedLock
+	} else {
+		return kvrpcpb.Op_Lock
+	}
+}
+
 func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
-	var size, putCnt, delCnt, lockCnt, checkCnt int
+	var size, putCnt, delCnt, lockCnt, sharedLockCnt, checkCnt int
 
 	txn := c.txn
 	memBuf := txn.GetMemBuffer().GetMemDB()
@@ -570,7 +581,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			if !flags.HasLocked() {
 				continue
 			}
-			op = kvrpcpb.Op_Lock
+			op = c.getLockTypeFromFlags(flags)
 			lockCnt++
 		} else {
 			value = it.Value()
@@ -589,11 +600,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// If the key was locked before, we should prewrite the lock even if
 					// the KV needn't be committed according to the filter. Otherwise, we
 					// were forgetting removing pessimistic locks added before.
-					if flags.HasLockedInShareMode() {
-						op = kvrpcpb.Op_SharedLock
-					} else {
-						op = kvrpcpb.Op_Lock
-					}
+					op = c.getLockTypeFromFlags(flags)
 					lockCnt++
 				} else {
 					op = kvrpcpb.Op_Put
@@ -614,20 +621,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
 				} else {
 					if flags.HasNewlyInserted() {
+						if !flags.HasLocked() {
+							continue
+						}
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
 						// other deletes for example the secondary index delete.
 						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
 						// the logic is same as the pessimistic mode.
-						if flags.HasLocked() {
-							if flags.HasLockedInShareMode() {
-								op = kvrpcpb.Op_SharedLock
-							} else {
-								op = kvrpcpb.Op_Lock
-							}
-							lockCnt++
-						} else {
-							continue
-						}
+						op = c.getLockTypeFromFlags(flags)
+						lockCnt++
 					} else {
 						op = kvrpcpb.Op_Del
 						delCnt++
@@ -643,6 +645,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
 		if c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
+		}
+		if op == kvrpcpb.Op_SharedLock {
+			sharedLockCnt++
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		size += len(key) + len(value)
@@ -706,6 +711,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			zap.Int("puts", putCnt),
 			zap.Int("dels", delCnt),
 			zap.Int("locks", lockCnt),
+			zap.Int("sharedLocks", sharedLockCnt),
 			zap.Int("checks", checkCnt),
 			zap.Uint64("txnStartTS", txn.startTS))
 	}
@@ -733,6 +739,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
 		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
 	}
+	c.hasSharedLocks = sharedLockCnt > 0
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
@@ -1716,7 +1723,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
-	if !c.txn.isPipelined {
+	if !c.txn.isPipelined && !c.hasSharedLocks {
 		// Check async commit is available or not.
 		if c.checkAsyncCommit() {
 			commitTSMayBeCalculated = true

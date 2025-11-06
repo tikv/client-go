@@ -78,7 +78,10 @@ const (
 	// ends when the lock is acquired.
 	flagPreviousPresumeKNE
 
-	// flagKeyLockedInShareMode indicates the key is locked in share mode.
+	// flagKeyLockedInShareMode indicates the key is locked in share mode. The semantic of flagKeyLockedInShareMode is
+	// to indicate the lock mode. If this flag is set, then flagKeyLocked must also be set, indicating that the key has
+	// been locked in share mode. If only flagKeyLocked is set (and flagKeyLockedInShareMode is not), then it indicates
+	// that the key has been locked in exclusive mode.
 	flagKeyLockedInShareMode
 
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
@@ -216,7 +219,7 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin |= flagPreviousPresumeKNE
 		case SetKeyLockedInShareMode:
 			origin |= flagKeyLockedInShareMode
-		case DelKeyLockedInShareMode:
+		case SetKeyLockedInExclusiveMode:
 			origin &= ^flagKeyLockedInShareMode
 		}
 	}
@@ -271,6 +274,6 @@ const (
 	SetPreviousPresumeKNE
 	// SetKeyLockedInShareMode marks the associated key is locked in share mode.
 	SetKeyLockedInShareMode
-	// DelKeyLockedInShareMode reverts SetKeyLockedInShareMode.
-	DelKeyLockedInShareMode
+	// SetKeyLockedInExclusiveMode reverts SetKeyLockedInShareMode.
+	SetKeyLockedInExclusiveMode
 )
