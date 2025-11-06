@@ -39,22 +39,30 @@ type TraceEventFunc func(ctx context.Context, category Category, name string, fi
 // IsCategoryEnabledFunc is the function signature for checking if a category is enabled.
 type IsCategoryEnabledFunc func(category Category) bool
 
+// ImmediateLoggingExtractorFunc is the function signature for extracting the immediate logging flag from context.
+// This is typically provided by TiDB to determine if a trace should be logged immediately.
+type ImmediateLoggingExtractorFunc func(ctx context.Context) bool
+
 // Default no-op implementations
 func noopTraceEvent(context.Context, Category, string, ...zap.Field) {}
 func noopIsCategoryEnabled(Category) bool                            { return false }
+func noopImmediateLoggingExtractor(context.Context) bool             { return false }
 
 // Global function pointers stored independently
 var (
-	globalTraceEventFunc        atomic.Pointer[TraceEventFunc]
-	globalIsCategoryEnabledFunc atomic.Pointer[IsCategoryEnabledFunc]
+	globalTraceEventFunc               atomic.Pointer[TraceEventFunc]
+	globalIsCategoryEnabledFunc        atomic.Pointer[IsCategoryEnabledFunc]
+	globalImmediateLoggingExtractorFunc atomic.Pointer[ImmediateLoggingExtractorFunc]
 )
 
 func init() {
 	// Set default no-op implementations
 	defaultTraceEvent := TraceEventFunc(noopTraceEvent)
 	defaultIsCategoryEnabled := IsCategoryEnabledFunc(noopIsCategoryEnabled)
+	defaultImmediateLoggingExtractor := ImmediateLoggingExtractorFunc(noopImmediateLoggingExtractor)
 	globalTraceEventFunc.Store(&defaultTraceEvent)
 	globalIsCategoryEnabledFunc.Store(&defaultIsCategoryEnabled)
+	globalImmediateLoggingExtractorFunc.Store(&defaultImmediateLoggingExtractor)
 }
 
 // SetTraceEventFunc registers the trace event handler function.
@@ -87,6 +95,22 @@ func TraceEvent(ctx context.Context, category Category, name string, fields ...z
 func IsCategoryEnabled(category Category) bool {
 	fn := globalIsCategoryEnabledFunc.Load()
 	return (*fn)(category)
+}
+
+// SetImmediateLoggingExtractor registers the immediate logging extractor function.
+// This is typically called once during application initialization (e.g., by TiDB).
+// Passing nil will use a no-op implementation that returns false.
+func SetImmediateLoggingExtractor(fn ImmediateLoggingExtractorFunc) {
+	if fn == nil {
+		fn = noopImmediateLoggingExtractor
+	}
+	globalImmediateLoggingExtractorFunc.Store(&fn)
+}
+
+// ImmediateLoggingEnabled checks if immediate logging is enabled for the given context.
+func ImmediateLoggingEnabled(ctx context.Context) bool {
+	fn := globalImmediateLoggingExtractorFunc.Load()
+	return (*fn)(ctx)
 }
 
 // Trace ID context management
