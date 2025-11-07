@@ -1289,11 +1289,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 	}()
-	defer func() {
-		if fn != nil {
-			fn()
-		}
-	}()
+	if fn != nil {
+		defer fn()
+	}
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
@@ -1569,7 +1567,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				setValExists = tikv.SetKeyLockedValueNotExists
 			}
 			setLockMode := tikv.SetKeyLockedInExclusiveMode
-			if lockCtx.InShareMode {
+			if lockCtx.InShareMode && txn.IsPessimistic() {
 				setLockMode = tikv.SetKeyLockedInShareMode
 			}
 			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setLockMode)
