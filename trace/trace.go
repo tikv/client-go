@@ -39,30 +39,35 @@ type TraceEventFunc func(ctx context.Context, category Category, name string, fi
 // IsCategoryEnabledFunc is the function signature for checking if a category is enabled.
 type IsCategoryEnabledFunc func(category Category) bool
 
-// ImmediateLoggingExtractorFunc is the function signature for extracting the immediate logging flag from context.
-// This is typically provided by TiDB to determine if a trace should be logged immediately.
-type ImmediateLoggingExtractorFunc func(ctx context.Context) bool
+// TraceControlExtractorFunc is the function signature for extracting trace control flags from context.
+// This is typically provided by TiDB to determine trace logging behavior.
+type TraceControlExtractorFunc func(ctx context.Context) TraceControlFlags
 
 // Default no-op implementations
 func noopTraceEvent(context.Context, Category, string, ...zap.Field) {}
-func noopIsCategoryEnabled(Category) bool                            { return false }
-func noopImmediateLoggingExtractor(context.Context) bool             { return false }
+func noopIsCategoryEnabled(Category) bool { return false }
+
+// noopTraceControlExtractor returns the default trace control flags.
+// By default, we enable FlagTiKVCategoryRequest to allow TiKV request tracing.
+func noopTraceControlExtractor(context.Context) TraceControlFlags {
+	return FlagTiKVCategoryRequest
+}
 
 // Global function pointers stored independently
 var (
-	globalTraceEventFunc               atomic.Pointer[TraceEventFunc]
-	globalIsCategoryEnabledFunc        atomic.Pointer[IsCategoryEnabledFunc]
-	globalImmediateLoggingExtractorFunc atomic.Pointer[ImmediateLoggingExtractorFunc]
+	globalTraceEventFunc            atomic.Pointer[TraceEventFunc]
+	globalIsCategoryEnabledFunc     atomic.Pointer[IsCategoryEnabledFunc]
+	globalTraceControlExtractorFunc atomic.Pointer[TraceControlExtractorFunc]
 )
 
 func init() {
 	// Set default no-op implementations
 	defaultTraceEvent := TraceEventFunc(noopTraceEvent)
 	defaultIsCategoryEnabled := IsCategoryEnabledFunc(noopIsCategoryEnabled)
-	defaultImmediateLoggingExtractor := ImmediateLoggingExtractorFunc(noopImmediateLoggingExtractor)
+	defaultTraceControlExtractor := TraceControlExtractorFunc(noopTraceControlExtractor)
 	globalTraceEventFunc.Store(&defaultTraceEvent)
 	globalIsCategoryEnabledFunc.Store(&defaultIsCategoryEnabled)
-	globalImmediateLoggingExtractorFunc.Store(&defaultImmediateLoggingExtractor)
+	globalTraceControlExtractorFunc.Store(&defaultTraceControlExtractor)
 }
 
 // SetTraceEventFunc registers the trace event handler function.
@@ -97,20 +102,26 @@ func IsCategoryEnabled(category Category) bool {
 	return (*fn)(category)
 }
 
-// SetImmediateLoggingExtractor registers the immediate logging extractor function.
+// SetTraceControlExtractor registers the trace control extractor function.
 // This is typically called once during application initialization (e.g., by TiDB).
-// Passing nil will use a no-op implementation that returns false.
-func SetImmediateLoggingExtractor(fn ImmediateLoggingExtractorFunc) {
+// Passing nil will use a no-op implementation that returns 0 (no flags set).
+func SetTraceControlExtractor(fn TraceControlExtractorFunc) {
 	if fn == nil {
-		fn = noopImmediateLoggingExtractor
+		fn = noopTraceControlExtractor
 	}
-	globalImmediateLoggingExtractorFunc.Store(&fn)
+	globalTraceControlExtractorFunc.Store(&fn)
+}
+
+// GetTraceControlFlags extracts trace control flags from the given context.
+func GetTraceControlFlags(ctx context.Context) TraceControlFlags {
+	fn := globalTraceControlExtractorFunc.Load()
+	return (*fn)(ctx)
 }
 
 // ImmediateLoggingEnabled checks if immediate logging is enabled for the given context.
+// This is a convenience helper that checks the FlagImmediateLog bit.
 func ImmediateLoggingEnabled(ctx context.Context) bool {
-	fn := globalImmediateLoggingExtractorFunc.Load()
-	return (*fn)(ctx)
+	return GetTraceControlFlags(ctx).Has(FlagImmediateLog)
 }
 
 // Trace ID context management

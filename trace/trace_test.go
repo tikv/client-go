@@ -22,44 +22,60 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestImmediateLoggingExtractor(t *testing.T) {
+func TestTraceControlExtractor(t *testing.T) {
 	// Save original extractor
-	originalExtractor := globalImmediateLoggingExtractorFunc.Load()
+	originalExtractor := globalTraceControlExtractorFunc.Load()
 	defer func() {
-		globalImmediateLoggingExtractorFunc.Store(originalExtractor)
+		globalTraceControlExtractorFunc.Store(originalExtractor)
 	}()
 
-	// Test default behavior (returns false)
+	// Test default behavior (returns FlagTiKVCategoryRequest)
 	ctx := context.Background()
+	defaultFlags := GetTraceControlFlags(ctx)
+	require.Equal(t, FlagTiKVCategoryRequest, defaultFlags)
+	require.True(t, defaultFlags.Has(FlagTiKVCategoryRequest))
+	require.False(t, defaultFlags.Has(FlagImmediateLog))
 	require.False(t, ImmediateLoggingEnabled(ctx))
 
-	// Test custom extractor that returns true
-	SetImmediateLoggingExtractor(func(ctx context.Context) bool {
-		return true
+	// Test custom extractor that returns specific flags
+	SetTraceControlExtractor(func(ctx context.Context) TraceControlFlags {
+		return FlagImmediateLog | FlagTiKVCategoryRequest
 	})
+	flags := GetTraceControlFlags(ctx)
+	require.True(t, flags.Has(FlagImmediateLog))
+	require.True(t, flags.Has(FlagTiKVCategoryRequest))
+	require.False(t, flags.Has(FlagTiKVCategoryWriteDetails))
 	require.True(t, ImmediateLoggingEnabled(ctx))
 
 	// Test custom extractor that checks context value
-	type immediateLogKey struct{}
-	SetImmediateLoggingExtractor(func(ctx context.Context) bool {
-		val, ok := ctx.Value(immediateLogKey{}).(bool)
-		return ok && val
+	type flagsKey struct{}
+	SetTraceControlExtractor(func(ctx context.Context) TraceControlFlags {
+		if val, ok := ctx.Value(flagsKey{}).(TraceControlFlags); ok {
+			return val
+		}
+		return 0
 	})
 
-	// Context without the key should return false
+	// Context without the key should return 0
+	require.Equal(t, TraceControlFlags(0), GetTraceControlFlags(ctx))
 	require.False(t, ImmediateLoggingEnabled(ctx))
 
-	// Context with the key set to true should return true
-	ctxWithFlag := context.WithValue(ctx, immediateLogKey{}, true)
-	require.True(t, ImmediateLoggingEnabled(ctxWithFlag))
+	// Context with specific flags
+	ctxWithFlags := context.WithValue(ctx, flagsKey{}, FlagTiKVCategoryWriteDetails|FlagTiKVCategoryReadDetails)
+	flags = GetTraceControlFlags(ctxWithFlags)
+	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
+	require.True(t, flags.Has(FlagTiKVCategoryReadDetails))
+	require.False(t, flags.Has(FlagImmediateLog))
+	require.False(t, ImmediateLoggingEnabled(ctxWithFlags))
 
-	// Context with the key set to false should return false
-	ctxWithFalseflag := context.WithValue(ctx, immediateLogKey{}, false)
-	require.False(t, ImmediateLoggingEnabled(ctxWithFalseflag))
+	// Context with immediate log flag
+	ctxWithImmediate := context.WithValue(ctx, flagsKey{}, FlagImmediateLog)
+	require.True(t, ImmediateLoggingEnabled(ctxWithImmediate))
 
-	// Test setting nil extractor (should use no-op that returns false)
-	SetImmediateLoggingExtractor(nil)
-	require.False(t, ImmediateLoggingEnabled(ctxWithFlag))
+	// Test setting nil extractor (should use no-op that returns FlagTiKVCategoryRequest)
+	SetTraceControlExtractor(nil)
+	require.Equal(t, FlagTiKVCategoryRequest, GetTraceControlFlags(ctxWithFlags))
+	require.False(t, ImmediateLoggingEnabled(ctxWithFlags))
 }
 
 func TestTraceEventFunc(t *testing.T) {
