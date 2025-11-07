@@ -798,6 +798,11 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	// 2.3 No lock -- pessimistic lock rollback, concurrence prewrite.
 
 	var status TxnStatus
+
+	if lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_SharedLock {
+		return status, errors.New("shared lock should not be submitted to the lock resolver for processing")
+	}
+
 	resolvingPessimisticLock := lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_PessimisticLock
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
