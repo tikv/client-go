@@ -45,7 +45,7 @@ type TraceControlExtractorFunc func(ctx context.Context) TraceControlFlags
 
 // Default no-op implementations
 func noopTraceEvent(context.Context, Category, string, ...zap.Field) {}
-func noopIsCategoryEnabled(Category) bool { return false }
+func noopIsCategoryEnabled(Category) bool                            { return false }
 
 // noopTraceControlExtractor returns the default trace control flags.
 // By default, we enable FlagTiKVCategoryRequest to allow TiKV request tracing.

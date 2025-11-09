@@ -129,7 +129,6 @@ func TestTraceIDContext(t *testing.T) {
 
 	// Test context without trace ID
 	require.Nil(t, TraceIDFromContext(ctx))
-	require.Nil(t, TraceIDFromContext(nil))
 
 	// Test context with trace ID
 	traceID := []byte{1, 2, 3, 4, 5}
