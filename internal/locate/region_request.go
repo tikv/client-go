@@ -1762,7 +1762,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		metrics.TiKVRPCErrorCounter.WithLabelValues("unknown", storeLabel).Inc()
 	}
 
-	// don't need to retry for ResourceGroup error
+	// don't need to retry for ResourceGroup error when specific errors are returned from server.
+	// when other error is returned from server (not leader etc.), back off and retry.
 	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
 		return err
 	}
@@ -1771,6 +1772,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	}
 	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
 	if errors.As(err, &errGetResourceGroup) {
+		if strings.Contains(errGetResourceGroup.Cause, "does not exist") {
+			return err
+		}
+		// back off and retry
+		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("send pd request error:%v, ctx: %v, try next peer later", err, ctx))
 		return err
 	}
 
