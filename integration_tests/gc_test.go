@@ -39,6 +39,18 @@ func (c *hookedGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID st
 	return c.inner.DeleteGCBarrier(ctx, barrierID)
 }
 
+func (c *hookedGCStatesClient) SetGlobalGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GlobalGCBarrierInfo, error) {
+	return c.inner.SetGlobalGCBarrier(ctx, barrierID, barrierTS, ttl)
+}
+
+func (c *hookedGCStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrierID string) (*pdgc.GlobalGCBarrierInfo, error) {
+	return c.inner.DeleteGlobalGCBarrier(ctx, barrierID)
+}
+
+func (c *hookedGCStatesClient) GetAllKeyspacesGCStates(ctx context.Context) (pdgc.ClusterGCStates, error) {
+	return c.inner.GetAllKeyspacesGCStates(ctx)
+}
+
 func (c *hookedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
 	if c.getGCStatesHook != nil {
 		return c.getGCStatesHook(c.inner, ctx)
