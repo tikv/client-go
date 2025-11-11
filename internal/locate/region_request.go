@@ -632,6 +632,8 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 // If switch to new leader successfully, returns the AccessIndex of the new leader in the replicas.
 func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 	if leader == nil {
+		logutil.BgLogger().Warn("cannot update leader because leader peer is nil",
+			zap.Uint64("regionID", s.region.GetID()))
 		return -1
 	}
 	for i, replica := range s.replicas {
@@ -641,6 +643,9 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 			// a request. So, before the new leader is elected, we should not send requests
 			// to the unreachable old leader to avoid unnecessary timeout.
 			if replica.store.getLivenessState() != reachable {
+				logutil.BgLogger().Warn("leader store is not reachable, skip updating leader",
+					zap.Uint64("regionID", s.region.GetID()),
+					zap.Uint64("leaderStoreID", leader.GetStoreId()))
 				return -1
 			}
 			replica.onUpdateLeader()
@@ -657,6 +662,9 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 		}
 	}
 	// Invalidate the region since the new leader is not in the cached version.
+	logutil.BgLogger().Warn("invalidate region because leader is not in cached version",
+		zap.Uint64("regionID", s.region.GetID()),
+		zap.Uint64("leaderStoreID", leader.GetStoreId()))
 	s.region.invalidate(StoreNotFound)
 	return -1
 }
@@ -1480,6 +1488,9 @@ func (s *RegionRequestSender) onRegionError(
 			// the Raft group is in an election, but it's possible that the peer is
 			// isolated and removed from the Raft group. So it's necessary to reload
 			// the region from PD.
+			logutil.Logger(bo.GetCtx()).Warn("NotLeader error with no leader, invalidating region",
+				zap.Uint64("regionID", ctx.Region.GetID()),
+				zap.String("store", ctx.Store.addr))
 			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
 			if err = bo.Backoff(
 				retry.BoRegionScheduling,

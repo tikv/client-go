@@ -2947,6 +2947,8 @@ func (r *Region) getPeerStoreIndex(peer *metapb.Peer) (idx int, found bool) {
 func (r *Region) switchWorkLeaderToPeer(peer *metapb.Peer) (found bool) {
 	globalStoreIdx, found := r.getPeerStoreIndex(peer)
 	if !found {
+		logutil.BgLogger().Warn("peer not found in region when switching work leader",
+			zap.Uint64("storeID", peer.GetStoreId()))
 		return
 	}
 retry:

@@ -23,10 +23,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 )
 
 type replicaSelector struct {
@@ -487,6 +489,9 @@ func (s *replicaSelector) onNotLeader(
 	leader := notLeader.GetLeader()
 	if leader == nil {
 		// The region may be during transferring leader.
+		logutil.BgLogger().Warn("NotLeader error with no leader, region may be transferring leader",
+			zap.Uint64("regionID", s.region.GetID()),
+			zap.String("store", ctx.Store.addr))
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
 		return err == nil, err
 	}
