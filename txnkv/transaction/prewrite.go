@@ -102,11 +102,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) || config.NextGen {
-			// For next-gen builds, we need to perform constraint checks on all non-locked keys.
-			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
-			// which can be problematic for CDC and could potentially break correctness.
-			// see https://github.com/tikv/tikv/issues/11187.
+		} else if m.NeedConstraintCheckInPrewrite(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
