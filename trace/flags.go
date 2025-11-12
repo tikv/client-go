@@ -41,22 +41,8 @@ func (f TraceControlFlags) Has(flag TraceControlFlags) bool {
 	return f&flag != 0
 }
 
-// Set returns a new flags value with the given flag set.
-func (f TraceControlFlags) Set(flag TraceControlFlags) TraceControlFlags {
+// With returns a new flags value with the given flag set.
+// This method does not modify the original value.
+func (f TraceControlFlags) With(flag TraceControlFlags) TraceControlFlags {
 	return f | flag
-}
-
-// Clear returns a new flags value with the given flag cleared.
-func (f TraceControlFlags) Clear(flag TraceControlFlags) TraceControlFlags {
-	return f &^ flag
-}
-
-// Toggle returns a new flags value with the given flag toggled.
-func (f TraceControlFlags) Toggle(flag TraceControlFlags) TraceControlFlags {
-	return f ^ flag
-}
-
-// IsZero returns true if no flags are set.
-func (f TraceControlFlags) IsZero() bool {
-	return f == 0
 }

@@ -33,89 +33,36 @@ func TestTraceControlFlags_Has(t *testing.T) {
 	require.False(t, emptyFlags.Has(FlagImmediateLog))
 }
 
-func TestTraceControlFlags_Set(t *testing.T) {
+func TestTraceControlFlags_With(t *testing.T) {
 	var flags TraceControlFlags
 
 	// Set individual flags
-	flags = flags.Set(FlagImmediateLog)
+	flags = flags.With(FlagImmediateLog)
 	require.True(t, flags.Has(FlagImmediateLog))
 	require.False(t, flags.Has(FlagTiKVCategoryRequest))
 
-	flags = flags.Set(FlagTiKVCategoryRequest)
+	flags = flags.With(FlagTiKVCategoryRequest)
 	require.True(t, flags.Has(FlagImmediateLog))
 	require.True(t, flags.Has(FlagTiKVCategoryRequest))
 
 	// Setting an already-set flag is idempotent
-	flags = flags.Set(FlagImmediateLog)
+	flags = flags.With(FlagImmediateLog)
 	require.True(t, flags.Has(FlagImmediateLog))
-}
-
-func TestTraceControlFlags_Clear(t *testing.T) {
-	flags := FlagImmediateLog | FlagTiKVCategoryRequest | FlagTiKVCategoryWriteDetails
-
-	// Clear individual flags
-	flags = flags.Clear(FlagTiKVCategoryRequest)
-	require.True(t, flags.Has(FlagImmediateLog))
-	require.False(t, flags.Has(FlagTiKVCategoryRequest))
-	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
-
-	flags = flags.Clear(FlagImmediateLog)
-	require.False(t, flags.Has(FlagImmediateLog))
-	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
-
-	// Clearing an already-cleared flag is a no-op
-	flags = flags.Clear(FlagImmediateLog)
-	require.False(t, flags.Has(FlagImmediateLog))
-}
-
-func TestTraceControlFlags_Toggle(t *testing.T) {
-	var flags TraceControlFlags
-
-	// Toggle on
-	flags = flags.Toggle(FlagImmediateLog)
-	require.True(t, flags.Has(FlagImmediateLog))
-
-	// Toggle off
-	flags = flags.Toggle(FlagImmediateLog)
-	require.False(t, flags.Has(FlagImmediateLog))
-
-	// Toggle multiple flags
-	flags = flags.Toggle(FlagTiKVCategoryRequest | FlagTiKVCategoryWriteDetails)
-	require.True(t, flags.Has(FlagTiKVCategoryRequest))
-	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
-}
-
-func TestTraceControlFlags_IsZero(t *testing.T) {
-	var flags TraceControlFlags
-	require.True(t, flags.IsZero())
-
-	flags = flags.Set(FlagImmediateLog)
-	require.False(t, flags.IsZero())
-
-	flags = flags.Clear(FlagImmediateLog)
-	require.True(t, flags.IsZero())
 }
 
 func TestTraceControlFlags_CombinedOperations(t *testing.T) {
-	// Build up flags step by step
+	// Build up flags step by step (fluent style)
 	flags := TraceControlFlags(0).
-		Set(FlagImmediateLog).
-		Set(FlagTiKVCategoryRequest).
-		Set(FlagTiKVCategoryWriteDetails).
-		Set(FlagTiKVCategoryReadDetails)
+		With(FlagImmediateLog).
+		With(FlagTiKVCategoryRequest).
+		With(FlagTiKVCategoryWriteDetails).
+		With(FlagTiKVCategoryReadDetails)
 
 	// All four flags should be set
 	require.True(t, flags.Has(FlagImmediateLog))
 	require.True(t, flags.Has(FlagTiKVCategoryRequest))
 	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
 	require.True(t, flags.Has(FlagTiKVCategoryReadDetails))
-
-	// Clear some flags
-	flags = flags.Clear(FlagTiKVCategoryRequest | FlagTiKVCategoryReadDetails)
-	require.True(t, flags.Has(FlagImmediateLog))
-	require.False(t, flags.Has(FlagTiKVCategoryRequest))
-	require.True(t, flags.Has(FlagTiKVCategoryWriteDetails))
-	require.False(t, flags.Has(FlagTiKVCategoryReadDetails))
 }
 
 func TestTraceControlFlags_BitValues(t *testing.T) {
