@@ -1531,6 +1531,8 @@ func formatRegionSliceField(name string, regions []*Region) zap.Field {
 						return nil
 					}
 					enc.AddUint64("regionID", r.GetID())
+					enc.AddUint64("confVer", r.meta.GetRegionEpoch().GetConfVer())
+					enc.AddUint64("version", r.meta.GetRegionEpoch().GetVersion())
 					if needRedact {
 						enc.AddString("startKey", "?")
 						enc.AddString("endKey", "?")
@@ -1564,6 +1566,8 @@ func formatKeyLocationsField(name string, locations []*KeyLocation) zap.Field {
 						return nil
 					}
 					enc.AddUint64("regionID", loc.Region.GetID())
+					enc.AddUint64("confVer", loc.Region.GetConfVer())
+					enc.AddUint64("version", loc.Region.GetVer())
 					if needRedact {
 						enc.AddString("startKey", "?")
 						enc.AddString("endKey", "?")
