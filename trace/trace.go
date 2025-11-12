@@ -31,6 +31,8 @@ const (
 	CategoryTxnLockResolve
 	// CategoryKVRequest traces individual KV request send and result events.
 	CategoryKVRequest
+	// CategoryRegionCache traces region cache operations and PD lookups.
+	CategoryRegionCache
 )
 
 // TraceEventFunc is the function signature for recording trace events.
