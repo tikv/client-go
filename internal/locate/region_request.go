@@ -999,6 +999,8 @@ func (s *sendReqState) next() (done bool) {
 	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
 		req.Context.TraceId = traceID
 	}
+	// Set trace control flags based on the extractor function
+	req.Context.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1320,6 +1322,8 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
 		req.Context.TraceId = traceID
 	}
+	// Set trace control flags based on the extractor function
+	req.Context.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
