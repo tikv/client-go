@@ -3343,10 +3343,3 @@ type regionCacheClientEventListener struct {
 func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	l.c.onHealthFeedback(feedback)
 }
-
-func removeSliceValue[T comparable](s []T, val T) []T {
-	if i := slices.Index(s, val); i != -1 {
-		s = slices.Delete(s, i, i+1)
-	}
-	return s
-}
