@@ -19,6 +19,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 type Snapshot struct {
@@ -107,20 +108,20 @@ func (i *SnapIter) setValue() bool {
 	return false
 }
 
-func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (snap *Snapshot) Get(_ context.Context, key []byte, _ ...kv.GetOption) (entry kv.ValueEntry, _ error) {
 	addr, lf := snap.tree.traverse(key, false)
 	if addr.IsNull() {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	if lf.vLogAddr.IsNull() {
 		// A flags only key, act as value not exists
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
 	if !ok {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
-	return v, nil
+	return kv.NewValueEntry(v, 0), nil
 }
 
 func (snap *Snapshot) Close() {}
