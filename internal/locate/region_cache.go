@@ -1638,7 +1638,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	if r == nil || expired {
 		// load region when it is not exists or expired.
 		observeLoadRegion(tag, r, expired, 0)
-		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle())
+		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -2447,6 +2447,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 		start := time.Now()
 		pdOpts := []opt.GetRegionOption{
 			opt.WithAllowFollowerHandle(),
+			opt.WithAllowRouterServiceHandle(),
 			opt.WithOutputMustContainAllKeyRange(),
 		}
 		if batchOpt.needBuckets {
