@@ -122,7 +122,6 @@ type PipelinedTxnOptions struct {
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope     string
 	StartTS      *uint64
 	PipelinedTxn PipelinedTxnOptions
 }
@@ -183,7 +182,6 @@ type KVTxn struct {
 	enableAsyncCommit       bool
 	enable1PC               bool
 	causalConsistency       bool
-	scope                   string
 	kvFilter                KVFilter
 	resourceGroupTag        []byte
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
@@ -223,7 +221,6 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		startTime:              time.Now(),
 		valid:                  true,
 		vars:                   tikv.DefaultVars,
-		scope:                  options.TxnScope,
 		enableAsyncCommit:      cfg.EnableAsyncCommit,
 		enable1PC:              cfg.Enable1PC,
 		diskFullOpt:            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
@@ -464,11 +461,6 @@ func (txn *KVTxn) SetEnable1PC(b bool) {
 // linearizability is guaranteed.
 func (txn *KVTxn) SetCausalConsistency(b bool) {
 	txn.causalConsistency = b
-}
-
-// SetScope sets the geographical scope of the transaction.
-func (txn *KVTxn) SetScope(scope string) {
-	txn.scope = scope
 }
 
 // SetKVFilter sets the filter to ignore key-values in memory buffer.
@@ -737,11 +729,6 @@ func (txn *KVTxn) IsCasualConsistency() bool {
 	return txn.causalConsistency
 }
 
-// GetScope returns the geographical scope of the transaction.
-func (txn *KVTxn) GetScope() string {
-	return txn.scope
-}
-
 // Commit commits the transaction operations to KV store.
 func (txn *KVTxn) Commit(ctx context.Context) error {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
@@ -1007,7 +994,6 @@ func (txn *KVTxn) isInternal() bool {
 
 // TxnInfo is used to keep track the info of a committed transaction (mainly for diagnosis and testing)
 type TxnInfo struct {
-	TxnScope            string `json:"txn_scope"`
 	StartTS             uint64 `json:"start_ts"`
 	CommitTS            uint64 `json:"commit_ts"`
 	TxnCommitMode       string `json:"txn_commit_mode"`
@@ -1031,7 +1017,6 @@ func (txn *KVTxn) onCommitted(err error) {
 		}
 
 		info := TxnInfo{
-			TxnScope:            txn.GetScope(),
 			StartTS:             txn.startTS,
 			CommitTS:            txn.commitTS,
 			TxnCommitMode:       commitMode,
@@ -1055,7 +1040,7 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 	forUpdateTs := txn.startTS
 	if txn.IsPessimistic() {
 		bo := retry.NewBackofferWithVars(context.Background(), TsoMaxBackoff, nil)
-		forUpdateTs, err = txn.store.GetTimestampWithRetry(bo, txn.scope)
+		forUpdateTs, err = txn.store.GetTimestampWithRetry(bo)
 		if err != nil {
 			return err
 		}
