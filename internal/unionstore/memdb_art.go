@@ -102,8 +102,12 @@ func (db *artDBWithContext) Release(handle int) {
 	db.ART.Release(handle)
 }
 
-func (db *artDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.ART.Get(k)
+func (db *artDBWithContext) Get(_ context.Context, k []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
+	val, err := db.ART.Get(k)
+	if err != nil {
+		return kv.ValueEntry{}, err
+	}
+	return kv.NewValueEntry(val, 0), nil
 }
 
 func (db *artDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
@@ -120,11 +124,11 @@ func (db *artDBWithContext) GetMemDB() *MemDB {
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.
-func (db *artDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func (db *artDBWithContext) BatchGet(ctx context.Context, keys [][]byte, _ ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
 	if db.Len() == 0 {
-		return map[string][]byte{}, nil
+		return map[string]kv.ValueEntry{}, nil
 	}
-	m := make(map[string][]byte, len(keys))
+	m := make(map[string]kv.ValueEntry, len(keys))
 	for _, k := range keys {
 		v, err := db.Get(ctx, k)
 		if err != nil {
@@ -151,6 +155,14 @@ func (db *artDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.ART.IterReverse(upper, lower)
 }
 
+<<<<<<< HEAD
+=======
+// SnapshotGetter implements the Getter interface, by wrapping GetSnapshot.
+func (db *artDBWithContext) SnapshotGetter() kv.Getter {
+	return db.ART.GetSnapshot()
+}
+
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
 	return db.ART.SnapshotIter(lower, upper)

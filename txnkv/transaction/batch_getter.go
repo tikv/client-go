@@ -37,41 +37,35 @@ package transaction
 import (
 	"context"
 
-	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
 type BatchBufferGetter interface {
 	Len() int
-	unionstore.Getter
-	BatchGetter
-}
-
-// BatchGetter is the interface for BatchGet.
-type BatchGetter interface {
-	// BatchGet gets a batch of values.
-	BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error)
+	kv.Getter
+	kv.BatchGetter
 }
 
 // BufferBatchGetter is the type for BatchGet with MemBuffer.
 type BufferBatchGetter struct {
 	buffer   BatchBufferGetter
-	snapshot BatchGetter
+	snapshot kv.BatchGetter
 }
 
 // NewBufferBatchGetter creates a new BufferBatchGetter.
-func NewBufferBatchGetter(buffer BatchBufferGetter, snapshot BatchGetter) *BufferBatchGetter {
+func NewBufferBatchGetter(buffer BatchBufferGetter, snapshot kv.BatchGetter) *BufferBatchGetter {
 	return &BufferBatchGetter{buffer: buffer, snapshot: snapshot}
 }
 
 // BatchGet gets a batch of values.
-func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	bufferValues, err := b.buffer.BatchGet(ctx, keys)
+func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte, options ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+	bufferValues, err := b.buffer.BatchGet(ctx, keys, options...)
 	if err != nil {
 		return nil, err
 	}
 	if len(bufferValues) == 0 {
-		return b.snapshot.BatchGet(ctx, keys)
+		return b.snapshot.BatchGet(ctx, keys, options...)
 	}
 	shrinkKeys := make([][]byte, 0, len(keys)-len(bufferValues))
 	for _, key := range keys {
@@ -81,11 +75,11 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 			continue
 		}
 		// the deleted key should be removed from the result, and also no need to snapshot read it again.
-		if len(val) == 0 {
+		if val.IsValueEmpty() {
 			delete(bufferValues, string(key))
 		}
 	}
-	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
+	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,3 +88,54 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	}
 	return bufferValues, nil
 }
+<<<<<<< HEAD
+=======
+
+// BufferSnapshotBatchGetter is the type for BatchGet with MemBuffer.
+type BufferSnapshotBatchGetter struct {
+	buffer   BatchSnapshotBufferGetter
+	snapshot kv.BatchGetter
+}
+
+// BatchSnapshotBufferGetter is the interface for BatchGet.
+type BatchSnapshotBufferGetter interface {
+	kv.Getter
+	kv.BatchGetter
+}
+
+// NewBufferSnapshotBatchGetter creates a new BufferBatchGetter.
+func NewBufferSnapshotBatchGetter(buffer BatchSnapshotBufferGetter, snapshot kv.BatchGetter) *BufferSnapshotBatchGetter {
+	return &BufferSnapshotBatchGetter{buffer: buffer, snapshot: snapshot}
+}
+
+// BatchGet gets a batch of values.
+func (b *BufferSnapshotBatchGetter) BatchGet(ctx context.Context, keys [][]byte, options ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+	bufferValues, err := b.buffer.BatchGet(ctx, keys, options...)
+	if err != nil {
+		return nil, err
+	}
+	if len(bufferValues) == 0 {
+		return b.snapshot.BatchGet(ctx, keys, options...)
+	}
+	shrinkKeys := make([][]byte, 0, len(keys)-len(bufferValues))
+	for _, key := range keys {
+		val, ok := bufferValues[string(key)]
+		if !ok {
+			shrinkKeys = append(shrinkKeys, key)
+			continue
+		}
+		// the deleted key should be removed from the result, and also no need to snapshot read it again.
+		if val.IsValueEmpty() {
+			delete(bufferValues, string(key))
+		}
+	}
+	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys, options...)
+	if err != nil {
+		return nil, err
+	}
+	for key, val := range storageValues {
+		bufferValues[key] = val
+	}
+	return bufferValues, nil
+}
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))

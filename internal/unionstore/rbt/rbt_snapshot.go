@@ -39,6 +39,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
@@ -78,6 +79,7 @@ func (db *RBT) SnapshotIterReverse(k, lowerBound []byte) *rbtSnapIter {
 	return it
 }
 
+<<<<<<< HEAD
 func (db *RBT) getSnapshot() arena.MemDBCheckpoint {
 	if len(db.stages) > 0 {
 		return db.stages[0]
@@ -91,19 +93,22 @@ type rbtSnapGetter struct {
 }
 
 func (snap *rbtSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+=======
+func (snap *Snapshot) Get(_ context.Context, key []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 	x := snap.db.traverse(key, false)
 	if x.isNull() {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	if x.vptr.IsNull() {
 		// A flag only key, act as value not exists
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	v, ok := snap.db.vlog.GetSnapshotValue(x.vptr, &snap.cp)
 	if !ok {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
-	return v, nil
+	return kv.NewValueEntry(v, 0), nil
 }
 
 type rbtSnapIter struct {

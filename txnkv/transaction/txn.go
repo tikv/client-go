@@ -220,13 +220,13 @@ func (txn *KVTxn) GetVars() *tikv.Variables {
 }
 
 // Get implements transaction interface.
-func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
-	ret, err := txn.us.Get(ctx, k)
+func (txn *KVTxn) Get(ctx context.Context, k []byte, options ...tikv.GetOption) (tikv.ValueEntry, error) {
+	ret, err := txn.us.Get(ctx, k, options...)
 	if tikverr.IsErrNotFound(err) {
-		return nil, err
+		return tikv.ValueEntry{}, err
 	}
 	if err != nil {
-		return nil, err
+		return tikv.ValueEntry{}, err
 	}
 
 	return ret, nil
@@ -235,8 +235,8 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 // BatchGet gets kv from the memory buffer of statement and transaction, and the kv storage.
 // Do not use len(value) == 0 or value == nil to represent non-exist.
 // If a key doesn't exist, there shouldn't be any corresponding entry in the result map.
-func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys)
+func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte, options ...tikv.BatchGetOption) (map[string]tikv.ValueEntry, error) {
+	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys, options...)
 }
 
 // Set sets the value for key k as v into kv store.
@@ -510,8 +510,8 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	// generation is increased when the memdb is flushed to kv store.
 	// note the first generation is 1, which can mark pipelined dml's lock.
 	flushedKeys, flushedSize := 0, 0
-	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
+	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string]tikv.ValueEntry, error) {
+		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier, tikv.BatchGetOptions{})
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")

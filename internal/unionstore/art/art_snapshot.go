@@ -19,6 +19,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 func (t *ART) getSnapshot() arena.MemDBCheckpoint {
@@ -131,3 +132,24 @@ func (i *SnapIter) setValue() bool {
 	}
 	return false
 }
+<<<<<<< HEAD
+=======
+
+func (snap *Snapshot) Get(_ context.Context, key []byte, _ ...kv.GetOption) (entry kv.ValueEntry, _ error) {
+	addr, lf := snap.tree.traverse(key, false)
+	if addr.IsNull() {
+		return kv.ValueEntry{}, tikverr.ErrNotExist
+	}
+	if lf.vLogAddr.IsNull() {
+		// A flags only key, act as value not exists
+		return kv.ValueEntry{}, tikverr.ErrNotExist
+	}
+	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
+	if !ok {
+		return kv.ValueEntry{}, tikverr.ErrNotExist
+	}
+	return kv.NewValueEntry(v, 0), nil
+}
+
+func (snap *Snapshot) Close() {}
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))

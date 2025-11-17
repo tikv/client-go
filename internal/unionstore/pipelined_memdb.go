@@ -100,7 +100,7 @@ func newFlushOption() flushOption {
 }
 
 type FlushFunc func(uint64, *MemDB) error
-type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
+type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string]kv.ValueEntry, error)
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := NewMemDB()
@@ -131,7 +131,7 @@ func (p *PipelinedMemDB) GetMemDB() *MemDB {
 }
 
 func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer bool) ([]byte, error) {
-	v, err := p.memDB.Get(ctx, k)
+	v, err := p.memDB.GetLocal(ctx, k)
 	if err == nil {
 		return v, nil
 	}
@@ -139,7 +139,7 @@ func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer boo
 		return nil, err
 	}
 	if p.flushingMemDB != nil {
-		v, err = p.flushingMemDB.Get(ctx, k)
+		v, err = p.flushingMemDB.GetLocal(ctx, k)
 		if err == nil {
 			return v, nil
 		}
@@ -162,24 +162,28 @@ func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer boo
 	}
 	// read remote buffer
 	var (
-		dataMap map[string][]byte
+		dataMap map[string]kv.ValueEntry
 		ok      bool
 	)
 	dataMap, err = p.bufferBatchGetter(ctx, [][]byte{k})
 	if err != nil {
 		return nil, err
 	}
-	v, ok = dataMap[string(k)]
+	entry, ok := dataMap[string(k)]
 	if !ok {
 		return nil, tikverr.ErrNotExist
 	}
-	return v, nil
+	return entry.Value, nil
 }
 
 // Get the value by given key, it returns tikverr.ErrNotExist if not exist.
 // The priority of the value is MemBuffer > flushingMemDB > flushed memdbs.
-func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
-	return p.get(ctx, k, false)
+func (p *PipelinedMemDB) Get(ctx context.Context, k []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
+	val, err := p.get(ctx, k, false)
+	if err != nil {
+		return kv.ValueEntry{}, err
+	}
+	return kv.NewValueEntry(val, 0), nil
 }
 
 // GetLocal implements the MemBuffer interface.
@@ -200,8 +204,8 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 	return f, nil
 }
 
-func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	m := make(map[string][]byte, len(keys))
+func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte, _ ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+	m := make(map[string]kv.ValueEntry, len(keys))
 	if p.batchGetCache == nil {
 		p.batchGetCache = make(map[string]util.Option[[]byte], len(keys))
 	}
@@ -215,7 +219,7 @@ func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[strin
 			}
 			return nil, err
 		}
-		m[string(k)] = v
+		m[string(k)] = kv.NewValueEntry(v, 0)
 		p.batchGetCache[string(k)] = util.Some(v)
 	}
 	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
@@ -223,13 +227,14 @@ func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[strin
 		return nil, err
 	}
 	for _, k := range shrinkKeys {
-		v, ok := storageValues[string(k)]
+		entry, ok := storageValues[string(k)]
 		if ok {
+			v := entry.Value
 			// the protobuf cast empty byte slice to nil, we need to cast it back when receiving values from storage.
 			if v == nil {
 				v = []byte{}
 			}
-			m[string(k)] = v
+			m[string(k)] = kv.NewValueEntry(v, 0)
 			p.batchGetCache[string(k)] = util.Some(v)
 		} else {
 			p.batchGetCache[string(k)] = util.None[[]byte]()
@@ -386,7 +391,7 @@ func (p *PipelinedMemDB) FlushWait() error {
 func (p *PipelinedMemDB) handleAlreadyExistErr(err error) error {
 	var existErr *tikverr.ErrKeyExist
 	if stderrors.As(err, &existErr) {
-		v, err2 := p.flushingMemDB.Get(context.Background(), existErr.GetKey())
+		v, err2 := p.flushingMemDB.GetLocal(context.Background(), existErr.GetKey())
 		if err2 != nil {
 			// TODO: log more info like start_ts, also for other logs
 			logutil.BgLogger().Warn(
@@ -492,7 +497,7 @@ func (p *PipelinedMemDB) InspectStage(int, func([]byte, kv.KeyFlags, []byte)) {
 }
 
 // SnapshotGetter implements MemBuffer interface.
-func (p *PipelinedMemDB) SnapshotGetter() Getter {
+func (p *PipelinedMemDB) SnapshotGetter() kv.Getter {
 	panic("SnapshotGetter is not supported for PipelinedMemDB")
 }
 

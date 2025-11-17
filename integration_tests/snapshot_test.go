@@ -150,6 +150,36 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
+func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support WithRequireCommitTS option")
+	}
+
+	txn := s.beginTxn()
+	s.Nil(txn.Set([]byte("a"), []byte("a1")))
+	s.Nil(txn.Set([]byte("b"), []byte("b1")))
+	s.Nil(txn.Set([]byte("c"), []byte("c1")))
+	s.Nil(txn.Commit(context.Background()))
+
+	txn = s.beginTxn()
+	snapshot := txn.GetSnapshot()
+
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithRequireCommitTS())
+	s.Nil(err)
+	s.Len(entries, 2)
+	s.Equal([]byte("a1"), entries["a"].Value)
+	commitTS := entries["a"].CommitTS
+	s.Greater(commitTS, uint64(0))
+	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries["b"])
+
+	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithRequireCommitTS())
+	s.Nil(err)
+	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
+
+	_, err = snapshot.Get(context.Background(), []byte("e"), kv.WithRequireCommitTS())
+	s.EqualError(err, tikverr.ErrNotExist.Error())
+}
+
 func (s *testSnapshotSuite) TestSnapshotCache() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("x"), []byte("x")))
@@ -173,19 +203,53 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 
 	// check cache from BatchGet
-	value, err := snapshot.Get(ctx, []byte("x"))
+	entries, err := snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")})
 	s.Nil(err)
-	s.Equal([]byte("x"), value)
-	_, err = snapshot.Get(ctx, []byte("y"))
-	s.True(tikverr.IsErrNotFound(err))
+	s.Len(entries, 1)
+	s.Equal(kv.NewValueEntry([]byte("x"), 0), entries["x"])
 
 	// check cache from Get
-	value, err = snapshot.Get(ctx, []byte("a"))
+	entry, err := snapshot.Get(ctx, []byte("a"))
 	s.Nil(err)
-	s.Equal([]byte("a"), value)
+	s.Equal(kv.NewValueEntry([]byte("a"), 0), entry)
 	_, err = snapshot.Get(ctx, []byte("b"))
 	s.True(tikverr.IsErrNotFound(err))
 
+	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
+	if config.NextGen {
+		s.T().Skip("NextGen does not support WithRequireCommitTS option")
+	}
+
+	var expectedCommitTS uint64
+	for i := range 2 {
+		ctx := context.Background()
+		if i == 1 {
+			// WithRequireCommitTS will update the cache again
+			s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
+			ctx = context.WithValue(context.Background(), "TestSnapshotCache", true)
+		}
+
+		// check BatchGet
+		// When require commit ts, it should return the correct commit ts instead of the cached zero.
+		entries, err = snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")}, kv.WithRequireCommitTS())
+		s.Nil(err)
+		s.Len(entries, 1)
+		s.Equal([]byte("x"), entries["x"].Value)
+		if commitTS := entries["x"].CommitTS; expectedCommitTS == 0 {
+			s.Greater(commitTS, uint64(0))
+			expectedCommitTS = commitTS
+		} else {
+			s.Equal(expectedCommitTS, commitTS)
+		}
+
+		// check Get
+		// When require commit ts, it should return the correct commit ts instead of the cached zero.
+		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithRequireCommitTS())
+		s.Nil(err)
+		s.Equal(kv.NewValueEntry([]byte("a"), expectedCommitTS), entry)
+		_, err = snapshot.Get(ctx, []byte("b"))
+		s.True(tikverr.IsErrNotFound(err))
+	}
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 }
 
@@ -231,7 +295,16 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
+<<<<<<< HEAD
 	_, err = txn1.Get(ctx, x)
+=======
+	r, err := txn1.Get(ctx, x)
+	if err != nil {
+		println(err.Error())
+	} else {
+		println(hex.EncodeToString(r.Value))
+	}
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 	s.True(tikverr.IsErrNotFound(err))
 
 	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
@@ -276,7 +349,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	// Point get secondary key. Should read committed data.
 	value, err := snapshot.Get(ctx, y)
 	s.Nil(err)
-	s.Equal(value, []byte("y"))
+	s.Equal(value.Value, []byte("y"))
 	s.Less(time.Since(start), 500*time.Millisecond)
 }
 
@@ -420,10 +493,10 @@ func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
 	snapshot := s.store.GetSnapshot(startTS)
 	snapshot.Get(context.Background(), []byte("x"))
 	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
-	s.Equal(snapshot.SnapCache(), map[string][]byte{
-		"x": []byte("x"),
-		"y": []byte("y"),
-		"z": []byte("z"),
+	s.Equal(snapshot.SnapCache(), map[string]kv.ValueEntry{
+		"x": kv.NewValueEntry([]byte("x"), 0),
+		"y": kv.NewValueEntry([]byte("y"), 0),
+		"z": kv.NewValueEntry([]byte("z"), 0),
 	})
 	// not cache version == math.MaxUint64
 	snapshot = s.store.GetSnapshot(math.MaxUint64)

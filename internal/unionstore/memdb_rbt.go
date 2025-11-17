@@ -112,8 +112,12 @@ func (db *rbtDBWithContext) Release(handle int) {
 	db.RBT.Release(handle)
 }
 
-func (db *rbtDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.RBT.Get(k)
+func (db *rbtDBWithContext) Get(_ context.Context, k []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
+	val, err := db.RBT.Get(k)
+	if err != nil {
+		return kv.ValueEntry{}, err
+	}
+	return kv.NewValueEntry(val, 0), nil
 }
 
 func (db *rbtDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
@@ -130,11 +134,11 @@ func (db *rbtDBWithContext) GetMemDB() *MemDB {
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.
-func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte, _ ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
 	if db.Len() == 0 {
-		return map[string][]byte{}, nil
+		return map[string]kv.ValueEntry{}, nil
 	}
-	m := make(map[string][]byte, len(keys))
+	m := make(map[string]kv.ValueEntry, len(keys))
 	for _, k := range keys {
 		v, err := db.Get(ctx, k)
 		if err != nil {
@@ -172,6 +176,46 @@ func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
+<<<<<<< HEAD
 func (db *rbtDBWithContext) SnapshotGetter() Getter {
 	return db.RBT.SnapshotGetter()
+=======
+func (db *rbtDBWithContext) SnapshotGetter() kv.Getter {
+	return db.RBT.GetSnapshot()
+}
+
+func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	// TODO: implement *batched* iter
+	if reverse {
+		return db.SnapshotIterReverse(upper, lower)
+	} else {
+		return db.SnapshotIter(lower, upper)
+	}
+}
+
+type rbtSnapshot struct {
+	*rbt.Snapshot
+}
+
+// NewSnapshotIterator wraps `RBT.SnapshotIterReverse` and `RBT.SnapshotIter` and cast the result into an `Iterator`.
+func (a *rbtSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
+	if reverse {
+		return a.Snapshot.SnapshotIterReverse(start, end)
+	} else {
+		return a.Snapshot.SnapshotIter(start, end)
+	}
+}
+
+// GetSnapshot returns a snapshot of the RBT.
+func (db *rbtDBWithContext) GetSnapshot() MemBufferSnapshot {
+	// The RBT doesn't maintain the sequence number, so the seqCheck is a noop function.
+	seqCheck := func() error {
+		return nil
+	}
+	return &SnapshotWithMutex[*rbtSnapshot]{
+		mu:       &db.RWMutex,
+		seqCheck: seqCheck,
+		snapshot: &rbtSnapshot{db.RBT.GetSnapshot()},
+	}
+>>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 }
