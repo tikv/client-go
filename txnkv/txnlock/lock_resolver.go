@@ -198,6 +198,14 @@ type Lock struct {
 	MinCommitTS     uint64
 }
 
+func (l *Lock) IsPessimistic() bool {
+	return l.LockType == kvrpcpb.Op_PessimisticLock || l.LockType == kvrpcpb.Op_SharedPessimisticLock
+}
+
+func (l *Lock) IsShared() bool {
+	return l.LockType == kvrpcpb.Op_SharedLock || l.LockType == kvrpcpb.Op_SharedPessimisticLock
+}
+
 func (l *Lock) String() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	buf.WriteString("key: ")
@@ -289,7 +297,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			return false, err
 		}
 
-		if l.LockType == kvrpcpb.Op_PessimisticLock {
+		if l.IsPessimistic() {
 			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
 			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
 			// correctness if we always roll back them.
@@ -510,7 +518,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
 
 		if _, ok := errors.Cause(err).(primaryMismatch); ok {
-			if l.LockType != kvrpcpb.Op_PessimisticLock {
+			if !l.IsPessimistic() {
 				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
 				return TxnStatus{}, err
 			}
@@ -553,7 +561,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			}
 			return status, err
 		}
-		if l.LockType == kvrpcpb.Op_PessimisticLock {
+		if l.IsPessimistic() {
 			// pessimistic locks don't block read so it needn't be async.
 			if pessimisticRegionResolve {
 				pessimisticCleanRegions, exists := pessimisticCleanTxns[l.TxnID]
@@ -731,7 +739,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 				zap.Uint64("CallerStartTs", callerStartTS),
 				zap.Stringer("lock str", l),
 				zap.Stringer("status", status))
-			if l.LockType == kvrpcpb.Op_PessimisticLock {
+			if l.IsPessimistic() {
 				if _, err := util.EvalFailpoint("txnExpireRetTTL"); err == nil {
 					return TxnStatus{action: kvrpcpb.Action_LockNotExistDoNothing},
 						errors.New("error txn not found and lock expired")
@@ -746,7 +754,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 			// has no related information. There are possibilities that some other transactions do checkTxnStatus on these
 			// locks and they will be blocked ttl time, so let the transaction retries to do pessimistic lock if txn not found
 			// and the lock does not expire yet.
-			if l.LockType == kvrpcpb.Op_PessimisticLock {
+			if l.IsPessimistic() {
 				return TxnStatus{ttl: l.TTL}, nil
 			}
 		}
@@ -799,11 +807,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 
 	var status TxnStatus
 
-	if lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_SharedLock {
-		return status, errors.New("shared lock should not be submitted to the lock resolver for processing")
-	}
-
-	resolvingPessimisticLock := lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_PessimisticLock
+	resolvingPessimisticLock := lockInfo != nil && lockInfo.IsPessimistic()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
 		LockTs:                   txnID,

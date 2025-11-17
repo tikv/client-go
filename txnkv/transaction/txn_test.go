@@ -189,7 +189,7 @@ func TestLockKeys(t *testing.T) {
 
 		// `lockKeys` in share mode again.
 		lockCtx.InShareMode = true
-		expectedLockType = kvrpcpb.Op_SharedLock
+		expectedLockType = kvrpcpb.Op_SharedPessimisticLock
 		require.NoError(t, txn.lockKeys(context.TODO(), lockCtx, nil, key1))
 		flags, err := txn.GetMemBuffer().GetFlags(key1)
 		require.NoError(t, err)

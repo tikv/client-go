@@ -16,16 +16,12 @@ package txnlock
 
 import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 // ExtractLockFromKeyErr extracts the KeyError.
 func ExtractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*Lock, error) {
 	if locked := keyErr.GetLocked(); locked != nil {
-		if locked.LockType == kvrpcpb.Op_SharedLock {
-			return nil, errors.New("shared lock should not be in key error")
-		}
 		return NewLock(locked), nil
 	}
 	return nil, tikverr.ExtractKeyErr(keyErr)
