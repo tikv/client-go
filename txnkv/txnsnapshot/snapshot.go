@@ -696,7 +696,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 			atomic.AddInt64(&s.mu.hitCnt, 1)
 			s.mu.RUnlock()
 			if entry.IsValueEmpty() {
-				return entry, tikverr.ErrNotExist
+				return kv.ValueEntry{}, tikverr.ErrNotExist
 			}
 			return entry, nil
 		}
