@@ -172,8 +172,9 @@ func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
 
-	_, err = snapshot.Get(context.Background(), []byte("e"), kv.WithRequireCommitTS())
+	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithRequireCommitTS())
 	s.EqualError(err, tikverr.ErrNotExist.Error())
+	s.Equal(kv.ValueEntry{}, entry)
 }
 
 func (s *testSnapshotSuite) TestSnapshotCache() {
@@ -208,8 +209,9 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	entry, err := snapshot.Get(ctx, []byte("a"))
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("a"), 0), entry)
-	_, err = snapshot.Get(ctx, []byte("b"))
+	entry, err = snapshot.Get(ctx, []byte("b"))
 	s.True(tikverr.IsErrNotFound(err))
+	s.Equal(kv.ValueEntry{}, entry)
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 	if config.NextGen {
@@ -243,8 +245,9 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithRequireCommitTS())
 		s.Nil(err)
 		s.Equal(kv.NewValueEntry([]byte("a"), expectedCommitTS), entry)
-		_, err = snapshot.Get(ctx, []byte("b"))
+		entry, err = snapshot.Get(ctx, []byte("b"))
 		s.True(tikverr.IsErrNotFound(err))
+		s.Equal(kv.ValueEntry{}, entry)
 	}
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 }
