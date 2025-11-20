@@ -945,7 +945,7 @@ func (s *sendReqState) next() (done bool) {
 			return true
 		}
 		if !retry {
-			s.vars.msg = fmt.Sprintf("met unretriable region error: %T", s.vars.regionErr)
+			s.vars.msg = fmt.Sprintf("met unretriable region error: %v", s.vars.regionErr.String())
 			return true
 		}
 		s.vars.regionErr = nil
