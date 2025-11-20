@@ -1015,7 +1015,7 @@ func (s *sendReqState) next() (done bool) {
 		}
 	}
 
-	if len(req.Context.TraceId) == 0 {
+	if req.Context != nil && len(req.Context.TraceId) == 0 {
 		if trace.IsCategoryEnabled(trace.CategoryDevDebug) {
 			trace.TraceEvent(bo.GetCtx(), trace.CategoryDevDebug, "send request with trace_id missing",
 				zap.Stack("stack"))
