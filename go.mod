@@ -1,6 +1,10 @@
 module github.com/tikv/client-go/v2
 
-go 1.23.0
+go 1.23.12
+
+toolchain go1.24.1
+
+replace github.com/tikv/pd/client => github.com/bufferflies/pd/client v0.0.0-20251113073927-030b4e3ceaca
 
 require (
 	github.com/VividCortex/ewma v1.2.0

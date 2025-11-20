@@ -593,6 +593,21 @@ type gcStatesClient struct {
 	keyspaceID uint32
 }
 
+func (c gcStatesClient) SetGlobalGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GlobalGCBarrierInfo, error) {
+	//TODO implement me
+	return nil, errors.New("unimplemented")
+}
+
+func (c gcStatesClient) GetAllKeyspacesGCStates(ctx context.Context) (pdgc.ClusterGCStates, error) {
+	//TODO implement me
+	return pdgc.ClusterGCStates{}, errors.New("unimplemented")
+}
+
+// DeleteGlobalGCBarrier deletes a global GC barrier.
+func (c gcStatesClient) DeleteGlobalGCBarrier(_ context.Context, _ string) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, errors.New("unimplemented")
+}
+
 func (c gcStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
 	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
