@@ -262,3 +262,9 @@ func TestDiscardValues(t *testing.T) {
 		tree.Set([]byte{3}, []byte{4})
 	})
 }
+
+func TestKeyFlagsBoundary(t *testing.T) {
+	require.LessOrEqual(t, kv.FlagMaxBit, deleteFlag)
+	validMaxFlag := kv.FlagMaxBit - 1
+	require.Equal(t, validMaxFlag&kv.KeyFlags(flagMask), validMaxFlag)
+}
