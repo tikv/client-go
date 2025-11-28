@@ -389,15 +389,15 @@ func (s resolveState) String() string {
 }
 
 // initByStoreMeta initializes the store fields by the given store meta. It should be protected by `resolveMutex`.
-func (s *Store) initByStoreMeta(store *metapb.Store) error {
+func (s *Store) initByStoreMeta(store *metapb.Store) (string, error) {
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 		// The store is a tombstone.
 		s.setResolveState(tombstone)
-		return nil
+		return "", nil
 	}
 	addr := store.GetAddress()
 	if addr == "" {
-		return errors.Errorf("empty store(%d) address", s.storeID)
+		return "", errors.Errorf("empty store(%d) address", s.storeID)
 	}
 	s.addr = addr
 	s.peerAddr = store.GetPeerAddress()
@@ -407,13 +407,13 @@ func (s *Store) initByStoreMeta(store *metapb.Store) error {
 	// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
 	s.changeResolveStateTo(unresolved, resolved)
 
-	return nil
+	return addr, nil
 }
 
 // initResolveLite likes initResolve but initializes the store by the given store meta directly.
 func (s *Store) initResolveLite(store *metapb.Store) error {
 	s.resolveMutex.Lock()
-	err := s.initByStoreMeta(store)
+	_, err := s.initByStoreMeta(store)
 	s.resolveMutex.Unlock()
 	return err
 }
@@ -451,10 +451,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 			}
 			continue
 		}
-		if err := s.initByStoreMeta(store); err != nil {
-			return "", err
-		}
-		return s.addr, nil
+		return s.initByStoreMeta(store)
 	}
 }
 
