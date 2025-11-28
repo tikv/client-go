@@ -40,7 +40,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 )
+
+func MustGet(t *testing.T, getter kv.Getter, key []byte, value []byte, commitTS uint64, opts ...kv.GetOption) {
+	entry, err := getter.Get(context.TODO(), key, opts...)
+	assert.NoError(t, err)
+	assert.Equal(t, value, entry.Value)
+	assert.Equal(t, commitTS, entry.CommitTS)
+}
 
 func TestUnionStoreGetSet(t *testing.T) {
 	assert := assert.New(t)
@@ -49,14 +57,13 @@ func TestUnionStoreGetSet(t *testing.T) {
 
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)
-	v, err := us.Get(context.TODO(), []byte("1"))
-	assert.Nil(err)
-	assert.Equal(v, []byte("1"))
+	MustGet(t, us, []byte("1"), []byte("1"), 0)
+	MustGet(t, us, []byte("1"), []byte("1"), 1000+'1', kv.WithRequireCommitTS())
+
 	err = us.GetMemBuffer().Set([]byte("1"), []byte("2"))
 	assert.Nil(err)
-	v, err = us.Get(context.TODO(), []byte("1"))
-	assert.Nil(err)
-	assert.Equal(v, []byte("2"))
+	MustGet(t, us, []byte("1"), []byte("2"), 0)
+	MustGet(t, us, []byte("1"), []byte("2"), 0, kv.WithRequireCommitTS())
 	assert.Equal(us.GetMemBuffer().Size(), 2)
 	assert.Equal(us.GetMemBuffer().Len(), 1)
 }
@@ -77,7 +84,7 @@ func TestUnionStoreDelete(t *testing.T) {
 	assert.Nil(err)
 	v, err := us.Get(context.TODO(), []byte("1"))
 	assert.Nil(err)
-	assert.Equal(v, []byte("2"))
+	assert.Equal(v.Value, []byte("2"))
 }
 
 func TestUnionStoreSeek(t *testing.T) {

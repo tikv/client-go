@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/txnkv"
 )
 
@@ -57,7 +58,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf("Read back value %q from keyspace %q\n", got, *keyspaceName)
+	fmt.Printf("Read back value %q from keyspace %q\n", got.Value, *keyspaceName)
 	fmt.Println("Run the program twice with different --keyspace values but the same logical key to observe keyspace isolation.")
 }
 
@@ -109,10 +110,10 @@ func writeKey(ctx context.Context, client *txnkv.Client, key, value []byte) erro
 	return txn.Commit(ctx)
 }
 
-func readKey(ctx context.Context, client *txnkv.Client, key []byte) ([]byte, error) {
+func readKey(ctx context.Context, client *txnkv.Client, key []byte) (kv.ValueEntry, error) {
 	txn, err := client.Begin()
 	if err != nil {
-		return nil, err
+		return kv.ValueEntry{}, err
 	}
 	return txn.Get(ctx, key)
 }

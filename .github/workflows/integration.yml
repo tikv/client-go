@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [master]
+    branches: [master, "feature/*"]
   pull_request:
-    branches: [master]
+    branches: [master, "feature/*"]
 
 jobs:
   integration-local:
@@ -49,6 +49,17 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     steps:
+      - name: "Ensure PR targets feature/active-active"
+        run: |
+          echo "PR target branch: ${{ github.base_ref }}"
+          if [ "${{ github.base_ref }}" != "feature/active-active" ]; then
+            echo "ERROR: Pull Request target branch must be 'feature/active-active'. Current target: ${{ github.base_ref }}."
+            echo "If you want to cherry-pick to master, please update the image in step 'Fetch TiKV' to 'pingcap/tikv:nightly' and then delete this check."
+            exit 1
+          else
+            echo "OK: Target branch is 'feature/active-active'. Continue."
+          fi
+
       - name: Checkout
         uses: actions/checkout@v2
 
@@ -71,7 +82,7 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: cclcwangchao/tikv:active-active
           path: /tikv-server
 
       - name: Run PD & TiKV

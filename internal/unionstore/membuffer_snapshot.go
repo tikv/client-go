@@ -17,6 +17,8 @@ package unionstore
 import (
 	"context"
 	"sync"
+
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // SnapshotWithMutex wraps a MemBuffer's snapshot with a mutex to ensure thread-safe access.
@@ -33,13 +35,13 @@ type SnapshotWithMutex[S memdbSnapshot] struct {
 
 var _ MemBufferSnapshot = (*SnapshotWithMutex[memdbSnapshot])(nil)
 
-func (s *SnapshotWithMutex[_]) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (s *SnapshotWithMutex[_]) Get(ctx context.Context, k []byte, options ...kv.GetOption) (kv.ValueEntry, error) {
 	if err := s.seqCheck(); err != nil {
-		return nil, err
+		return kv.ValueEntry{}, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.snapshot.Get(ctx, k)
+	return s.snapshot.Get(ctx, k, options...)
 }
 
 type snapshotBatchedIter[S memdbSnapshot] struct {
