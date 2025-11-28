@@ -55,7 +55,7 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
-		if i == 0 {
+		if i == len(batches)-1 {
 			backoffer = forkedBo
 		} else {
 			backoffer = forkedBo.Clone()
