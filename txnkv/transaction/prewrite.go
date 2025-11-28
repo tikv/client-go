@@ -102,12 +102,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) ||
-			(config.NextGen && IsTempIndexKey != nil && !IsTempIndexKey(m.GetKey(i))) {
-			// For next-gen builds, we need to perform constraint checks on all non-temporary index keys.
-			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
-			// which can be problematic for CDC and could potentially break correctness.
-			// see https://github.com/tikv/tikv/issues/11187.
+		} else if m.NeedConstraintCheckInPrewrite(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
@@ -630,5 +625,3 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 	}
 	return nil
 }
-
-var IsTempIndexKey func([]byte) bool

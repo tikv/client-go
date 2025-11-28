@@ -1091,10 +1091,3 @@ type SchemaVer = transaction.SchemaVer
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = transaction.MaxTxnTimeUse
-
-// SetIsTempIndexKey inject the function to check whether a key is a temporary index key.
-// Call this function before using this package.
-// If not set, all keys will be treated as non-temporary index keys.
-func SetIsTempIndexKey(fn func([]byte) bool) {
-	transaction.IsTempIndexKey = fn
-}
