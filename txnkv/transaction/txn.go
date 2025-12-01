@@ -62,6 +62,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
@@ -211,6 +212,14 @@ type KVTxn struct {
 	flushBatchDurationEWMA ewma.MovingAverage
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
+
+	// This minCommitTS does not has exactly same semantic with 2pc minCommitTSMgr.value.
+	// There might be suble subtle differs. (This minCommitTS value is not calculated, and is not
+	// even from the same cluster) It's only used by active-active replication feature currently.
+	// To obtain correctness without the burden of too much reasoning, it is simply implemented by
+	// getting current TSO and comparing the value with this minCommitTS. And sleep if the current
+	// tso is less than minCommitTS.
+	minCommitTS uint64
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -333,6 +342,13 @@ func (txn *KVTxn) SetSchemaLeaseChecker(checker SchemaLeaseChecker) {
 // EnableForceSyncLog indicates tikv to always sync log for the transaction.
 func (txn *KVTxn) EnableForceSyncLog() {
 	txn.syncLog = true
+}
+
+// SetMinCommitTS sets the minimum commit timestamp for the transaction.
+func (txn *KVTxn) SetMinCommitTS(minCommitTS uint64) {
+	if minCommitTS > txn.minCommitTS {
+		txn.minCommitTS = minCommitTS
+	}
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -1903,6 +1919,34 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 // MemHookSet returns whether the mem buffer has a memory footprint change hook set.
 func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
+}
+
+// GetTimestampForCommit returns the timestamp for commit.
+// Unlike a direct wrap, it also checks minCommitTS constraint from the SetMinCommitTS option.
+func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint64, error) {
+	ts, err := txn.store.GetTimestampWithRetry(bo, scope)
+	if err != nil {
+		return ts, err
+	}
+
+	for retryTimes := 0; ts <= txn.minCommitTS && retryTimes < 2; retryTimes++ {
+		interval := oracle.GetTimeFromTS(txn.minCommitTS).Sub(oracle.GetTimeFromTS(ts))
+		if interval > time.Second {
+			return 0, errors.Errorf("commit_ts(%d) << min_commit_ts(%d), interval more than 1 second", ts, txn.minCommitTS)
+		}
+
+		if interval < time.Millisecond {
+			interval = time.Millisecond
+		}
+
+		time.Sleep(interval)
+		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
+		if err != nil {
+			return ts, err
+		}
+	}
+
+	return ts, err
 }
 
 // LifecycleHooks is a struct that contains hooks for a background goroutine.
