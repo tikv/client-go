@@ -213,12 +213,10 @@ type KVTxn struct {
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 
-	// This originCommitTS does not has exactly same semantic with 2pc minCommitTSMgr.value.
-	// There might be suble subtle differs. (This originCommitTS value is not calculated, and is not
-	// even from the same cluster) It's only used by active-active replication feature currently.
-	// To obtain correctness without the burden of too much reasoning, it is simply implemented by
-	// getting current TSO and comparing the value with this originCommitTS. And sleep if the current
-	// tso is less than originCommitTS.
+	// If originCommitTS is set, it means this transaction is a replication transaction from upstream cluster.
+	// LWW (last write wins policy) is used to resolve conflicts between upstream and downstream.
+	// The commit TS of this transaction must be greater than originCommitTS.
+	// GetTimestampWithRetry may sleep and retry to guarantee this constraint.
 	originCommitTS uint64
 }
 
@@ -1922,7 +1920,7 @@ func (txn *KVTxn) MemHookSet() bool {
 }
 
 // GetTimestampForCommit returns the timestamp for commit.
-// Unlike a direct wrap, it also checks minCommitTS constraint from the SetMinCommitTS option.
+// Unlike a direct wrap, it also checks originCommitTS constraint from the SetOriginCommitTS option.
 func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint64, error) {
 	ts, err := txn.store.GetTimestampWithRetry(bo, scope)
 	if err != nil {
