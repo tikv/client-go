@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -211,7 +212,7 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(pk, lock.Primary)
 
 	s.Equal(txn1.StartTS(), lock.TxnID)
-	s.True(lock.IsShared())
+	s.Equal(lock.LockType, kvrpcpb.Op_Lock)
 
 	txn2 := s.begin()
 	s.Nil(txn2.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk))
@@ -225,7 +226,7 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(key, lock.Key)
 	s.Equal(pk, lock.Primary)
 	s.Equal(txn2.StartTS(), lock.TxnID)
-	s.False(lock.IsShared())
+	s.Equal(lock.LockType, kvrpcpb.Op_PessimisticLock)
 
 	s.Nil(txn2.Rollback())
 	s.Len(s.scanLocks(key, s.getTS()), 0)
@@ -306,7 +307,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	s.Len(locks, 3)
 	for _, lock := range locks {
 		s.Equal(sharedKey, lock.Key)
-		s.True(lock.IsShared())
+		s.Equal(lock.LockType, kvrpcpb.Op_PessimisticLock)
 	}
 
 	// wait managed lock ttl to expire

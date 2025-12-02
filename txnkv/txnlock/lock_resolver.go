@@ -202,8 +202,10 @@ func (l *Lock) IsPessimistic() bool {
 	return l.LockType == kvrpcpb.Op_PessimisticLock || l.LockType == kvrpcpb.Op_SharedPessimisticLock
 }
 
+// IsShared returns true if the lock is a shared lock wrapper.
+// Note that embedded locks can only be either pessimistic or prewrite locks.
 func (l *Lock) IsShared() bool {
-	return l.LockType == kvrpcpb.Op_SharedLock || l.LockType == kvrpcpb.Op_SharedPessimisticLock
+	return l.LockType == kvrpcpb.Op_SharedLock
 }
 
 func (l *Lock) String() string {
