@@ -126,8 +126,8 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			execDetails := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(elapsed))
 			execNetworkCollector := networkCollector{}
-			execNetworkCollector.onReq(req, execDetails)
-			execNetworkCollector.onResp(req, resp, execDetails)
+			execNetworkCollector.onReq(req)
+			execNetworkCollector.onResp(req, resp)
 		}
 
 		// tracing
