@@ -48,6 +48,8 @@ type MockServer struct {
 		sync.Mutex
 		check func(context.Context) error
 	}
+
+	OnBatchCommandsRequest atomic.Pointer[func(*tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error)]
 }
 
 // KvGet implements the TikvServer interface.
@@ -86,26 +88,34 @@ func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 			logutil.BgLogger().Error("batch commands receive fail", zap.Error(err))
 			return err
 		}
+		handle := s.OnBatchCommandsRequest.Load()
+		if handle != nil {
+			var resp *tikvpb.BatchCommandsResponse
+			resp, err = (*handle)(req)
+			if err == nil {
+				err = ss.Send(resp)
+			}
+		} else {
+			responses := make([]*tikvpb.BatchCommandsResponse_Response, 0, len(req.GetRequestIds()))
+			for i := 0; i < len(req.GetRequestIds()); i++ {
+				responses = append(responses, &tikvpb.BatchCommandsResponse_Response{
+					Cmd: &tikvpb.BatchCommandsResponse_Response_Empty{
+						Empty: &tikvpb.BatchCommandsEmptyResponse{},
+					},
+				})
+			}
 
-		responses := make([]*tikvpb.BatchCommandsResponse_Response, 0, len(req.GetRequestIds()))
-		for i := 0; i < len(req.GetRequestIds()); i++ {
-			responses = append(responses, &tikvpb.BatchCommandsResponse_Response{
-				Cmd: &tikvpb.BatchCommandsResponse_Response_Empty{
-					Empty: &tikvpb.BatchCommandsEmptyResponse{},
+			err = ss.Send(&tikvpb.BatchCommandsResponse{
+				Responses:  responses,
+				RequestIds: req.GetRequestIds(),
+				HealthFeedback: &kvrpcpb.HealthFeedback{
+					StoreId:       1,
+					FeedbackSeqNo: feedbackSeq,
+					SlowScore:     1,
 				},
 			})
+			feedbackSeq++
 		}
-
-		err = ss.Send(&tikvpb.BatchCommandsResponse{
-			Responses:  responses,
-			RequestIds: req.GetRequestIds(),
-			HealthFeedback: &kvrpcpb.HealthFeedback{
-				StoreId:       1,
-				FeedbackSeqNo: feedbackSeq,
-				SlowScore:     1,
-			},
-		})
-		feedbackSeq++
 
 		if err != nil {
 			logutil.BgLogger().Error("batch commands send fail", zap.Error(err))

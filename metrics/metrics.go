@@ -120,6 +120,8 @@ var (
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
+	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
+	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
 )
 
 // Label constants.
@@ -869,6 +871,24 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Summary of read requests bytes",
 		}, []string{LblType, LblResult})
 
+	TiKVAsyncSendReqCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "async_send_req_total",
+			Help:        "Counter of async send req by region request sender.",
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
+	TiKVAsyncBatchGetCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "async_batch_get_total",
+			Help:        "Counter of async batch get by txn snapshot.",
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -966,6 +986,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
 	prometheus.MustRegister(TiKVReadRequestBytes)
+	prometheus.MustRegister(TiKVAsyncSendReqCounter)
+	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
