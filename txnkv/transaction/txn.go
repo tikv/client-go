@@ -213,29 +213,32 @@ type KVTxn struct {
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 
-	// If originCommitTS is set, it means this transaction is a replication transaction from upstream cluster.
+	// Used when this transaction is a replication transaction from upstream cluster.
 	// LWW (last write wins policy) is used to resolve conflicts between upstream and downstream.
-	// The commit TS of this transaction must be greater than originCommitTS.
+	// The commit TS of this transaction (downstream) must be greater than original CommitTS (upstream).
 	// GetTimestampWithRetry may sleep and retry to guarantee this constraint.
-	originCommitTS uint64
+	commitWaitUntilTSO uint64
+	// maxClockDriftInActiveActiveReplication is the maximum clock drift allowed in active-active replication.
+	maxClockDriftInActiveActiveReplication time.Duration
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:               snapshot,
-		store:                  store,
-		startTS:                startTS,
-		startTime:              time.Now(),
-		valid:                  true,
-		vars:                   tikv.DefaultVars,
-		scope:                  options.TxnScope,
-		enableAsyncCommit:      cfg.EnableAsyncCommit,
-		enable1PC:              cfg.Enable1PC,
-		diskFullOpt:            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:          snapshot.RequestSource,
-		flushBatchDurationEWMA: ewma.NewMovingAverage(defaultEWMAAge),
+		snapshot:                               snapshot,
+		store:                                  store,
+		startTS:                                startTS,
+		startTime:                              time.Now(),
+		valid:                                  true,
+		vars:                                   tikv.DefaultVars,
+		scope:                                  options.TxnScope,
+		enableAsyncCommit:                      cfg.EnableAsyncCommit,
+		enable1PC:                              cfg.Enable1PC,
+		diskFullOpt:                            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:                          snapshot.RequestSource,
+		flushBatchDurationEWMA:                 ewma.NewMovingAverage(defaultEWMAAge),
+		maxClockDriftInActiveActiveReplication: time.Second,
 	}
 	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
@@ -342,11 +345,16 @@ func (txn *KVTxn) EnableForceSyncLog() {
 	txn.syncLog = true
 }
 
-// SetOriginCommitTS sets the minimum commit timestamp constraint for the transaction.
-func (txn *KVTxn) SetOriginCommitTS(originCommitTS uint64) {
-	if originCommitTS > txn.originCommitTS {
-		txn.originCommitTS = originCommitTS
+// SetcommitWaitUntilTSO sets the minimum commit timestamp constraint for the transaction.
+func (txn *KVTxn) SetCommitWaitUntilTSO(commitWaitUntilTSO uint64) {
+	if commitWaitUntilTSO > txn.commitWaitUntilTSO {
+		txn.commitWaitUntilTSO = commitWaitUntilTSO
 	}
+}
+
+// SetMaxClockDriftInActiveActiveReplication sets the maximum clock drift allowed in active-active replication.
+func (txn *KVTxn) SetMaxClockDriftInActiveActiveReplication(val time.Duration) {
+	txn.maxClockDriftInActiveActiveReplication = val
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -1920,18 +1928,17 @@ func (txn *KVTxn) MemHookSet() bool {
 }
 
 // GetTimestampForCommit returns the timestamp for commit.
-// Unlike a direct wrap, it also checks originCommitTS constraint from the SetOriginCommitTS option.
+// Unlike a direct wrap, it also checks commitWaitUntilTSO constraint from the SetcommitWaitUntilTSO option.
 func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint64, error) {
 	ts, err := txn.store.GetTimestampWithRetry(bo, scope)
 	if err != nil {
 		return ts, err
 	}
 
-	for retryTimes := 0; ts <= txn.originCommitTS && retryTimes < 2; retryTimes++ {
-		interval := oracle.GetTimeFromTS(txn.originCommitTS).Sub(oracle.GetTimeFromTS(ts))
-		limit := config.GetGlobalConfig().MaxClockDriftInActiveActiveReplication
-		if limit > 0 && interval > limit {
-			return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.originCommitTS, interval)
+	for retryTimes := 0; ts <= txn.commitWaitUntilTSO && retryTimes < 2; retryTimes++ {
+		interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
+		if txn.maxClockDriftInActiveActiveReplication > 0 && interval > txn.maxClockDriftInActiveActiveReplication {
+			return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
 		}
 
 		if interval < time.Millisecond {

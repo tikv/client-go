@@ -39,7 +39,6 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -90,28 +89,25 @@ type Config struct {
 	// NOTE: The value of "TxnScope" is also the "zone" label, but since the feaute "txn-scope" is to be deprecated
 	//       (See: https://github.com/pingcap/tidb/issues/58838), we use a separate field to make its meaning clearer.
 	ZoneLabel string
-	// MaxClockDriftInActiveActiveReplication indicates the maximum clock drift allowed in active-active replication.
-	MaxClockDriftInActiveActiveReplication time.Duration
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		CommitterConcurrency:                   128,
-		MaxTxnTTL:                              60 * 60 * 1000, // 1hour
-		TiKVClient:                             DefaultTiKVClient(),
-		PDClient:                               DefaultPDClient(),
-		TxnLocalLatches:                        DefaultTxnLocalLatches(),
-		StoresRefreshInterval:                  DefStoresRefreshInterval,
-		OpenTracingEnable:                      false,
-		Path:                                   "",
-		EnableForwarding:                       false,
-		TxnScope:                               "",
-		EnableAsyncCommit:                      false,
-		Enable1PC:                              false,
-		EnableAsyncBatchGet:                    false,
-		ZoneLabel:                              "",
-		MaxClockDriftInActiveActiveReplication: time.Second,
+		CommitterConcurrency:  128,
+		MaxTxnTTL:             60 * 60 * 1000, // 1hour
+		TiKVClient:            DefaultTiKVClient(),
+		PDClient:              DefaultPDClient(),
+		TxnLocalLatches:       DefaultTxnLocalLatches(),
+		StoresRefreshInterval: DefStoresRefreshInterval,
+		OpenTracingEnable:     false,
+		Path:                  "",
+		EnableForwarding:      false,
+		TxnScope:              "",
+		EnableAsyncCommit:     false,
+		Enable1PC:             false,
+		EnableAsyncBatchGet:   false,
+		ZoneLabel:             "",
 	}
 }
 

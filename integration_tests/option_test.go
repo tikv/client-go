@@ -82,8 +82,8 @@ func (s *testOptionSuite) TestSetMinCommitTSOption() {
 	} {
 		txn, err := s.store.Begin()
 		s.NoError(err)
-		minCommitTS := tc.getTS(txn.StartTS())
-		txn.KVTxn.SetMinCommitTS(minCommitTS)
+		commitUntil := tc.getTS(txn.StartTS())
+		txn.KVTxn.SetCommitWaitUntilTSO(commitUntil)
 		s.NoError(txn.Set([]byte("somekey"), []byte("somevalue")))
 		err = txn.Commit(context.Background())
 		s.Equal(tc.noError, err == nil)
@@ -92,4 +92,13 @@ func (s *testOptionSuite) TestSetMinCommitTSOption() {
 			s.Greater(txn.CommitTS(), uint64(100))
 		}
 	}
+}
+
+func (s *testOptionSuite) TestSetMaxClockDriftInActiveActiveReplicationOption() {
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	defer txn.Rollback()
+	s.Equal(time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
+	txn.KVTxn.SetMaxClockDriftInActiveActiveReplication(2 * time.Second)
+	s.Equal(2*time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
 }
