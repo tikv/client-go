@@ -438,14 +438,14 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		return s.asyncBatchGetByRegions(bo, batches, readTier, collectF)
 	}
 	ch := make(chan error, len(batches))
-	bo, cancel := bo.Fork()
+	forkedBo, cancel := bo.Fork()
 	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
-		if i == 0 {
-			backoffer = bo
+		if i == len(batches)-1 {
+			backoffer = forkedBo
 		} else {
-			backoffer = bo.Clone()
+			backoffer = forkedBo.Clone()
 		}
 		batch := batch1
 		go func() {

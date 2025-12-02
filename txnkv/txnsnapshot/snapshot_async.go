@@ -46,16 +46,15 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 	collectF func(k, v []byte),
 ) (err error) {
 	var (
-		runloop      = async.NewRunLoop()
-		completed    = 0
-		lastForkedBo *retry.Backoffer
+		runloop   = async.NewRunLoop()
+		completed = 0
 	)
 	runloop.Pool = &poolWrapper{pool: s.store}
 	forkedBo, cancel := bo.Fork()
 	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
-		if i == 0 {
+		if i == len(batches)-1 {
 			backoffer = forkedBo
 		} else {
 			backoffer = forkedBo.Clone()
@@ -65,7 +64,6 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			// The callback is designed to be executed in the runloop's goroutine thus it should be safe to update the
 			// following variables without locks.
 			completed++
-			lastForkedBo = backoffer
 			if e != nil {
 				logutil.BgLogger().Debug("snapshot BatchGetWithTier failed",
 					zap.Error(e),
@@ -79,9 +77,6 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			err = errors.WithStack(e)
 			break
 		}
-	}
-	if lastForkedBo != nil {
-		bo.UpdateUsingForked(lastForkedBo)
 	}
 	return err
 }
