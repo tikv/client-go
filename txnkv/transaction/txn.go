@@ -213,13 +213,13 @@ type KVTxn struct {
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 
-	// This minCommitTS does not has exactly same semantic with 2pc minCommitTSMgr.value.
-	// There might be suble subtle differs. (This minCommitTS value is not calculated, and is not
+	// This originCommitTS does not has exactly same semantic with 2pc minCommitTSMgr.value.
+	// There might be suble subtle differs. (This originCommitTS value is not calculated, and is not
 	// even from the same cluster) It's only used by active-active replication feature currently.
 	// To obtain correctness without the burden of too much reasoning, it is simply implemented by
-	// getting current TSO and comparing the value with this minCommitTS. And sleep if the current
-	// tso is less than minCommitTS.
-	minCommitTS uint64
+	// getting current TSO and comparing the value with this originCommitTS. And sleep if the current
+	// tso is less than originCommitTS.
+	originCommitTS uint64
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -344,10 +344,10 @@ func (txn *KVTxn) EnableForceSyncLog() {
 	txn.syncLog = true
 }
 
-// SetMinCommitTS sets the minimum commit timestamp for the transaction.
-func (txn *KVTxn) SetMinCommitTS(minCommitTS uint64) {
-	if minCommitTS > txn.minCommitTS {
-		txn.minCommitTS = minCommitTS
+// SetOriginCommitTS sets the minimum commit timestamp constraint for the transaction.
+func (txn *KVTxn) SetOriginCommitTS(originCommitTS uint64) {
+	if originCommitTS > txn.originCommitTS {
+		txn.originCommitTS = originCommitTS
 	}
 }
 
@@ -1929,17 +1929,22 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint
 		return ts, err
 	}
 
-	for retryTimes := 0; ts <= txn.minCommitTS && retryTimes < 2; retryTimes++ {
-		interval := oracle.GetTimeFromTS(txn.minCommitTS).Sub(oracle.GetTimeFromTS(ts))
-		if interval > time.Second {
-			return 0, errors.Errorf("commit_ts(%d) << min_commit_ts(%d), interval more than 1 second", ts, txn.minCommitTS)
+	for retryTimes := 0; ts <= txn.originCommitTS && retryTimes < 2; retryTimes++ {
+		interval := oracle.GetTimeFromTS(txn.originCommitTS).Sub(oracle.GetTimeFromTS(ts))
+		limit := config.GetGlobalConfig().MaxClockDriftInActiveActiveReplication
+		if limit > 0 && interval > limit {
+			return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.originCommitTS, interval)
 		}
 
 		if interval < time.Millisecond {
 			interval = time.Millisecond
 		}
 
-		time.Sleep(interval)
+		if err == nil {
+			err = errors.Errorf("clock drift from the upstream cluster")
+		}
+		bo.BackoffWithCfgAndMaxSleep(retry.BoMaxTsNotSynced, int(interval.Milliseconds()), err)
+
 		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
 		if err != nil {
 			return ts, err
