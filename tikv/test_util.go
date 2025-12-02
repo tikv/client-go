@@ -44,6 +44,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -66,6 +67,21 @@ func (c *CodecClient) SendRequest(ctx context.Context, addr string, req *tikvrpc
 		return nil, err
 	}
 	return c.codec.DecodeResponse(req, resp)
+}
+
+func (c *CodecClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	req, err := c.codec.EncodeRequest(req)
+	if err != nil {
+		cb.Invoke(nil, err)
+		return
+	}
+	cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+		if err != nil {
+			return nil, err
+		}
+		return c.codec.DecodeResponse(req, resp)
+	})
+	c.Client.SendRequestAsync(ctx, addr, req, cb)
 }
 
 // NewTestTiKVStore creates a test store with Option

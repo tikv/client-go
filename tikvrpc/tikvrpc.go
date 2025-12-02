@@ -730,6 +730,14 @@ type Response struct {
 	Resp interface{}
 }
 
+// ResponseExt likes Response but contains extra information.
+type ResponseExt struct {
+	Response
+	// The address of the target store. When forwarding is enabled, it points to the target node handling the request
+	// rather than the node forwarding the message.
+	Addr string
+}
+
 // FromBatchCommandsResponse converts a BatchCommands response to Response.
 func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Response, error) {
 	if res.GetCmd() == nil {
