@@ -288,6 +288,11 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	for _, l := range expiredLocks {
 		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
 
+		if l.IsShared() {
+			logutil.Logger(bo.GetCtx()).Warn("cannot resolve a shared lock directly, should extract the inner locks and resolve them one by one", zap.Stack("stack"))
+			return false, errors.New("misuse of BatchResolveLocks: trying to resolve a shared lock directly")
+		}
+
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
 		}
@@ -597,6 +602,10 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 
 	var canIgnore, canAccess []uint64
 	for _, l := range locks {
+		if l.IsShared() {
+			logutil.Logger(bo.GetCtx()).Warn("cannot resolve a shared lock directly, should extract the inner locks and resolve them one by one", zap.Stack("stack"))
+			return ResolveLockResult{}, errors.New("misuse of resolveLocks: trying to resolve a shared lock directly")
+		}
 		status, err := resolve(l, false)
 		if err != nil {
 			msBeforeTxnExpired.update(0)
