@@ -498,11 +498,13 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			TTL: msBeforeTxnExpired.value(),
 		}, nil
 	}
-	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.start",
-		zap.Uint64("callerStartTS", callerStartTS),
-		zap.Int("lockCount", len(locks)),
-		zap.Bool("forRead", forRead),
-		zap.Bool("lite", lite))
+	if trace.IsCategoryEnabled(trace.CategoryTxnLockResolve) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.start",
+			zap.Uint64("callerStartTS", callerStartTS),
+			zap.Int("lockCount", len(locks)),
+			zap.Bool("forRead", forRead),
+			zap.Bool("lite", lite))
+	}
 
 	// trace the results
 	defer func() {
