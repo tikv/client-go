@@ -288,9 +288,16 @@ func scanLocksInOneRegionWithRange(bo *retry.Backoffer, store Storage, startKey 
 			return nil, loc, errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
 		locksInfo := locksResp.GetLocks()
-		locks = make([]*txnlock.Lock, len(locksInfo))
+		locks = make([]*txnlock.Lock, 0, len(locksInfo))
 		for i := range locksInfo {
-			locks[i] = txnlock.NewLock(locksInfo[i])
+			if sharedLockInfos := locksInfo[i].GetSharedLockInfos(); sharedLockInfos != nil {
+				// expand shared lock into multiple locks, and drop the dummy wrapper lock.
+				for _, sharedLockInfo := range sharedLockInfos {
+					locks = append(locks, txnlock.NewLock(sharedLockInfo))
+				}
+				continue
+			}
+			locks = append(locks, txnlock.NewLock(locksInfo[i]))
 		}
 		return locks, loc, nil
 	}

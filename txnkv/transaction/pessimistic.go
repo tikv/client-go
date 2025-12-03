@@ -150,10 +150,14 @@ func (action actionPessimisticLock) handleSingleBatch(
 ) error {
 	convertMutationsToPb := func(committerMutations CommitterMutations) []*kvrpcpb.Mutation {
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
+		op := kvrpcpb.Op_PessimisticLock
+		if action.LockCtx.InShareMode {
+			op = kvrpcpb.Op_SharedPessimisticLock
+		}
 		c.txn.GetMemBuffer().RLock()
 		for i := 0; i < committerMutations.Len(); i++ {
 			mut := &kvrpcpb.Mutation{
-				Op:  kvrpcpb.Op_PessimisticLock,
+				Op:  op,
 				Key: committerMutations.GetKey(i),
 			}
 			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) {
@@ -296,10 +300,24 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		// Do not resolve the lock if the lock was recently updated which indicates the txn holding the lock is
 		// much likely alive.
 		// This should only happen for wait timeout.
-		if lockInfo := keyErr.GetLocked(); lockInfo != nil &&
-			lockInfo.DurationToLastUpdateMs > 0 &&
-			lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
-			continue
+		lockInfo := keyErr.GetLocked()
+		if lockInfo != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); sharedLockInfos != nil {
+				for _, sharedLockInfo := range sharedLockInfos {
+					if sharedLockInfo.DurationToLastUpdateMs > 0 &&
+						sharedLockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+						continue
+					}
+					lock := txnlock.NewLock(sharedLockInfo)
+					locks = append(locks, lock)
+				}
+				// If there are shared locks, the wrapper lock is meaningless.
+				continue
+			}
+			if lockInfo.DurationToLastUpdateMs > 0 &&
+				lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+				continue
+			}
 		}
 
 		// Extract lock from key error
