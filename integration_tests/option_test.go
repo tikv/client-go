@@ -98,7 +98,7 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSOTimeout() {
 	txn, err := s.store.Begin()
 	s.NoError(err)
 	defer txn.Rollback()
-	s.Equal(time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
+	s.Equal(time.Second, txn.GetCommitWaitUntilTSOTimeout())
 	txn.KVTxn.SetCommitWaitUntilTSOTimeout(2 * time.Second)
-	s.Equal(2*time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
+	s.Equal(2*time.Second, txn.GetCommitWaitUntilTSOTimeout())
 }
