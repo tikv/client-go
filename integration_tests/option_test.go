@@ -61,7 +61,7 @@ func TestOption(t *testing.T) {
 	suite.Run(t, new(testOptionSuite))
 }
 
-func (s *testOptionSuite) TestSetMinCommitTSOption() {
+func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 	getTS1 := func(startTS uint64) uint64 { return 100 }
 	getTS2 := func(startTS uint64) uint64 {
 		return startTS + 200
@@ -94,11 +94,11 @@ func (s *testOptionSuite) TestSetMinCommitTSOption() {
 	}
 }
 
-func (s *testOptionSuite) TestSetMaxClockDriftInActiveActiveReplicationOption() {
+func (s *testOptionSuite) TestSetCommitWaitUntilTSOTimeout() {
 	txn, err := s.store.Begin()
 	s.NoError(err)
 	defer txn.Rollback()
 	s.Equal(time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
-	txn.KVTxn.SetMaxClockDriftInActiveActiveReplication(2 * time.Second)
+	txn.KVTxn.SetCommitWaitUntilTSOTimeout(2 * time.Second)
 	s.Equal(2*time.Second, txn.GetMaxClockDriftInActiveActiveReplication())
 }

@@ -137,7 +137,7 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKey
 }
 
 func (txn TxnProbe) GetMaxClockDriftInActiveActiveReplication() time.Duration {
-	return txn.KVTxn.maxClockDriftInActiveActiveReplication
+	return txn.KVTxn.commitWaitUntilTSOTimeout
 }
 
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {

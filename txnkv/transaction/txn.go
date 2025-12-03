@@ -218,27 +218,27 @@ type KVTxn struct {
 	// The commit TS of this transaction (downstream) must be greater than original CommitTS (upstream).
 	// GetTimestampWithRetry may sleep and retry to guarantee this constraint.
 	commitWaitUntilTSO uint64
-	// maxClockDriftInActiveActiveReplication is the maximum clock drift allowed in active-active replication.
-	maxClockDriftInActiveActiveReplication time.Duration
+	// commitWaitUntilTSOTimeout is the maximum clock drift allowed in active-active replication.
+	commitWaitUntilTSOTimeout time.Duration
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:                               snapshot,
-		store:                                  store,
-		startTS:                                startTS,
-		startTime:                              time.Now(),
-		valid:                                  true,
-		vars:                                   tikv.DefaultVars,
-		scope:                                  options.TxnScope,
-		enableAsyncCommit:                      cfg.EnableAsyncCommit,
-		enable1PC:                              cfg.Enable1PC,
-		diskFullOpt:                            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:                          snapshot.RequestSource,
-		flushBatchDurationEWMA:                 ewma.NewMovingAverage(defaultEWMAAge),
-		maxClockDriftInActiveActiveReplication: time.Second,
+		snapshot:                  snapshot,
+		store:                     store,
+		startTS:                   startTS,
+		startTime:                 time.Now(),
+		valid:                     true,
+		vars:                      tikv.DefaultVars,
+		scope:                     options.TxnScope,
+		enableAsyncCommit:         cfg.EnableAsyncCommit,
+		enable1PC:                 cfg.Enable1PC,
+		diskFullOpt:               kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:             snapshot.RequestSource,
+		flushBatchDurationEWMA:    ewma.NewMovingAverage(defaultEWMAAge),
+		commitWaitUntilTSOTimeout: time.Second,
 	}
 	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
@@ -352,9 +352,9 @@ func (txn *KVTxn) SetCommitWaitUntilTSO(commitWaitUntilTSO uint64) {
 	}
 }
 
-// SetMaxClockDriftInActiveActiveReplication sets the maximum clock drift allowed in active-active replication.
-func (txn *KVTxn) SetMaxClockDriftInActiveActiveReplication(val time.Duration) {
-	txn.maxClockDriftInActiveActiveReplication = val
+// SetCommitWaitUntilTSOTimeout sets the maximum clock drift allowed in active-active replication.
+func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
+	txn.commitWaitUntilTSOTimeout = val
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -1934,28 +1934,37 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint
 	if err != nil {
 		return ts, err
 	}
+	if ts > txn.commitWaitUntilTSO {
+		return ts, nil
+	}
 
-	for retryTimes := 0; ts <= txn.commitWaitUntilTSO && retryTimes < 2; retryTimes++ {
-		interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
-		if txn.maxClockDriftInActiveActiveReplication > 0 && interval > txn.maxClockDriftInActiveActiveReplication {
-			return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
-		}
+	// slow path
+	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
+	if txn.commitWaitUntilTSOTimeout > 0 && interval > txn.commitWaitUntilTSOTimeout {
+		return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
+	}
 
-		if interval < time.Millisecond {
-			interval = time.Millisecond
+	maxSleep := 1000
+	if txn.commitWaitUntilTSOTimeout > 0 {
+		maxSleep = int(txn.commitWaitUntilTSOTimeout.Milliseconds())
+	}
+	bo = retry.NewBackoffer(bo.GetCtx(), maxSleep)
+	err = errors.Errorf("clock drift from the upstream cluster")
+	for ts <= txn.commitWaitUntilTSO {
+		// It's neither sleeping interval milliseconds (maybe sleep too long without handling any context.Cancel)
+		// nor sleep every 1ms until we reach the lag interval (maybe we just lag for 1ms, and but PD update the physical time every 50ms,
+		// so after sleeping 1ms, the next GetTimestamp still return the same physical part value)
+		// Just backoff, blindly.
+		err = bo.Backoff(retry.BoMaxTsNotSynced, err)
+		if err != nil {
+			return 0, err
 		}
-
-		if err == nil {
-			err = errors.Errorf("clock drift from the upstream cluster")
-		}
-		bo.BackoffWithCfgAndMaxSleep(retry.BoMaxTsNotSynced, int(interval.Milliseconds()), err)
 
 		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
 		if err != nil {
-			return ts, err
+			return 0, err
 		}
 	}
-
 	return ts, err
 }
 
