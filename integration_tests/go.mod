@@ -2,6 +2,8 @@ module integration_tests
 
 go 1.24.1
 
+replace github.com/tikv/pd/client => github.com/bufferflies/pd/client v0.0.0-20251113073927-030b4e3ceaca
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/ninedraft/israce v0.0.3
