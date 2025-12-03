@@ -1949,13 +1949,13 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint
 		maxSleep = int(txn.commitWaitUntilTSOTimeout.Milliseconds())
 	}
 	bo = retry.NewBackoffer(bo.GetCtx(), maxSleep)
-	err = errors.Errorf("clock drift from the upstream cluster")
+	mockErr := errors.Errorf("clock drift from the upstream cluster")
 	for ts <= txn.commitWaitUntilTSO {
 		// It's neither sleeping interval milliseconds (maybe sleep too long without handling any context.Cancel)
 		// nor sleep every 1ms until we reach the lag interval (maybe we just lag for 1ms, and but PD update the physical time every 50ms,
 		// so after sleeping 1ms, the next GetTimestamp still return the same physical part value)
 		// Just backoff, blindly.
-		err = bo.Backoff(retry.BoMaxTsNotSynced, err)
+		err = bo.Backoff(retry.BoMaxTsNotSynced, mockErr)
 		if err != nil {
 			return 0, err
 		}
