@@ -1939,15 +1939,15 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint
 	}
 
 	// slow path
-	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
-	if txn.commitWaitUntilTSOTimeout > 0 && interval > txn.commitWaitUntilTSOTimeout {
-		return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
-	}
-
 	maxSleep := 1000
 	if txn.commitWaitUntilTSOTimeout > 0 {
 		maxSleep = int(txn.commitWaitUntilTSOTimeout.Milliseconds())
 	}
+	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
+	if int(interval.Milliseconds()) > maxSleep {
+		return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
+	}
+
 	bo = retry.NewBackoffer(bo.GetCtx(), maxSleep)
 	mockErr := errors.Errorf("clock drift from the upstream cluster")
 	for ts <= txn.commitWaitUntilTSO {

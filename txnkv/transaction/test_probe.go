@@ -136,7 +136,7 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKey
 	return keys
 }
 
-func (txn TxnProbe) GetMaxClockDriftInActiveActiveReplication() time.Duration {
+func (txn TxnProbe) GetCommitWaitUntilTSOTimeout() time.Duration {
 	return txn.KVTxn.commitWaitUntilTSOTimeout
 }
 
