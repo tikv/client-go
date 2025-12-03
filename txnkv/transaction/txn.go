@@ -1263,10 +1263,18 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	}
 
 	defer func() {
-		if txn.isInternal() {
-			metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+		if lockCtx.InShareMode {
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithSharedLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithSharedLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		} else {
-			metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		}
 		if err == nil {
 			if lockCtx.PessimisticLockWaited != nil {
@@ -1277,8 +1285,14 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				}
 			}
 		}
-		if lockCtx.LockKeysCount != nil {
-			*lockCtx.LockKeysCount += int32(len(keys))
+		if lockCtx.InShareMode {
+			if lockCtx.SharedLockKeysCount != nil {
+				*lockCtx.SharedLockKeysCount += int32(len(keys))
+			}
+		} else {
+			if lockCtx.LockKeysCount != nil {
+				*lockCtx.LockKeysCount += int32(len(keys))
+			}
 		}
 		if lockCtx.Stats != nil {
 			lockCtx.Stats.TotalTime = time.Since(startTime)
@@ -1295,6 +1309,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
+	}
+
+	if lockCtx.InShareMode && txn.IsInAggressiveLockingMode() {
+		// Shared lock in aggressive locking mode is not supported.
+		txn.DoneAggressiveLocking(ctx)
 	}
 
 	memBuf := txn.us.GetMemBuffer()

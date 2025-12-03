@@ -133,6 +133,7 @@ const (
 	LblBatchGet        = "batch_get"
 	LblGet             = "get"
 	LblLockKeys        = "lock_keys"
+	LblSharedLockKeys  = "shared_lock_keys"
 	LabelBatchRecvLoop = "batch-recv-loop"
 	LabelBatchSendLoop = "batch-send-loop"
 	LblAddress         = "address"
