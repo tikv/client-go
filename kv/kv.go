@@ -64,6 +64,7 @@ type LockCtx struct {
 	PessimisticLockWaited   *int32
 	LockKeysDuration        *int64
 	LockKeysCount           *int32
+	SharedLockKeysCount     *int32
 	ReturnValues            bool
 	CheckExistence          bool
 	LockOnlyIfExists        bool
