@@ -37,6 +37,8 @@ package txnsnapshot
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"fmt"
 	"math"
 	"runtime"
 	"strconv"
@@ -64,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -136,7 +139,7 @@ type KVSnapshot struct {
 	mu struct {
 		sync.RWMutex
 		hitCnt           int64
-		cached           map[string][]byte
+		cached           map[string]kv.ValueEntry
 		cachedSize       int
 		stats            *SnapshotRuntimeStats
 		replicaRead      kv.ReplicaReadType
@@ -206,8 +209,12 @@ func (s *KVSnapshot) IsInternal() bool {
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
 // The map will not contain nonexistent keys.
 // NOTE: Don't modify keys. Some codes rely on the order of keys.
-func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	return s.BatchGetWithTier(ctx, keys, BatchGetSnapshotTier)
+func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte, options ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+	var opt kv.BatchGetOptions
+	if len(options) > 0 {
+		opt.Apply(options)
+	}
+	return s.BatchGetWithTier(ctx, keys, BatchGetSnapshotTier, opt)
 }
 
 // BatchGet tiers indicate the read tier of the batch get request.
@@ -221,17 +228,34 @@ const (
 )
 
 // BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
-func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int) (map[string][]byte, error) {
+func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int, opt kv.BatchGetOptions) (m map[string]kv.ValueEntry, err error) {
+	if intest.InTest && opt.RequireCommitTS() && readTier == BatchGetSnapshotTier {
+		defer func() {
+			if err != nil {
+				return
+			}
+			for key, entry := range m {
+				if entry.CommitTS == 0 {
+					panic(fmt.Sprintf(
+						"commit ts is required but not returned for key: %s, value: %s",
+						hex.EncodeToString([]byte(key)), hex.EncodeToString(entry.Value),
+					))
+				}
+			}
+		}()
+	}
+
 	// Check the cached value first.
-	m := make(map[string][]byte)
+	m = make(map[string]kv.ValueEntry)
 	s.mu.RLock()
 	if s.mu.cached != nil && readTier == BatchGetSnapshotTier {
 		tmp := make([][]byte, 0, len(keys))
+		requireCommitTS := opt.RequireCommitTS()
 		for _, key := range keys {
-			if val, ok := s.mu.cached[string(key)]; ok {
+			if entry, ok := s.getSnapCacheWithoutLock(key, requireCommitTS); ok {
 				atomic.AddInt64(&s.mu.hitCnt, 1)
-				if len(val) > 0 {
-					m[string(key)] = val
+				if !entry.IsValueEmpty() {
+					m[string(key)] = entry
 				}
 			} else {
 				tmp = append(tmp, key)
@@ -260,9 +284,9 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
-	err := s.batchGetKeysByRegions(bo, keys, readTier, config.GetGlobalConfig().EnableAsyncBatchGet, func(k, v []byte) {
+	err = s.batchGetKeysByRegions(bo, keys, readTier, config.GetGlobalConfig().EnableAsyncBatchGet, opt, func(k []byte, v kv.ValueEntry) {
 		// when read buffer tier, empty value means a delete record, should also collect it.
-		if len(v) == 0 && readTier != BatchGetBufferTier {
+		if v.IsValueEmpty() && readTier != BatchGetBufferTier {
 			return
 		}
 
@@ -335,7 +359,7 @@ type batchGetLockInfo struct {
 
 func collectBatchGetResponseData(
 	resp *tikvrpc.Response,
-	onKvPair func([]byte, []byte),
+	onKvPair func([]byte, kv.ValueEntry),
 	onDetails func(*kvrpcpb.ExecDetailsV2),
 ) (*batchGetLockInfo, error) {
 	if resp.Resp == nil {
@@ -370,7 +394,7 @@ func collectBatchGetResponseData(
 		for _, pair := range pairs {
 			keyErr := pair.GetError()
 			if keyErr == nil {
-				onKvPair(pair.GetKey(), pair.GetValue())
+				onKvPair(pair.GetKey(), kv.NewValueEntry(pair.GetValue(), pair.GetCommitTs()))
 				continue
 			}
 			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
@@ -404,7 +428,7 @@ func growStackForBatchGetWorker() {
 	runtime.KeepAlive(ballast[:])
 }
 
-func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, tryAsyncAPI bool, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, tryAsyncAPI bool, opt kv.BatchGetOptions, collectF func(k []byte, v kv.ValueEntry)) error {
 	defer func(start time.Time) {
 		if s.IsInternal() {
 			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
@@ -432,10 +456,10 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		return nil
 	}
 	if len(batches) == 1 {
-		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
+		return s.batchGetSingleRegion(bo, batches[0], readTier, opt, collectF)
 	}
 	if tryAsyncAPI {
-		return s.asyncBatchGetByRegions(bo, batches, readTier, collectF)
+		return s.asyncBatchGetByRegions(bo, batches, readTier, opt, collectF)
 	}
 	ch := make(chan error, len(batches))
 	var lastForkedBo atomic.Pointer[retry.Backoffer]
@@ -451,7 +475,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		batch := batch1
 		go func() {
 			growStackForBatchGetWorker()
-			e := s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
+			e := s.batchGetSingleRegion(backoffer, batch, readTier, opt, collectF)
 			lastForkedBo.Store(backoffer)
 			ch <- e
 		}()
@@ -468,7 +492,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 	return err
 }
 
-func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, readTier int) (*tikvrpc.Request, error) {
+func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, readTier int, opt kv.BatchGetOptions) (*tikvrpc.Request, error) {
 	ctx := kvrpcpb.Context{
 		Priority:         s.priority.ToPB(),
 		NotFillCache:     s.notFillCache,
@@ -483,8 +507,9 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 	switch readTier {
 	case BatchGetSnapshotTier:
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
-			Keys:    keys,
-			Version: s.version,
+			Keys:         keys,
+			Version:      s.version,
+			NeedCommitTs: opt.RequireCommitTS(),
 		}, s.mu.replicaRead, &s.replicaReadSeed, ctx)
 		return req, nil
 	case BatchGetBufferTier:
@@ -494,6 +519,7 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBufferBatchGet, &kvrpcpb.BufferBatchGetRequest{
 			Keys:    keys,
 			Version: s.version,
+			// CmdBufferBatchGet does not support returning commit ts because the return values are not committed yet.
 		}, s.mu.replicaRead, &s.replicaReadSeed, ctx)
 		return req, nil
 	default:
@@ -528,7 +554,7 @@ func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGet
 	return nil
 }
 
-func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, readTier int, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, readTier int, opt kv.BatchGetOptions, collectF func(k []byte, v kv.ValueEntry)) error {
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
@@ -548,7 +574,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	var readType string
 	for {
 		s.mu.RLock()
-		req, err := s.buildBatchGetRequest(pending, busyThresholdMs, readTier)
+		req, err := s.buildBatchGetRequest(pending, busyThresholdMs, readTier, opt)
 		if err != nil {
 			s.mu.RUnlock()
 			return err
@@ -602,7 +628,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				return err
 			}
 			if !retriable {
-				return s.batchGetKeysByRegions(bo, pending, readTier, false, collectF)
+				return s.batchGetKeysByRegions(bo, pending, readTier, false, opt, collectF)
 			}
 			continue
 		}
@@ -641,25 +667,38 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 const getMaxBackoff = 20000
 
 // Get gets the value for key k from snapshot.
-func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption) (entry kv.ValueEntry, err error) {
+	var opt kv.GetOptions
+	if len(options) > 0 {
+		opt.Apply(options)
+	}
+
 	defer func(start time.Time) {
 		if s.IsInternal() {
 			metrics.TxnCmdHistogramWithGetInternal.Observe(time.Since(start).Seconds())
 		} else {
 			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
 		}
+
+		if intest.InTest && err == nil && opt.RequireCommitTS() && entry.CommitTS == 0 {
+			panic(fmt.Sprintf(
+				"commit ts is required but not returned for key: %s, value: %s",
+				hex.EncodeToString(k), hex.EncodeToString(entry.Value),
+			))
+		}
 	}(time.Now())
 
 	s.mu.RLock()
 	// Check the cached values first.
 	if s.mu.cached != nil {
-		if value, ok := s.mu.cached[string(k)]; ok {
+		var ok bool
+		if entry, ok = s.getSnapCacheWithoutLock(k, opt.RequireCommitTS()); ok {
 			atomic.AddInt64(&s.mu.hitCnt, 1)
 			s.mu.RUnlock()
-			if len(value) == 0 {
-				return nil, tikverr.ErrNotExist
+			if entry.IsValueEmpty() {
+				return kv.ValueEntry{}, tikverr.ErrNotExist
 			}
-			return value, nil
+			return entry, nil
 		}
 	}
 	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
@@ -680,24 +719,24 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.mu.interceptor))
 	}
 	s.mu.RUnlock()
-	val, err := s.get(ctx, bo, k)
+	entry, err = s.get(ctx, bo, k, opt)
 	s.recordBackoffInfo(bo)
 	if err != nil {
-		return nil, err
+		return kv.ValueEntry{}, err
 	}
 	err = s.store.CheckVisibility(s.version)
 	if err != nil {
-		return nil, err
+		return kv.ValueEntry{}, err
 	}
 	// Update the cache.
-	s.UpdateSnapshotCache([][]byte{k}, map[string][]byte{string(k): val})
-	if len(val) == 0 {
-		return nil, tikverr.ErrNotExist
+	s.UpdateSnapshotCache([][]byte{k}, map[string]kv.ValueEntry{string(k): entry})
+	if entry.IsValueEmpty() {
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
-	return val, nil
+	return entry, nil
 }
 
-func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]byte, error) {
+func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt kv.GetOptions) (kv.ValueEntry, error) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikvSnapshot.get", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -714,8 +753,9 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet,
 		&kvrpcpb.GetRequest{
-			Key:     k,
-			Version: s.version,
+			Key:          k,
+			Version:      s.version,
+			NeedCommitTs: opt.RequireCommitTS(),
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
@@ -760,7 +800,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
 		if err != nil {
-			return nil, err
+			return kv.ValueEntry{}, err
 		}
 		timeout := client.ReadTimeoutShort
 		if useConfigurableKVTimeout && s.readTimeout > 0 {
@@ -770,20 +810,20 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 		resp, _, _, err := cli.SendReqCtx(bo, req, loc.Region, timeout, tikvrpc.TiKV, "", ops...)
 		if err != nil {
-			return nil, err
+			return kv.ValueEntry{}, err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return nil, err
+			return kv.ValueEntry{}, err
 		}
 		if regionErr != nil {
 			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
-				return nil, err
+				return kv.ValueEntry{}, err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return nil, errors.WithStack(tikverr.ErrBodyMissing)
+			return kv.ValueEntry{}, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		if cmdGetResp.ExecDetailsV2 != nil {
@@ -799,10 +839,11 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			s.mergeExecDetail(cmdGetResp.ExecDetailsV2)
 		}
 		val := cmdGetResp.GetValue()
+		commitTS := cmdGetResp.GetCommitTs()
 		if keyErr := cmdGetResp.GetError(); keyErr != nil {
 			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err != nil {
-				return nil, err
+				return kv.ValueEntry{}, err
 			}
 			if firstLock == nil {
 				// we need to read from leader after resolving the lock.
@@ -833,19 +874,19 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			}
 			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			if err != nil {
-				return nil, err
+				return kv.ValueEntry{}, err
 			}
 			msBeforeExpired := resolveLocksRes.TTL
 			if msBeforeExpired > 0 {
 				redact.RedactKeyErrIfNecessary(keyErr)
 				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.New(keyErr.String()))
 				if err != nil {
-					return nil, err
+					return kv.ValueEntry{}, err
 				}
 			}
 			continue
 		}
-		return val, nil
+		return kv.NewValueEntry(val, commitTS), nil
 	}
 }
 
@@ -1029,10 +1070,10 @@ func (s *KVSnapshot) SnapCacheSize() int {
 }
 
 // SnapCache gets the copy of snapshot cache. Only for test.
-func (s *KVSnapshot) SnapCache() map[string][]byte {
+func (s *KVSnapshot) SnapCache() map[string]kv.ValueEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cp := make(map[string][]byte, len(s.mu.cached))
+	cp := make(map[string]kv.ValueEntry, len(s.mu.cached))
 	for k, v := range s.mu.cached {
 		cp[k] = v
 	}
@@ -1040,7 +1081,7 @@ func (s *KVSnapshot) SnapCache() map[string][]byte {
 }
 
 // UpdateSnapshotCache sets the values of cache, for further fast read with same keys.
-func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
+func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string]kv.ValueEntry) {
 	// s.version == math.MaxUint64 is used in special transaction, which always read the latest data.
 	// do not cache it to avoid anomaly.
 	if s.version == math.MaxUint64 {
@@ -1049,12 +1090,14 @@ func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.cached == nil {
-		s.mu.cached = make(map[string][]byte, min(len(keys), 8))
+		s.mu.cached = make(map[string]kv.ValueEntry, min(len(keys), 8))
 	}
 	for _, key := range keys {
 		val := m[string(key)]
-		s.mu.cachedSize += len(key) + len(val)
-		s.mu.cachedSize -= len(s.mu.cached[string(key)])
+		s.mu.cachedSize += len(key) + val.Size()
+		if oldVal, ok := s.mu.cached[string(key)]; ok {
+			s.mu.cachedSize -= oldVal.Size()
+		}
 		s.mu.cached[string(key)] = val
 	}
 
@@ -1065,7 +1108,7 @@ func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
 				continue
 			}
 			delete(s.mu.cached, k)
-			s.mu.cachedSize -= len(k) + len(v)
+			s.mu.cachedSize -= len(k) + v.Size()
 			if s.mu.cachedSize < cachedSizeLimit {
 				break
 			}
@@ -1079,9 +1122,31 @@ func (s *KVSnapshot) CleanCache(keys [][]byte) {
 	defer s.mu.Unlock()
 	for _, key := range keys {
 		s.mu.cachedSize -= len(key)
-		s.mu.cachedSize -= len(s.mu.cached[string(key)])
-		delete(s.mu.cached, string(key))
+		if oldVal, ok := s.mu.cached[string(key)]; ok {
+			s.mu.cachedSize -= oldVal.Size()
+			delete(s.mu.cached, string(key))
+		}
 	}
+}
+
+func (s *KVSnapshot) getSnapCacheWithoutLock(key []byte, requireCommitTS bool) (entry kv.ValueEntry, ok bool) {
+	if entry, ok = s.mu.cached[string(key)]; ok {
+		if !requireCommitTS {
+			// If commit timestamp is not required, we can return the cached entry directly.
+			// Though return the commit ts if requireCommitTS is false is also acceptable,
+			// we still set the `entry.CommitTS = 0` to keep the behavior consistent with no cache hit case.
+			entry.CommitTS = 0
+			return
+		}
+
+		// Otherwise, if commit timestamp is required:
+		// - When `entry.CommitTS > 0`, we can return the cached entry directly because the commit ts is present.
+		// - When `entry.IsValueEmpty()`, it means the key does not exist, we can also return the cached empty entry.
+		if entry.IsValueEmpty() || entry.CommitTS > 0 {
+			return
+		}
+	}
+	return kv.ValueEntry{}, false
 }
 
 // SetVars sets variables to the transaction.
