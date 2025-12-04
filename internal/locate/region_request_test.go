@@ -219,6 +219,60 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 	s.Run("AsyncAPI", test)
 }
 
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupError() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	// test ErrClientGetResourceGroup with "resource group does not exist" cause should not retry
+	func() {
+		oc := s.regionRequestSender.client
+		defer func() {
+			s.regionRequestSender.client = oc
+		}()
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			return nil, &pderr.ErrClientGetResourceGroup{Cause: "resource group does not exist"}
+		}}
+		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+		_, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		s.NotNil(err)
+		var errGetResourceGroup *pderr.ErrClientGetResourceGroup
+		s.True(errors.As(err, &errGetResourceGroup))
+		s.Equal("resource group does not exist", errGetResourceGroup.Cause)
+		// should not have backoff since error is directly returned
+		s.Equal(0, bo.GetTotalBackoffTimes())
+	}()
+
+	// test ErrClientGetResourceGroup with other causes should retry with backoff
+	func() {
+		oc := s.regionRequestSender.client
+		defer func() {
+			s.regionRequestSender.client = oc
+		}()
+		callCount := 0
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			callCount++
+			if callCount < 2 {
+				return nil, &pderr.ErrClientGetResourceGroup{Cause: "not leader"}
+			}
+			// return success after first retry
+			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{}}, nil
+		}}
+		bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
+		resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		s.Nil(err)
+		s.NotNil(resp)
+		// should have backoff since error triggered retry
+		s.Greater(bo.GetTotalBackoffTimes(), 0)
+		// should have retried at least once
+		s.GreaterOrEqual(callCount, 2)
+	}()
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart() {
 	s.testOnSendFailedWithStoreRestart()
 }

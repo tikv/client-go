@@ -111,8 +111,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW93SG+q0F8KI+yFrcIDT4c/RNoc4=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
-github.com/tikv/pd/client v0.0.0-20250625073039-fb496b371ff3 h1:lAuYtEVeJQ+FaD1WrYEJhnMHl5YeREq39QSqCXGDk6s=
-github.com/tikv/pd/client v0.0.0-20250625073039-fb496b371ff3/go.mod h1:SicyvcZE0fzrGGWW3AEtZWWPRzGw/h5img4/6qiSYws=
+github.com/tikv/pd/client v0.0.0-20251110024032-264a65392018 h1:7VY8pOJikojUzh/ducMlhAhkn8wPvsEf1/uoUgK85Pc=
+github.com/tikv/pd/client v0.0.0-20251110024032-264a65392018/go.mod h1:GYbMoLE5+FyMQ5f/1i6jsR7L6mLVkCLeldone1xxj1w=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
