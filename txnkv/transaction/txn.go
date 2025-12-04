@@ -1311,9 +1311,18 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
 	}
 
-	if lockCtx.InShareMode && txn.IsInAggressiveLockingMode() {
+	if lockCtx.InShareMode {
+		// create shared lock span in tracing.
+		if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+			span1 := span.Tracer().StartSpan("Shared Lock", opentracing.ChildOf(span.Context()))
+			defer span1.Finish()
+			ctx = opentracing.ContextWithSpan(ctx, span1)
+		}
+
 		// Shared lock in aggressive locking mode is not supported.
-		txn.DoneAggressiveLocking(ctx)
+		if txn.IsInAggressiveLockingMode() {
+			txn.DoneAggressiveLocking(ctx)
+		}
 	}
 
 	memBuf := txn.us.GetMemBuffer()
