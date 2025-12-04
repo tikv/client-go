@@ -1356,10 +1356,18 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	}
 
 	defer func() {
-		if txn.isInternal() {
-			metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+		if lockCtx.InShareMode {
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithSharedLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithSharedLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		} else {
-			metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		}
 		if lockCtx.Stats != nil {
 			lockCtx.Stats.TotalTime = time.Since(startTime)
@@ -1376,6 +1384,20 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
+	}
+
+	if lockCtx.InShareMode {
+		// create shared lock span in tracing.
+		if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+			span1 := span.Tracer().StartSpan("Shared Lock", opentracing.ChildOf(span.Context()))
+			defer span1.Finish()
+			ctx = opentracing.ContextWithSpan(ctx, span1)
+		}
+
+		// Shared lock in aggressive locking mode is not supported.
+		if txn.IsInAggressiveLockingMode() {
+			txn.DoneAggressiveLocking(ctx)
+		}
 	}
 
 	memBuf := txn.us.GetMemBuffer()
