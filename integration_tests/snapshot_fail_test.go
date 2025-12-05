@@ -46,7 +46,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -289,7 +288,7 @@ func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
 }
 
 func (s *testSnapshotFailSuite) getLock(key []byte) *txnkv.Lock {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{

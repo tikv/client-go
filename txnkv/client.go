@@ -22,7 +22,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util"
@@ -122,7 +121,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 // GetTimestamp returns the current global timestamp.
 func (c *Client) GetTimestamp(ctx context.Context) (uint64, error) {
 	bo := retry.NewBackofferWithVars(ctx, transaction.TsoMaxBackoff, nil)
-	startTS, err := c.GetTimestampWithRetry(bo, oracle.GlobalTxnScope)
+	startTS, err := c.GetTimestampWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}

@@ -1243,7 +1243,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
-	req.TxnScope = oracle.GlobalTxnScope
 	req.EnableStaleWithMixedReplicaRead()
 	req.ReplicaReadType = kv.ReplicaReadFollower
 
@@ -1426,7 +1425,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
-	req.TxnScope = oracle.GlobalTxnScope
 	req.EnableStaleWithMixedReplicaRead()
 	bo := retry.NewBackoffer(context.Background(), -1)
 	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
@@ -1449,7 +1447,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
 	// make request
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadPreferLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
-	req.TxnScope = oracle.GlobalTxnScope
 
 	// setup mock client
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
@@ -1612,7 +1609,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadMixed, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
-	req.TxnScope = oracle.GlobalTxnScope
 
 	downStore := s.cluster.GetStore(s.storeIDs[2])
 	s.cluster.MarkPeerDown(s.peerIDs[2])

@@ -31,7 +31,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -78,7 +77,7 @@ func (s *testPipelinedMemDBSuite) TearDownTest() {
 }
 
 func (s *testPipelinedMemDBSuite) mustGetLock(key []byte) *txnkv.Lock {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
