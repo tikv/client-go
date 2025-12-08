@@ -1926,6 +1926,12 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	regionErrLabel := regionErrorToLabel(regionErr)
+	if regionErrLabel == "unknown" {
+		logutil.Logger(bo.GetCtx()).Info(
+			"unknown region error",
+			zap.Stringer("error", regionErr),
+		)
+	}
 	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, storeIDLabel(ctx)).Inc()
 	if s.Stats != nil {
 		s.Stats.RecordRPCErrorStats(regionErrLabel)
