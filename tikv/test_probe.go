@@ -130,7 +130,7 @@ func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxV
 
 outerLoop:
 	for {
-		locks, loc, err := scanLocksInOneRegionWithStartKey(bo, s.KVStore, startKey, maxVersion, limit)
+		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, nil, maxVersion, limit)
 		if err != nil {
 			return nil, err
 		}

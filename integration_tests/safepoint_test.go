@@ -146,4 +146,6 @@ func (s *testSafePointSuite) TestSafePoint() {
 	isMayFallBehind = strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind = isFallBehind || isMayFallBehind
 	s.True(isBehind)
+	// sleep to wait for the next transaction will get a valid startTS to make the next test stable.
+	time.Sleep(time.Second)
 }

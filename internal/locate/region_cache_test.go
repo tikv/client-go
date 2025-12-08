@@ -3158,3 +3158,34 @@ func (s *testRegionCacheSuite) TestUpdateBucketsConcurrently() {
 	time.Sleep(100 * time.Millisecond)
 	s.Equal(uint64(2), atomic.LoadUint64(&count))
 }
+
+func (s *testRegionCacheSuite) TestLocateRegionByIDFromPD() {
+	// Create a new region that's not in cache yet
+	region2 := s.cluster.AllocID()
+	newPeers := s.cluster.AllocIDs(2)
+	s.cluster.Split(s.region1, region2, []byte("b"), newPeers, newPeers[0])
+
+	// Verify region2 is not in cache initially
+	cachedRegion := s.cache.GetCachedRegionWithRLock(RegionVerID{region2, 0, 0})
+	s.Nil(cachedRegion)
+
+	// Call LocateRegionByIDFromPD
+	loc, err := s.cache.LocateRegionByIDFromPD(s.bo, region2)
+	s.NoError(err)
+	s.NotNil(loc)
+	s.Equal(region2, loc.Region.id)
+
+	// Verify region2 is still NOT in cache (key difference from LocateRegionByID)
+	cachedRegion = s.cache.GetCachedRegionWithRLock(RegionVerID{region2, 0, 0})
+	s.Nil(cachedRegion)
+
+	// Compare with LocateRegionByID which DOES insert into cache
+	loc2, err := s.cache.LocateRegionByID(s.bo, region2)
+	s.NoError(err)
+	s.NotNil(loc2)
+
+	// Now region2 should be in cache
+	cachedRegion = s.cache.GetCachedRegionWithRLock(loc2.Region)
+	s.NotNil(cachedRegion)
+	s.Equal(region2, cachedRegion.GetID())
+}
