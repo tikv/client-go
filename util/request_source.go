@@ -41,6 +41,10 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 	// InternalTxnStats is the type of statistics txn.
 	InternalTxnStats = "stats"
+	// InternalTxnBR is the type of BR usage.
+	InternalTxnBR = "br"
+	// InternalImportInto is the type of IMPORT INTO usage
+	InternalImportInto = "ImportInto"
 )
 
 // explicit source types.
