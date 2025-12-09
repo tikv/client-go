@@ -336,15 +336,9 @@ func NewKVStore(
 		}
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
-	var opts []locate.RegionCacheOpt
-	if config.NextGen {
-		opts = append(opts, locate.RegionCacheNoHealthTick)
-	} else {
-		opts = append(opts, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
-			return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
-		}))
-	}
-	regionCache := locate.NewRegionCache(pdClient, opts...)
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+	}))
 	codec := pdClient.(*CodecPDClient).GetCodec()
 	etcdAddrs, etcdTlsCfg := spkv.extractConnectionInfo()
 	store := &KVStore{
