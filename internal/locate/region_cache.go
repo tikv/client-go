@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/circuitbreaker"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -129,6 +130,24 @@ func nextTTL(ts int64) int64 {
 		jitter = rand.Int63n(regionCacheTTLJitterSec)
 	}
 	return ts + regionCacheTTLSec + jitter
+}
+
+var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker("region-meta",
+	circuitbreaker.Settings{
+		ErrorRateWindow:      30 * time.Second,
+		MinQPSForOpen:        10,
+		CoolDownInterval:     10 * time.Second,
+		HalfOpenSuccessCount: 1,
+	})
+
+// wrap context with circuit breaker for PD region metadata calls
+func withPDCircuitBreaker(ctx context.Context) context.Context {
+	return circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
+}
+
+// ChangePDRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
+func ChangePDRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
+	pdRegionMetaCircuitBreaker.ChangeSettings(apply)
 }
 
 // nextTTLWithoutJitter is used for test.
@@ -2051,9 +2070,9 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 		var reg *pd.Region
 		var err error
 		if searchPrev {
-			reg, err = c.pdClient.GetPrevRegion(ctx, key, opts...)
+			reg, err = c.pdClient.GetPrevRegion(withPDCircuitBreaker(ctx), key, opts...)
 		} else {
-			reg, err = c.pdClient.GetRegion(ctx, key, opts...)
+			reg, err = c.pdClient.GetRegion(withPDCircuitBreaker(ctx), key, opts...)
 		}
 		metrics.LoadRegionCacheHistogramWhenCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2101,7 +2120,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		start := time.Now()
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		reg, err := c.pdClient.GetRegionByID(withPDCircuitBreaker(ctx), regionID, pd.WithBuckets())
 		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
@@ -2189,7 +2208,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		//nolint:staticcheck
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
+		regionsInfo, err := c.pdClient.ScanRegions(withPDCircuitBreaker(ctx), startKey, endKey, limit, pd.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2258,7 +2277,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		if opt.needBuckets {
 			pdOpts = append(pdOpts, pd.WithBuckets())
 		}
-		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
+		regionsInfo, err := c.pdClient.BatchScanRegions(withPDCircuitBreaker(ctx), keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
