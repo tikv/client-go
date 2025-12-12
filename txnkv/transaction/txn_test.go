@@ -196,4 +196,45 @@ func TestLockKeys(t *testing.T) {
 		require.True(t, flags.HasLocked())
 		require.True(t, flags.HasLockedInShareMode())
 	})
+
+	t.Run("UpgradeSharedToExclusive", func(t *testing.T) {
+		key1 := []byte("k1")
+		key2 := []byte("k2")
+		txn := newTestTxn(t, 1)
+		txn.SetPessimistic(true)
+		txn.store.client.onSend = handlePessimisticLock
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+
+		// `lockKeys` in exclusive mode on k2 to ensure primary key is selected.
+		lockCtx.InShareMode = false
+		expectedLockType = kvrpcpb.Op_PessimisticLock
+		require.NoError(t, txn.lockKeys(context.TODO(), lockCtx, nil, key2))
+
+		// `lockKeys` in share mode on k1.
+		lockCtx.InShareMode = true
+		expectedLockType = kvrpcpb.Op_SharedPessimisticLock
+		require.NoError(t, txn.lockKeys(context.TODO(), lockCtx, nil, key1))
+		flags, err := txn.GetMemBuffer().GetFlags(key1)
+		require.NoError(t, err)
+		require.True(t, flags.HasLocked())
+		require.True(t, flags.HasLockedInShareMode())
+
+		// `lockKeys` in exclusive mode again on k1 to upgrade the lock.
+		lockCtx.InShareMode = false
+		expectedLockType = kvrpcpb.Op_PessimisticLock
+		err = txn.lockKeys(context.TODO(), lockCtx, nil, key1)
+		require.ErrorContains(t, err, "upgrading a shared lock to an exclusive lock is not supported")
+
+		done := make(chan struct{})
+		go func() {
+			txn.us.GetMemBuffer().Delete(key1)
+			defer close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			require.FailNow(t, "lockKeys holds rlock after returning error")
+		}
+	})
 }
