@@ -1414,6 +1414,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 
 		if lockedInShareMode && !lockCtx.InShareMode {
+			memBuf.RUnlock()
 			return errors.New("upgrading a shared lock to an exclusive lock is not supported")
 		}
 
