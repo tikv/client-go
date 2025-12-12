@@ -1,13 +1,15 @@
 module integration_tests
 
-go 1.24.1
+go 1.25.5
+
+replace github.com/tikv/pd/client => github.com/bufferflies/pd/client v0.0.0-20251212044438-b29b614a8533
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18
+	github.com/pingcap/kvproto v0.0.0-20251202064041-b6fd818387cd
 	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
