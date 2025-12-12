@@ -884,8 +884,8 @@ github.com/blacktear23/go-proxyprotocol v1.0.6 h1:eTt6UMpEnq59NjON49b3Cay8Dm0sCs
 github.com/blacktear23/go-proxyprotocol v1.0.6/go.mod h1:FSCbgnRZrQXazBLL5snfBbrcFSMtcmUDhSRb9OfFA1o=
 github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/boombuler/barcode v1.0.1/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
-github.com/bufferflies/pd/client v0.0.0-20251212031349-696debecc06b h1:9tB6WneldiEJxvyoWn2kwiHbb8wbStFM92SR3nKqmzo=
-github.com/bufferflies/pd/client v0.0.0-20251212031349-696debecc06b/go.mod h1:mHrSJy/3WsbxjTtTbK5glvoSLjix0qN6Ndh48p6jD4E=
+github.com/bufferflies/pd/client v0.0.0-20251212044438-b29b614a8533 h1:JlpiH2axYFhHG/CZbpiyE94IpJLQd2GBIuwKpu7WG2M=
+github.com/bufferflies/pd/client v0.0.0-20251212044438-b29b614a8533/go.mod h1:mHrSJy/3WsbxjTtTbK5glvoSLjix0qN6Ndh48p6jD4E=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5 h1:BjkPE3785EwPhhyuFkbINB+2a1xATwk8SNDWnJiD41g=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5/go.mod h1:jtAfVaU/2cu1+wdSRPWE2c1N2qeAA3K4RH9pYgqwets=
 github.com/carlmjohnson/flagext v0.21.0 h1:/c4uK3ie786Z7caXLcIMvePNSSiH3bQVGDvmGLMme60=

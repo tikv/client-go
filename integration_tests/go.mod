@@ -2,7 +2,7 @@ module integration_tests
 
 go 1.25.5
 
-replace github.com/tikv/pd/client => github.com/bufferflies/pd/client v0.0.0-20251212031349-696debecc06b
+replace github.com/tikv/pd/client => github.com/bufferflies/pd/client v0.0.0-20251212044438-b29b614a8533
 
 require (
 	github.com/google/uuid v1.6.0
