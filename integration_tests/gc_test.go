@@ -46,6 +46,18 @@ func (c *hookedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, er
 	return c.inner.GetGCState(ctx)
 }
 
+func (c *hookedGCStatesClient) SetGlobalGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GlobalGCBarrierInfo, error) {
+	panic("unimplemented")
+}
+
+func (c *hookedGCStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrierID string) (*pdgc.GlobalGCBarrierInfo, error) {
+	panic("unimplemented")
+}
+
+func (c *hookedGCStatesClient) GetAllKeyspacesGCStates(ctx context.Context) (pdgc.ClusterGCStates, error) {
+	panic("unimplemented")
+}
+
 func hookGCStatesClientForStore(store *tikv.StoreProbe, getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error)) {
 	store.ReplaceGCStatesClient(&hookedGCStatesClient{
 		inner:           store.GetGCStatesClient(),
