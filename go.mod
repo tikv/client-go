@@ -1,6 +1,6 @@
 module github.com/tikv/client-go/v2
 
-go 1.23.0
+go 1.23.12
 
 require (
 	github.com/VividCortex/ewma v1.2.0
@@ -15,14 +15,14 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18
+	github.com/pingcap/kvproto v0.0.0-20251121073615-744c58d5a5f1
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20250625073039-fb496b371ff3
+	github.com/tikv/pd/client v0.0.0-20251211035544-6cebb3314abe
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10

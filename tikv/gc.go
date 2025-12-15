@@ -91,6 +91,7 @@ func (s *KVStore) GC(ctx context.Context, expectedSafePoint uint64, opts ...GCOp
 
 	gcSafePoint := txnSafePoint
 
+	//nolint:staticcheck
 	return s.pdClient.UpdateGCSafePoint(ctx, gcSafePoint)
 }
 
