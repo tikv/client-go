@@ -2209,7 +2209,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
-		// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
+		//nolint:staticcheck
 		regionsInfo, err := c.pdClient.ScanRegions(withPDCircuitBreaker(ctx), startKey, endKey, limit, pd.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2279,9 +2279,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 	}
 	needFollowerHandle := true
 	initPdOpts := func() []pd.GetRegionOption {
-		pdOpts := []pd.GetRegionOption{
-			pd.WithOutputMustContainAllKeyRange(),
-		}
+		pdOpts := []pd.GetRegionOption{}
 		if needFollowerHandle {
 			pdOpts = append(pdOpts, pd.WithAllowFollowerHandle())
 		}
