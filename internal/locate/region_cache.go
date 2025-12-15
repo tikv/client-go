@@ -1124,7 +1124,7 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	bucket := l.locateBucket(key)
 	// Return the bucket when locateBucket can locate the key
 	if bucket != nil {
-		return bucket
+		return l.clampBucketToRegion(bucket)
 	}
 	// Case one returns nil too.
 	if !l.Contains(key) {
@@ -1185,6 +1185,46 @@ type Bucket struct {
 // Contains checks whether the key is in the Bucket.
 func (b *Bucket) Contains(key []byte) bool {
 	return contains(b.StartKey, b.EndKey, key)
+}
+
+// clampBucketToRegion ensures bucket boundaries don't exceed region boundaries.
+// This is a defensive measure against stale bucket metadata that can have keys
+// outside the current region boundary.
+func (l *KeyLocation) clampBucketToRegion(bucket *Bucket) *Bucket {
+	startKey := bucket.StartKey
+	endKey := bucket.EndKey
+
+	// Clamp start: max(bucket.StartKey, region.StartKey)
+	if len(l.StartKey) > 0 && (len(startKey) == 0 || bytes.Compare(startKey, l.StartKey) < 0) {
+		startKey = l.StartKey
+	}
+
+	// Clamp end: min(bucket.EndKey, region.EndKey)
+	// Note: empty endKey means infinity, so only clamp if both are non-empty
+	if len(l.EndKey) > 0 && (len(endKey) == 0 || bytes.Compare(endKey, l.EndKey) > 0) {
+		endKey = l.EndKey
+	}
+
+	// Ensure clamped bucket is valid (start < end)
+	if len(endKey) > 0 && len(startKey) > 0 && bytes.Compare(startKey, endKey) >= 0 {
+		logutil.BgLogger().Warn("Clamped bucket invalid, using region boundaries",
+			zap.Uint64("regionID", l.Region.GetID()),
+			zap.String("bucketStart", redact.Key(bucket.StartKey)),
+			zap.String("bucketEnd", redact.Key(bucket.EndKey)),
+			zap.String("regionStart", redact.Key(l.StartKey)),
+			zap.String("regionEnd", redact.Key(l.EndKey)))
+		startKey = l.StartKey
+		endKey = l.EndKey
+	}
+
+	// If no clamping needed, return original bucket
+	if bytes.Equal(startKey, bucket.StartKey) && bytes.Equal(endKey, bucket.EndKey) {
+		return bucket
+	}
+
+	metrics.TiKVBucketClampedCounter.Inc()
+
+	return &Bucket{StartKey: startKey, EndKey: endKey}
 }
 
 // LocateKeyRange lists region and range that key in [start_key,end_key).
