@@ -1904,6 +1904,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// and there is the synchronization time between the pd follower and the leader.
 	// So we should check the epoch.
 	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
+		metrics.TiKVStaleRegionFromPDCounter.Inc()
 		logutil.BgLogger().Debug("get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
@@ -2198,6 +2199,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
+	pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
 	var backoffErr error
 	for {
 		if backoffErr != nil {
@@ -2227,10 +2229,18 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 
 		if len(regionsInfo) == 0 {
 			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		if regionsHaveGapInRanges([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
@@ -2242,6 +2252,10 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		return validRegions, nil
@@ -2263,9 +2277,22 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 	for _, op := range opts {
 		op(&opt)
 	}
+	needFollowerHandle := true
+	initPdOpts := func() []pd.GetRegionOption {
+		pdOpts := []pd.GetRegionOption{}
+		if needFollowerHandle {
+			pdOpts = append(pdOpts, pd.WithAllowFollowerHandle())
+		}
+		if opt.needBuckets {
+			pdOpts = append(pdOpts, pd.WithBuckets())
+		}
+		return pdOpts
+	}
 	// TODO: return start key and end key after redact is introduced.
 	var backoffErr error
 	for {
+		pdOpts := initPdOpts()
+
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
@@ -2273,10 +2300,6 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			}
 		}
 		start := time.Now()
-		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
-		if opt.needBuckets {
-			pdOpts = append(pdOpts, pd.WithBuckets())
-		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(withPDCircuitBreaker(ctx), keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2302,6 +2325,10 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned no region, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		if regionsHaveGapInRanges(keyRanges, regionsInfo, limit) {
@@ -2309,6 +2336,10 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned regions have gaps, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		validRegions, err := c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
@@ -2320,6 +2351,10 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		return validRegions, nil
