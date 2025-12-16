@@ -90,7 +90,7 @@ func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
 		pk1 := []byte("TestSharedLockBlockExclusiveLock_pk1")
 		pk2 := []byte("TestSharedLockBlockExclusiveLock_pk2")
 		pk3 := []byte("TestSharedLockBlockExclusiveLock_pk3")
-		key := []byte("TestSharedLockBlockExclusiveLock_shared_lock_key")
+		key := []byte("TestSharedLockBlockExclusiveLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -142,7 +142,7 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 		pk1 := []byte("TestExclusiveLockBlockSharedLock_pk1")
 		pk2 := []byte("TestExclusiveLockBlockSharedLock_pk2")
 		pk3 := []byte("TestExclusiveLockBlockSharedLock_pk3")
-		key := []byte("TestExclusiveLockBlockSharedLock_key")
+		key := []byte("TestExclusiveLockBlockSharedLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -190,8 +190,8 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	txn1 := s.begin()
 
 	pk := []byte("TestResolveSharedLock_pk")
-	key := []byte("TestResolveSharedLock_key")
-	_, err := s.store.SplitRegions(context.Background(), [][]byte{pk}, false, nil)
+	key := []byte("TestResolveSharedLock_shared_key")
+	_, err := s.store.SplitRegions(context.Background(), [][]byte{pk, key}, false, nil)
 	s.Nil(err)
 
 	s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk))
@@ -236,7 +236,7 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 	pk1 := []byte("TestScanSharedLock_pk_1")
 	pk2 := []byte("TestScanSharedLock_pk_2")
 	pk3 := []byte("TestScanSharedLock_pk_3")
-	sharedKey := []byte("TestScanSharedLock_key")
+	sharedKey := []byte("TestScanSharedLock_shared_key")
 	txn1 := s.begin()
 	txn2 := s.begin()
 	txn3 := s.begin()
@@ -286,7 +286,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	pk1 := []byte("TestGCSharedLock_pk1")
 	pk2 := []byte("TestGCSharedLock_pk2")
 	pk3 := []byte("TestGCSharedLock_pk3")
-	sharedKey := []byte("TestGCSharedLock_key")
+	sharedKey := []byte("TestGCSharedLock_shared_key")
 
 	pks := [][]byte{pk1, pk2, pk3}
 	txns := []transaction.TxnProbe{txn1, txn2, txn3}
@@ -302,7 +302,12 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	txn1.GetCommitter().CloseTTLManager()
 	txn2.GetCommitter().CloseTTLManager()
 
-	locks := s.scanLocks(sharedKey, s.getTS())
+	var locks []*txnlock.Lock
+	s.Eventually(func() bool {
+		locks = s.scanLocks(sharedKey, s.getTS())
+		return len(locks) == 3
+	}, 5*time.Second, 100*time.Millisecond, "expect 3 locks after pipelined locks being applied")
+
 	s.Len(locks, 3)
 	for _, lock := range locks {
 		s.Equal(sharedKey, lock.Key)
@@ -349,8 +354,13 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 			s.Nil(txn.LockKeys(context.Background(), lockctx, key))
 		}
 
-		locks := s.scanLocks(key, s.getTS())
+		var locks []*txnlock.Lock
+		s.Eventually(func() bool {
+			locks = s.scanLocks(key, s.getTS())
+			return len(locks) == 3
+		}, 5*time.Second, 100*time.Millisecond, "expect 3 locks after pipelined locks being applied")
 		s.Len(locks, 3)
+
 		for i, txn := range []transaction.TxnProbe{txn1, txn2, txn3} {
 			if commit {
 				s.Nil(txn.Commit(context.Background()))
