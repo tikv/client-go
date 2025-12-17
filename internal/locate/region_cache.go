@@ -1195,18 +1195,18 @@ func (l *KeyLocation) clampBucketToRegion(bucket *Bucket) *Bucket {
 	endKey := bucket.EndKey
 
 	// Clamp start: max(bucket.StartKey, region.StartKey)
-	if len(l.StartKey) > 0 && (len(startKey) == 0 || bytes.Compare(startKey, l.StartKey) < 0) {
+	if len(l.StartKey) > 0 && bytes.Compare(startKey, l.StartKey) < 0 {
 		startKey = l.StartKey
 	}
 
 	// Clamp end: min(bucket.EndKey, region.EndKey)
-	// Note: empty endKey means infinity, so only clamp if both are non-empty
+	// Note: empty endKey means infinity, so clamp if bucket is unbounded but region is not
 	if len(l.EndKey) > 0 && (len(endKey) == 0 || bytes.Compare(endKey, l.EndKey) > 0) {
 		endKey = l.EndKey
 	}
 
 	// Ensure clamped bucket is valid (start < end)
-	if len(endKey) > 0 && len(startKey) > 0 && bytes.Compare(startKey, endKey) >= 0 {
+	if len(endKey) > 0 && bytes.Compare(startKey, endKey) >= 0 {
 		logutil.BgLogger().Warn("Clamped bucket invalid, using region boundaries",
 			zap.Uint64("regionID", l.Region.GetID()),
 			zap.String("bucketStart", redact.Key(bucket.StartKey)),
