@@ -146,10 +146,11 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 	return store
 }
 
-func (c *storeCacheImpl) put(newStore *Store) {
+// put puts the store into cache. for test only.
+func (c *storeCacheImpl) put(store *Store) {
 	c.storeMu.Lock()
-	defer c.storeMu.Unlock()
-	c.storeMu.stores[newStore.storeID] = newStore
+	c.storeMu.stores[store.storeID] = store
+	c.storeMu.Unlock()
 }
 
 func (c *storeCacheImpl) clear() {
@@ -260,15 +261,19 @@ func newStore(
 	}
 }
 
-// updateMetadata updates the store metadata safely.
-func (s *Store) updateMetadata(addr, peerAddr, statusAddr string, storeType tikvrpc.EndpointType, labels []*metapb.StoreLabel) {
+// updateMetadataFrom updates the store metadata from the given store meta safely.
+func (s *Store) updateMetadataFrom(store *metapb.Store) {
 	s.metaMu.Lock()
 	defer s.metaMu.Unlock()
-	s.addr = addr
-	s.peerAddr = peerAddr
-	s.saddr = statusAddr
-	s.storeType = storeType
-	s.labels = labels
+	// TODO：
+	// if s.addr != store.GetAddress() {
+	// 	s.healthStatus = newStoreHealthStatus(s.storeID)
+	// }
+	s.addr = store.GetAddress()
+	s.peerAddr = store.GetPeerAddress()
+	s.saddr = store.GetStatusAddress()
+	s.storeType = tikvrpc.GetStoreTypeByMeta(store)
+	s.labels = store.GetLabels()
 }
 
 // newUninitializedStore creates a `Store` instance with only storeID initialized.
@@ -333,9 +338,7 @@ func (s *Store) IsStoreMatch(stores []uint64) bool {
 
 // GetLabelValue returns the value of the label
 func (s *Store) GetLabelValue(key string) (string, bool) {
-	s.metaMu.RLock()
-	defer s.metaMu.RUnlock()
-	for _, label := range s.labels {
+	for _, label := range s.GetLabels() {
 		if label.Key == key {
 			return label.Value, true
 		}
@@ -345,9 +348,7 @@ func (s *Store) GetLabelValue(key string) (string, bool) {
 
 // IsSameLabels returns whether the store have the same labels with target labels
 func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
-	s.metaMu.RLock()
-	defer s.metaMu.RUnlock()
-	if len(s.labels) != len(labels) {
+	if len(s.GetLabels()) != len(labels) {
 		return false
 	}
 	return s.IsLabelsMatch(labels)
@@ -355,13 +356,12 @@ func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
 
 // IsLabelsMatch return whether the store's labels match the target labels
 func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
-	s.metaMu.RLock()
-	defer s.metaMu.RUnlock()
 	if len(labels) < 1 {
 		return true
 	}
+	currentLabels := s.GetLabels()
 	for _, targetLabel := range labels {
-		if !isStoreContainLabel(s.labels, targetLabel.Key, targetLabel.Value) {
+		if !isStoreContainLabel(currentLabels, targetLabel.Key, targetLabel.Value) {
 			return false
 		}
 	}
@@ -430,7 +430,7 @@ func (s *Store) initByStoreMeta(store *metapb.Store) error {
 	if addr == "" {
 		return errors.Errorf("empty store(%d) address", s.storeID)
 	}
-	s.updateMetadata(addr, store.GetPeerAddress(), store.GetStatusAddress(), tikvrpc.GetStoreTypeByMeta(store), store.GetLabels())
+	s.updateMetadataFrom(store)
 	// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
 	s.changeResolveStateTo(unresolved, resolved)
 
@@ -448,9 +448,9 @@ func (s *Store) initResolveLite(store *metapb.Store) error {
 // initResolve resolves the address of the store that never resolved and returns an
 // empty string if it's a tombstone.
 func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err error) {
-	//s.resolveMutex.Lock()
+	s.resolveMutex.Lock()
 	state := s.getResolveState()
-	//defer s.resolveMutex.Unlock()
+	defer s.resolveMutex.Unlock()
 	if state != unresolved {
 		if state != tombstone {
 			addr = s.GetAddr()
@@ -513,23 +513,20 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 		return false, nil
 	}
 
-	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if addr == "" {
 		return false, errors.Errorf("empty store(%d) address", s.storeID)
 	}
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
-		peerAddress := store.GetPeerAddress()
-		statusAddress := store.GetStatusAddress()
-		labels := store.GetLabels()
 		logutil.BgLogger().Info("store meta(address or labels changed), replacing with new store",
 			zap.Uint64("store", s.storeID),
 			zap.String("old-addr", s.GetAddr()),
 			zap.Any("old-labels", s.GetLabels()),
 			zap.String("old-liveness", s.getLivenessState().String()),
 			zap.String("new-addr", addr),
-			zap.Any("new-labels", labels))
-		s.updateMetadata(addr, peerAddress, statusAddress, storeType, labels)
+			zap.Any("new-labels", store.GetLabels()))
+		s.updateMetadataFrom(store)
+
 		s.setResolveState(resolved)
 		return true, nil
 	}
