@@ -445,10 +445,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	s.cluster.UpdateStoreAddr(s.store1, store.GetAddr()+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
-	s.Equal(store.getResolveState(), deleted)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
-	s.Equal(newStore.GetAddr(), store.GetAddr()+"0")
+	s.Equal(newStore.GetAddr(), store.GetAddr())
 	s.Equal(newStore.GetLabels(), []*metapb.StoreLabel{{Key: "k", Value: "v"}})
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
@@ -2959,14 +2958,12 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return s.getResolveState() == needCheck
 	})
 
-	// assert that the old store should be deleted.
-	s.Eventually(func() bool {
-		return store1.getResolveState() == deleted
-	}, 3*time.Second, time.Second)
 	// assert the new store should be added and it should be resolved and reachable.
 	newStore1, _ := s.cache.stores.get(s.store1)
+	// the store pointer should be updated
+	s.Equal(newStore1.GetAddr(), store1.GetAddr())
 	s.Eventually(func() bool {
-		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+		return newStore1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
 }
