@@ -2001,6 +2001,56 @@ func TestBucketClampingToRegion(t *testing.T) {
 			wantEnd:         []byte("z"),
 			shouldBeClamped: true,
 		},
+		{
+			name:            "bucket with empty startKey - clamp to region start",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty endKey - clamp to region end",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty startKey and region with empty startKey - no start clamping",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte{}, // No clamping needed
+			wantEnd:         []byte("m"),
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket with empty endKey and region with empty endKey - no end clamping",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte{}, // No clamping needed
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket spanning full keyspace - clamp to region",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte{},    // Beginning of keyspace
+			bucketEnd:       []byte{},    // End of keyspace (infinity)
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
 	}
 
 	for _, tt := range tests {
