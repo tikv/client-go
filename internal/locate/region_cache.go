@@ -376,7 +376,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 			leaderAccessIdx = AccessIndex(len(rs.accessIndex[tiKVOnly]))
 		}
 		availablePeers = append(availablePeers, p)
-		switch store.storeType {
+		switch store.StoreType() {
 		case tikvrpc.TiKV:
 			rs.accessIndex[tiKVOnly] = append(rs.accessIndex[tiKVOnly], len(rs.stores))
 		case tikvrpc.TiFlash:
@@ -835,12 +835,12 @@ type RPCContext struct {
 func (c *RPCContext) String() string {
 	var runStoreType string
 	if c.Store != nil {
-		runStoreType = c.Store.storeType.Name()
+		runStoreType = c.Store.StoreType().Name()
 	}
 	res := fmt.Sprintf("region ID: %d, meta: %s, peer: %s, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
 		c.Region.GetID(), c.Meta, c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
 	if c.ProxyStore != nil {
-		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
+		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.GetAddr())
 	}
 	return res
 }
@@ -936,7 +936,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 		cachedRegion.invalidate(Other)
 		logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 			zap.Uint64("region", id.GetID()),
-			zap.String("store", store.addr))
+			zap.String("store", store.GetAddr()))
 		return nil, nil
 	}
 
@@ -1005,7 +1005,7 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			continue
 		}
-		if !labelFilter(store.labels) {
+		if !labelFilter(store.GetLabels()) {
 			continue
 		}
 		allStores = append(allStores, store.storeID)
@@ -1040,7 +1040,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	for i := 0; i < regionStore.accessStoreNum(tiFlashOnly); i++ {
 		accessIdx := AccessIndex((sIdx + i) % regionStore.accessStoreNum(tiFlashOnly))
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
-		if !labelFilter(store.labels) {
+		if !labelFilter(store.GetLabels()) {
 			continue
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
@@ -1062,7 +1062,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			cachedRegion.invalidate(Other)
 			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
-				zap.String("store", store.addr))
+				zap.String("store", store.GetAddr()))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
 			continue
 		}
@@ -1748,7 +1748,7 @@ func (c *RegionCache) markRegionNeedBeRefill(s *Store, storeIdx int, rs *regionS
 	// invalidate regions in store.
 	epoch := rs.storeEpochs[storeIdx]
 	if atomic.CompareAndSwapUint32(&s.epoch, epoch, epoch+1) {
-		logutil.BgLogger().Info("mark store's regions need be refill", zap.String("store", s.addr))
+		logutil.BgLogger().Info("mark store's regions need be refill", zap.String("store", s.GetAddr()))
 		incEpochStoreIdx = storeIdx
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 	}
@@ -2159,14 +2159,14 @@ func (c *RegionCache) searchCachedRegionByID(regionID uint64) (*Region, bool) {
 // GetStoresByType gets stores by type `typ`
 func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 	return c.stores.filter(nil, func(s *Store) bool {
-		return s.getResolveState() == resolved && s.storeType == typ
+		return s.getResolveState() == resolved && s.StoreType() == typ
 	})
 }
 
 // GetAllStores gets TiKV and TiFlash stores.
 func (c *RegionCache) GetAllStores() []*Store {
 	return c.stores.filter(nil, func(s *Store) bool {
-		return s.getResolveState() == resolved && (s.storeType == tikvrpc.TiKV || s.storeType == tikvrpc.TiFlash)
+		return s.getResolveState() == resolved && (s.StoreType() == tikvrpc.TiKV || s.StoreType() == tikvrpc.TiFlash)
 	})
 }
 
@@ -2663,7 +2663,7 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 	state := store.getResolveState()
 	switch state {
 	case resolved, needCheck:
-		addr = store.addr
+		addr = store.GetAddr()
 		return
 	case unresolved:
 		addr, err = store.initResolve(bo, c.stores)
@@ -2679,7 +2679,7 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 }
 
 func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStore, workStoreIdx AccessIndex) (proxyStore *Store, proxyAccessIdx AccessIndex, proxyStoreIdx int) {
-	if !c.enableForwarding || store.storeType != tikvrpc.TiKV || store.getLivenessState() == reachable {
+	if !c.enableForwarding || store.StoreType() != tikvrpc.TiKV || store.getLivenessState() == reachable {
 		return
 	}
 
@@ -2739,7 +2739,7 @@ func (c *RegionCache) changeToActiveStore(region *Region, storeID uint64) (addr 
 			break
 		}
 	}
-	addr = store.addr
+	addr = store.GetAddr()
 	return
 }
 
@@ -2801,7 +2801,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 			return false, err
 		}
 		var initLeaderStoreID uint64
-		if ctx.Store.storeType == tikvrpc.TiFlash {
+		if ctx.Store.StoreType() == tikvrpc.TiFlash {
 			initLeaderStoreID = region.findElectableStoreID()
 		} else {
 			initLeaderStoreID = ctx.Store.storeID
@@ -2834,7 +2834,7 @@ func (c *RegionCache) PDClient() pd.Client {
 // stores so that users won't be bothered by tombstones. (related issue: https://github.com/pingcap/tidb/issues/46602)
 func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	return c.stores.filter(nil, func(s *Store) bool {
-		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels) && s.getResolveState() == resolved
+		return s.StoreType() == tikvrpc.TiFlash && labelFilter(s.GetLabels()) && s.getResolveState() == resolved
 	})
 }
 

@@ -146,10 +146,10 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 	return store
 }
 
-func (c *storeCacheImpl) put(store *Store) {
+func (c *storeCacheImpl) put(newStore *Store) {
 	c.storeMu.Lock()
-	c.storeMu.stores[store.storeID] = store
-	c.storeMu.Unlock()
+	defer c.storeMu.Unlock()
+	c.storeMu.stores[newStore.storeID] = newStore
 }
 
 func (c *storeCacheImpl) clear() {
@@ -213,6 +213,7 @@ func (c *storeCacheImpl) getCheckStoreEvents() <-chan struct{} {
 
 // Store contains a kv process's address.
 type Store struct {
+	metaMu       sync.RWMutex
 	addr         string               // loaded store address
 	peerAddr     string               // TiFlash Proxy use peerAddr
 	saddr        string               // loaded store status address
@@ -259,6 +260,17 @@ func newStore(
 	}
 }
 
+// updateMetadata updates the store metadata safely.
+func (s *Store) updateMetadata(addr, peerAddr, statusAddr string, storeType tikvrpc.EndpointType, labels []*metapb.StoreLabel) {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	s.addr = addr
+	s.peerAddr = peerAddr
+	s.saddr = statusAddr
+	s.storeType = storeType
+	s.labels = labels
+}
+
 // newUninitializedStore creates a `Store` instance with only storeID initialized.
 func newUninitializedStore(id uint64) *Store {
 	return &Store{
@@ -270,12 +282,14 @@ func newUninitializedStore(id uint64) *Store {
 
 // StoreType returns the type of the store.
 func (s *Store) StoreType() tikvrpc.EndpointType {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.storeType
 }
 
 // IsTiFlash returns true if the storeType is TiFlash
 func (s *Store) IsTiFlash() bool {
-	return s.storeType == tikvrpc.TiFlash
+	return s.StoreType() == tikvrpc.TiFlash
 }
 
 // StoreID returns storeID.
@@ -285,12 +299,23 @@ func (s *Store) StoreID() uint64 {
 
 // GetAddr returns the address of the store
 func (s *Store) GetAddr() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.addr
 }
 
 // GetPeerAddr returns the peer address of the store
 func (s *Store) GetPeerAddr() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.peerAddr
+}
+
+// GetLabels returns the labels of the store
+func (s *Store) GetLabels() []*metapb.StoreLabel {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	return s.labels
 }
 
 // IsStoreMatch returns whether the store's id match the target ids.
@@ -308,6 +333,8 @@ func (s *Store) IsStoreMatch(stores []uint64) bool {
 
 // GetLabelValue returns the value of the label
 func (s *Store) GetLabelValue(key string) (string, bool) {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	for _, label := range s.labels {
 		if label.Key == key {
 			return label.Value, true
@@ -318,6 +345,8 @@ func (s *Store) GetLabelValue(key string) (string, bool) {
 
 // IsSameLabels returns whether the store have the same labels with target labels
 func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	if len(s.labels) != len(labels) {
 		return false
 	}
@@ -326,6 +355,8 @@ func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
 
 // IsLabelsMatch return whether the store's labels match the target labels
 func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	if len(labels) < 1 {
 		return true
 	}
@@ -399,11 +430,7 @@ func (s *Store) initByStoreMeta(store *metapb.Store) error {
 	if addr == "" {
 		return errors.Errorf("empty store(%d) address", s.storeID)
 	}
-	s.addr = addr
-	s.peerAddr = store.GetPeerAddress()
-	s.saddr = store.GetStatusAddress()
-	s.storeType = tikvrpc.GetStoreTypeByMeta(store)
-	s.labels = store.GetLabels()
+	s.updateMetadata(addr, store.GetPeerAddress(), store.GetStatusAddress(), tikvrpc.GetStoreTypeByMeta(store), store.GetLabels())
 	// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
 	s.changeResolveStateTo(unresolved, resolved)
 
@@ -421,12 +448,12 @@ func (s *Store) initResolveLite(store *metapb.Store) error {
 // initResolve resolves the address of the store that never resolved and returns an
 // empty string if it's a tombstone.
 func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err error) {
-	s.resolveMutex.Lock()
+	//s.resolveMutex.Lock()
 	state := s.getResolveState()
-	defer s.resolveMutex.Unlock()
+	//defer s.resolveMutex.Unlock()
 	if state != unresolved {
 		if state != tombstone {
-			addr = s.addr
+			addr = s.GetAddr()
 		}
 		return
 	}
@@ -454,7 +481,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		if err := s.initByStoreMeta(store); err != nil {
 			return "", err
 		}
-		return s.addr, nil
+		return s.GetAddr(), nil
 	}
 }
 
@@ -479,7 +506,7 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
-			zap.Uint64("store", s.storeID), zap.String("addr", s.addr))
+			zap.Uint64("store", s.storeID), zap.String("addr", s.GetAddr()))
 		atomic.AddUint32(&s.epoch, 1)
 		s.setResolveState(tombstone)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
@@ -491,35 +518,20 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 	if addr == "" {
 		return false, errors.Errorf("empty store(%d) address", s.storeID)
 	}
-	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := newStore(
-			s.storeID,
-			addr,
-			store.GetPeerAddress(),
-			store.GetStatusAddress(),
-			storeType,
-			resolved,
-			store.GetLabels(),
-		)
-		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
-		if newStore.getLivenessState() != reachable {
-			newStore.unreachableSince = s.unreachableSince
-			startHealthCheckLoop(scheduler, c, newStore, newStore.getLivenessState(), storeReResolveInterval)
-		}
-		if s.addr == addr {
-			newStore.healthStatus = s.healthStatus
-		}
-		c.put(newStore)
-		s.setResolveState(deleted)
-		logutil.BgLogger().Info("store address or labels changed, add new store and mark old store deleted",
+	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
+		peerAddress := store.GetPeerAddress()
+		statusAddress := store.GetStatusAddress()
+		labels := store.GetLabels()
+		logutil.BgLogger().Info("store meta(address or labels changed), replacing with new store",
 			zap.Uint64("store", s.storeID),
-			zap.String("old-addr", s.addr),
-			zap.Any("old-labels", s.labels),
+			zap.String("old-addr", s.GetAddr()),
+			zap.Any("old-labels", s.GetLabels()),
 			zap.String("old-liveness", s.getLivenessState().String()),
-			zap.String("new-addr", newStore.addr),
-			zap.Any("new-labels", newStore.labels),
-			zap.String("new-liveness", newStore.getLivenessState().String()))
-		return false, nil
+			zap.String("new-addr", addr),
+			zap.Any("new-labels", labels))
+		s.updateMetadata(addr, peerAddress, statusAddress, storeType, labels)
+		s.setResolveState(resolved)
+		return true, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
 	return true, nil
@@ -558,7 +570,7 @@ func (s *Store) changeResolveStateTo(from, to resolveState) bool {
 		if atomic.CompareAndSwapUint64(&s.state, uint64(from), uint64(to)) {
 			logutil.BgLogger().Info("change store resolve state",
 				zap.Uint64("store", s.storeID),
-				zap.String("addr", s.addr),
+				zap.String("addr", s.GetAddr()),
 				zap.String("from", from.String()),
 				zap.String("to", to.String()),
 				zap.String("liveness-state", s.getLivenessState().String()))
@@ -626,9 +638,9 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 		return
 	}
 	// This mechanism doesn't support non-TiKV stores currently.
-	if s.storeType != tikvrpc.TiKV {
+	if s.StoreType() != tikvrpc.TiKV {
 		logutil.BgLogger().Info("[health check] skip running health check loop for non-tikv store",
-			zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr))
+			zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()))
 		return
 	}
 
@@ -655,7 +667,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 
 	scheduler.schedule(func(ctx context.Context, t time.Time) bool {
 		if s.getResolveState() == deleted {
-			logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+			logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
 			return true
 		}
 		if t.Sub(lastCheckPDTime) > reResolveInterval {
@@ -665,7 +677,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 			if err != nil {
 				logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 			} else if !valid {
-				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
 				return true
 			}
 		}
@@ -691,7 +703,7 @@ func requestLiveness(ctx context.Context, s *Store, tk testingKnobs) (l liveness
 				if len(kv) != 2 {
 					continue
 				}
-				if kv[0] == s.addr {
+				if kv[0] == s.GetAddr() {
 					liveness = kv[1]
 					break
 				}
@@ -722,7 +734,7 @@ func requestLiveness(ctx context.Context, s *Store, tk testingKnobs) (l liveness
 		l = unknown
 		return
 	}
-	addr := s.addr
+	addr := s.GetAddr()
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
 		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
 	})
@@ -1121,7 +1133,7 @@ func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 }
 
 func updateStoreLivenessGauge(store *Store) {
-	if store.storeType != tikvrpc.TiKV || store.getResolveState() != resolved {
+	if store.StoreType() != tikvrpc.TiKV || store.getResolveState() != resolved {
 		return
 	}
 	metrics.TiKVStoreLivenessGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(store.getLivenessState()))

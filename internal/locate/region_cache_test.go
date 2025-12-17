@@ -364,7 +364,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 		}
 		stores := s.cache.stores.filter(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
 		s.Equal(len(stores), 1)
-		s.Equal(stores[0].labels, labels)
+		s.Equal(stores[0].GetLabels(), labels)
 	}
 }
 
@@ -442,14 +442,14 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
-	s.cluster.UpdateStoreAddr(s.store1, store.addr+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
+	s.cluster.UpdateStoreAddr(s.store1, store.GetAddr()+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), deleted)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
-	s.Equal(newStore.addr, store.addr+"0")
-	s.Equal(newStore.labels, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
+	s.Equal(newStore.GetAddr(), store.GetAddr()+"0")
+	s.Equal(newStore.GetLabels(), []*metapb.StoreLabel{{Key: "k", Value: "v"}})
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
@@ -2123,16 +2123,13 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, livenessState(store1Liveness), time.Second)
 
 	// update store meta
-	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
-
-	// assert that the old store should be deleted and it's not reachable
-	s.Eventually(func() bool {
-		return store1.getResolveState() == deleted && store1.getLivenessState() != reachable
-	}, 3*time.Second, time.Second)
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr()+"'", store1.GetLabels()...)
 
 	// assert that the new store should be added and it's also not reachable
 	newStore1, _ := s.cache.stores.get(store1.storeID)
 	s.Require().NotEqual(reachable, newStore1.getLivenessState())
+	// assert that the old store in region cache is replaced
+	s.Require().Equal(store1.GetAddr(), newStore1.GetAddr())
 
 	// recover store1
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
@@ -2941,9 +2938,9 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	s.Require().NotNil(store1)
 	s.Require().Equal(resolved, store1.getResolveState())
 	// change store1 label.
-	labels := store1.labels
+	labels := store1.GetLabels()
 	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
-	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr, labels...)
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), labels...)
 
 	// mark the store is unreachable and need check.
 	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
@@ -2971,7 +2968,7 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	s.Eventually(func() bool {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
-	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
