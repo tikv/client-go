@@ -265,10 +265,6 @@ func newStore(
 func (s *Store) updateMetadataFrom(store *metapb.Store) {
 	s.metaMu.Lock()
 	defer s.metaMu.Unlock()
-	// TODO：
-	// if s.addr != store.GetAddress() {
-	// 	s.healthStatus = newStoreHealthStatus(s.storeID)
-	// }
 	s.addr = store.GetAddress()
 	s.peerAddr = store.GetPeerAddress()
 	s.saddr = store.GetStatusAddress()
@@ -487,7 +483,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 
 // reResolve try to resolve addr for store that need check. Returns false if the region is in tombstone state or is
 // deleted.
-func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
+func (s *Store) reResolve(c storeCache) (bool, error) {
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
 	if err != nil {
@@ -525,8 +521,10 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 			zap.String("old-liveness", s.getLivenessState().String()),
 			zap.String("new-addr", addr),
 			zap.Any("new-labels", store.GetLabels()))
-		s.updateMetadataFrom(store)
 
+		// TODO: why reset healthStatus when address changed?
+		// s.healthStatus = newStoreHealthStatus(s.storeID)
+		s.updateMetadataFrom(store)
 		s.setResolveState(resolved)
 		return true, nil
 	}
@@ -670,7 +668,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 		if t.Sub(lastCheckPDTime) > reResolveInterval {
 			lastCheckPDTime = t
 
-			valid, err := s.reResolve(c, scheduler)
+			valid, err := s.reResolve(c)
 			if err != nil {
 				logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 			} else if !valid {

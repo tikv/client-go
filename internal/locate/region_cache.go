@@ -799,7 +799,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	needCheckStores = c.stores.filter(needCheckStores, needCheck)
 	for _, store := range needCheckStores {
-		_, err := store.reResolve(c.stores, c.bg)
+		_, err := store.reResolve(c.stores)
 		tikverr.Log(err)
 	}
 	return needCheckStores
@@ -1052,7 +1052,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, nil
 		}
 		if store.getResolveState() == needCheck {
-			_, err := store.reResolve(c.stores, c.bg)
+			_, err := store.reResolve(c.stores)
 			tikverr.Log(err)
 		}
 		regionStore.workTiFlashIdx.Store(int32(accessIdx))
