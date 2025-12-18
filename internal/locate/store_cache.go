@@ -149,8 +149,8 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 // put puts the store into cache. for test only.
 func (c *storeCacheImpl) put(store *Store) {
 	c.storeMu.Lock()
+	defer c.storeMu.Unlock()
 	c.storeMu.stores[store.storeID] = store
-	c.storeMu.Unlock()
 }
 
 func (c *storeCacheImpl) clear() {
