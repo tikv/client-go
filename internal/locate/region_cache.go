@@ -732,7 +732,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	c.bg.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
 		// check and resolve normal stores periodically by default.
 		filter := func(state resolveState) bool {
-			return state != unresolved && state != tombstone && state != deleted
+			return state != unresolved && state != tombstone
 		}
 		if t.IsZero() {
 			// check and resolve needCheck stores because it's triggered by a CheckStoreEvent this time.
@@ -2668,9 +2668,6 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 	case unresolved:
 		addr, err = store.initResolve(bo, c.stores)
 		return
-	case deleted:
-		addr = c.changeToActiveStore(region, store.storeID)
-		return
 	case tombstone:
 		return "", nil
 	default:
@@ -2718,29 +2715,6 @@ func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStor
 	}
 
 	return nil, 0, 0
-}
-
-// changeToActiveStore replace the deleted store in the region by an up-to-date store in the stores map.
-// The order is guaranteed by reResolve() which adds the new store before marking old store deleted.
-func (c *RegionCache) changeToActiveStore(region *Region, storeID uint64) (addr string) {
-	store, _ := c.stores.get(storeID)
-	for {
-		oldRegionStore := region.getStore()
-		newRegionStore := oldRegionStore.clone()
-		newRegionStore.stores = make([]*Store, 0, len(oldRegionStore.stores))
-		for _, s := range oldRegionStore.stores {
-			if s.storeID == store.storeID {
-				newRegionStore.stores = append(newRegionStore.stores, store)
-			} else {
-				newRegionStore.stores = append(newRegionStore.stores, s)
-			}
-		}
-		if region.compareAndSwapStore(oldRegionStore, newRegionStore) {
-			break
-		}
-	}
-	addr = store.GetAddr()
-	return
 }
 
 // OnBucketVersionNotMatch removes the old buckets meta if the version is stale.

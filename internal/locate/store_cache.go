@@ -389,10 +389,6 @@ const (
 	resolved
 	// Request failed on this store and it will be re-resolved by asyncCheckAndResolveLoop().
 	needCheck
-	// The store's address or label is changed and marked deleted.
-	// There is a new store struct replaced it in the RegionCache and should
-	// call changeToActiveStore() to get the new struct.
-	deleted
 	// The store is a tombstone. Should invalidate the region if tries to access it.
 	tombstone
 )
@@ -406,8 +402,6 @@ func (s resolveState) String() string {
 		return "resolved"
 	case needCheck:
 		return "needCheck"
-	case deleted:
-		return "deleted"
 	case tombstone:
 		return "tombstone"
 	default:
@@ -661,10 +655,6 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 	lastCheckPDTime := time.Now()
 
 	scheduler.schedule(func(ctx context.Context, t time.Time) bool {
-		if s.getResolveState() == deleted {
-			logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
-			return true
-		}
 		if t.Sub(lastCheckPDTime) > reResolveInterval {
 			lastCheckPDTime = t
 
