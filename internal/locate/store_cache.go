@@ -475,8 +475,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 	}
 }
 
-// reResolve try to resolve addr for store that need check. Returns false if the region is in tombstone state or is
-// deleted.
+// reResolve try to resolve addr for store that need check. It returns false if the store is a tombstone.
 func (s *Store) reResolve(c storeCache) (bool, error) {
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
