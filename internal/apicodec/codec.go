@@ -112,11 +112,11 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 }
 
 func setAPICtx(c Codec, r *tikvrpc.Request) {
-	r.Context.ApiVersion = c.GetAPIVersion()
-	r.Context.KeyspaceId = uint32(c.GetKeyspaceID())
+	r.ApiVersion = c.GetAPIVersion()
+	r.KeyspaceId = uint32(c.GetKeyspaceID())
 	keyspaceMeta := c.GetKeyspaceMeta()
 	if keyspaceMeta != nil {
-		r.Context.KeyspaceName = keyspaceMeta.Name
+		r.KeyspaceName = keyspaceMeta.Name
 	}
 
 	switch r.Type {
@@ -124,15 +124,15 @@ func setAPICtx(c Codec, r *tikvrpc.Request) {
 		mpp := *r.DispatchMPPTask()
 		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
-		meta.KeyspaceId = r.Context.KeyspaceId
-		meta.ApiVersion = r.Context.ApiVersion
+		meta.KeyspaceId = r.KeyspaceId
+		meta.ApiVersion = r.ApiVersion
 		mpp.Meta = &meta
 		r.Req = &mpp
 
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
-		compact.KeyspaceId = r.Context.KeyspaceId
-		compact.ApiVersion = r.Context.ApiVersion
+		compact.KeyspaceId = r.KeyspaceId
+		compact.ApiVersion = r.ApiVersion
 		r.Req = &compact
 	}
 }

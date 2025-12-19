@@ -130,6 +130,7 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	start := time.Now()
 	// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
+	//nolint:staticcheck
 	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err

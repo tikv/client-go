@@ -23,7 +23,7 @@ func TestMakeRequestInfo(t *testing.T) {
 	prewriteReq := &kvrpcpb.PrewriteRequest{Mutations: []*kvrpcpb.Mutation{mutation}, PrimaryLock: []byte("baz")}
 	req = &tikvrpc.Request{Type: tikvrpc.CmdPrewrite, Req: prewriteReq, ReplicaNumber: 1, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 2}}}
 	requestSource := "xxx_internal_others"
-	req.Context.RequestSource = requestSource
+	req.RequestSource = requestSource
 	info = MakeRequestInfo(req)
 	assert.True(t, info.IsWrite())
 	assert.Equal(t, uint64(9), info.WriteBytes())
