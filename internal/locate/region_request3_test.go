@@ -258,10 +258,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	sender.client = innerClient
 	atomic.StoreUint32(&storeState, uint32(reachable))
 	start := time.Now()
-	for {
-		if leaderStore.getLivenessState() == reachable {
-			break
-		}
+	for leaderStore.getLivenessState() != reachable {
+
 		if time.Since(start) > 3*time.Second {
 			s.FailNow("store didn't recover to normal in time")
 		}
@@ -1125,10 +1123,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	bo := retry.NewBackoffer(context.Background(), 10000)
 	mockRPCClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		reqTargetAddrs[addr] = struct{}{}
-		if req.Context.MaxExecutionDurationMs < 10 {
+		if req.MaxExecutionDurationMs < 10 {
 			return nil, context.DeadlineExceeded
 		}
-		if addr != leaderAddr && !req.Context.ReplicaRead && !req.Context.StaleRead {
+		if addr != leaderAddr && !req.ReplicaRead && !req.StaleRead {
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}}}, nil
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
@@ -1180,7 +1178,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 				req.ReplicaRead = tp.IsFollowerRead()
 				req.ReplicaReadType = tp
 			}
-			req.Context.MaxExecutionDurationMs = 0
+			req.MaxExecutionDurationMs = 0
 			resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 			s.Nil(err)
 			regionErr, err = resp.GetRegionError()

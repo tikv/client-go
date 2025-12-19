@@ -143,7 +143,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Suppose all connections are re-establishing.
-	for _, client := range conn.batchConn.batchCommandsClients {
+	for _, client := range conn.batchCommandsClients {
 		client.lockForRecreate()
 	}
 
@@ -716,9 +716,9 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		grpcConn := conn.Get()
 		require.NotNil(t, grpcConn)
 		var cli *batchCommandsClient
-		for i := range conn.batchConn.batchCommandsClients {
+		for i := range conn.batchCommandsClients {
 			if conn.batchConn.batchCommandsClients[i].tryLockForSend() {
-				cli = conn.batchConn.batchCommandsClients[i]
+				cli = conn.batchCommandsClients[i]
 				break
 			}
 		}
@@ -975,7 +975,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	}
 	wg.Wait()
 
-	for _, cli := range conn.batchConn.batchCommandsClients {
+	for _, cli := range conn.batchCommandsClients {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
@@ -1045,7 +1045,7 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second, 0)
 	require.NoError(t, err)
 
-	for _, c := range conn.batchConn.batchCommandsClients {
+	for _, c := range conn.batchCommandsClients {
 		// mock all client a in recreate.
 		c.lockForRecreate()
 	}
