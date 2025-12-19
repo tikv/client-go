@@ -515,7 +515,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 			zap.String("new-addr", addr),
 			zap.Any("new-labels", store.GetLabels()))
 
-		// TODO: why reset healthStatus when address changed?
+		// TODO: we do not reset healthStatus here since it will be updated in the next health check loop.
 		// s.healthStatus = newStoreHealthStatus(s.storeID)
 		s.updateMetadataFrom(store)
 		s.setResolveState(resolved)
