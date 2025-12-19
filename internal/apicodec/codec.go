@@ -92,8 +92,8 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 }
 
 func setAPICtx(c Codec, r *tikvrpc.Request) {
-	r.Context.ApiVersion = c.GetAPIVersion()
-	r.Context.KeyspaceId = uint32(c.GetKeyspaceID())
+	r.ApiVersion = c.GetAPIVersion()
+	r.KeyspaceId = uint32(c.GetKeyspaceID())
 
 	switch r.Type {
 	case tikvrpc.CmdMPPTask:

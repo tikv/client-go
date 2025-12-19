@@ -1233,7 +1233,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 			req.AccessLocation = kv.AccessCrossZone
 		}
 	}
-	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	req.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}

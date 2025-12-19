@@ -431,8 +431,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 				return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 			}
 		}
-		if action.LockCtx.PessimisticLockWaited != nil {
-			atomic.StoreInt32(action.LockCtx.PessimisticLockWaited, 1)
+		if action.PessimisticLockWaited != nil {
+			atomic.StoreInt32(action.PessimisticLockWaited, 1)
 		}
 	}
 
@@ -569,8 +569,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 						return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 					}
 				}
-				if action.LockCtx.PessimisticLockWaited != nil {
-					atomic.StoreInt32(action.LockCtx.PessimisticLockWaited, 1)
+				if action.PessimisticLockWaited != nil {
+					atomic.StoreInt32(action.PessimisticLockWaited, 1)
 				}
 			}
 			return false, nil
