@@ -571,10 +571,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var err error
 	var assertionError error
 	toUpdatePrewriteOnly := make([][]byte, 0)
+	fflags := make([]kv.KeyFlags, 0, sizeHint)
+	hasValues := make([]bool, 0, sizeHint)
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
 		flags := it.Flags()
+		fflags = append(fflags, flags)
+		hasValues = append(hasValues, it.HasValue())
+
 		var value []byte
 		var op kvrpcpb.Op
 		if !it.HasValue() {
@@ -713,7 +718,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			zap.Int("locks", lockCnt),
 			zap.Int("sharedLocks", sharedLockCnt),
 			zap.Int("checks", checkCnt),
-			zap.Uint64("txnStartTS", txn.startTS))
+			zap.Uint64("txnStartTS", txn.startTS),
+			zap.Any("flags", fflags),
+			zap.Bools("hasValues", hasValues))
 		return errors.New(msg)
 	}
 	c.txnSize = size
