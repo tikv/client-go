@@ -1195,7 +1195,7 @@ func (l *KeyLocation) clampBucketToRegion(bucket *Bucket) *Bucket {
 	endKey := bucket.EndKey
 
 	// Clamp start: max(bucket.StartKey, region.StartKey)
-	if len(l.StartKey) > 0 && bytes.Compare(startKey, l.StartKey) < 0 {
+	if bytes.Compare(startKey, l.StartKey) < 0 {
 		startKey = l.StartKey
 	}
 
