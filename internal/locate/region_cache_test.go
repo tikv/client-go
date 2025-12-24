@@ -2051,6 +2051,16 @@ func TestBucketClampingToRegion(t *testing.T) {
 			wantEnd:         []byte("m"), // Clamped to region end
 			shouldBeClamped: true,
 		},
+		{
+			name:            "infinity region - no clamping needed",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("a"),
+			wantEnd:         []byte("z"),
+			shouldBeClamped: false,
+		},
 	}
 
 	for _, tt := range tests {
