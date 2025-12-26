@@ -229,7 +229,7 @@ const (
 
 // BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
 func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int, opt kv.BatchGetOptions) (m map[string]kv.ValueEntry, err error) {
-	if intest.InTest && opt.RequireCommitTS() && readTier == BatchGetSnapshotTier {
+	if intest.InTest && opt.ReturnCommitTS() && readTier == BatchGetSnapshotTier {
 		defer func() {
 			if err != nil {
 				return
@@ -250,9 +250,9 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	s.mu.RLock()
 	if s.mu.cached != nil && readTier == BatchGetSnapshotTier {
 		tmp := make([][]byte, 0, len(keys))
-		requireCommitTS := opt.RequireCommitTS()
+		returnCommitTS := opt.ReturnCommitTS()
 		for _, key := range keys {
-			if entry, ok := s.getSnapCacheWithoutLock(key, requireCommitTS); ok {
+			if entry, ok := s.getSnapCacheWithoutLock(key, returnCommitTS); ok {
 				atomic.AddInt64(&s.mu.hitCnt, 1)
 				if !entry.IsValueEmpty() {
 					m[string(key)] = entry
@@ -509,7 +509,7 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
 			Keys:         keys,
 			Version:      s.version,
-			NeedCommitTs: opt.RequireCommitTS(),
+			NeedCommitTs: opt.ReturnCommitTS(),
 		}, s.mu.replicaRead, &s.replicaReadSeed, ctx)
 		return req, nil
 	case BatchGetBufferTier:
@@ -680,7 +680,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
 		}
 
-		if intest.InTest && err == nil && opt.RequireCommitTS() && entry.CommitTS == 0 {
+		if intest.InTest && err == nil && opt.ReturnCommitTS() && entry.CommitTS == 0 {
 			panic(fmt.Sprintf(
 				"commit ts is required but not returned for key: %s, value: %s",
 				hex.EncodeToString(k), hex.EncodeToString(entry.Value),
@@ -692,7 +692,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 	// Check the cached values first.
 	if s.mu.cached != nil {
 		var ok bool
-		if entry, ok = s.getSnapCacheWithoutLock(k, opt.RequireCommitTS()); ok {
+		if entry, ok = s.getSnapCacheWithoutLock(k, opt.ReturnCommitTS()); ok {
 			atomic.AddInt64(&s.mu.hitCnt, 1)
 			s.mu.RUnlock()
 			if entry.IsValueEmpty() {
@@ -755,7 +755,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 		&kvrpcpb.GetRequest{
 			Key:          k,
 			Version:      s.version,
-			NeedCommitTs: opt.RequireCommitTS(),
+			NeedCommitTs: opt.ReturnCommitTS(),
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
@@ -1129,11 +1129,11 @@ func (s *KVSnapshot) CleanCache(keys [][]byte) {
 	}
 }
 
-func (s *KVSnapshot) getSnapCacheWithoutLock(key []byte, requireCommitTS bool) (entry kv.ValueEntry, ok bool) {
+func (s *KVSnapshot) getSnapCacheWithoutLock(key []byte, returnCommitTS bool) (entry kv.ValueEntry, ok bool) {
 	if entry, ok = s.mu.cached[string(key)]; ok {
-		if !requireCommitTS {
+		if !returnCommitTS {
 			// If commit timestamp is not required, we can return the cached entry directly.
-			// Though return the commit ts if requireCommitTS is false is also acceptable,
+			// Though return the commit ts if returnCommitTS is false is also acceptable,
 			// we still set the `entry.CommitTS = 0` to keep the behavior consistent with no cache hit case.
 			entry.CommitTS = 0
 			return

@@ -61,7 +61,7 @@ func TestBufferBatchGetter(t *testing.T) {
 
 	// test batch get and with require commit ts
 	batchGetter := NewBufferBatchGetter(buffer, snap)
-	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd, ke}, kv.WithRequireCommitTS())
+	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd, ke}, kv.WithReturnCommitTS())
 	assert.NoError(t, err)
 	assert.Equal(t, 3, len(result))
 	assert.Equal(t, kv.NewValueEntry([]byte("a1"), 11), result[string(ka)])
@@ -100,7 +100,7 @@ func (s *mockBatchGetterStore) Get(_ context.Context, k []byte, options ...kv.Ge
 	for i, key := range s.index {
 		if kv.CmpKey(key, k) == 0 {
 			entry := s.value[i]
-			if !opt.RequireCommitTS() {
+			if !opt.ReturnCommitTS() {
 				entry.CommitTS = 0
 			}
 			return entry, nil
