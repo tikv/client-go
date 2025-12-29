@@ -1129,6 +1129,8 @@ func (s *KVSnapshot) CleanCache(keys [][]byte) {
 	}
 }
 
+// getSnapCacheWithoutLock gets value from snapshot cache without locking.
+// NOTICE: this method should be called under read lock (s.mu).
 func (s *KVSnapshot) getSnapCacheWithoutLock(key []byte, returnCommitTS bool) (entry kv.ValueEntry, ok bool) {
 	if entry, ok = s.mu.cached[string(key)]; ok {
 		if !returnCommitTS {
