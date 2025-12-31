@@ -78,6 +78,11 @@ const (
 	// ends when the lock is acquired.
 	flagPreviousPresumeKNE
 
+	// FlagMaxBit is a sentinel value to indicate the maximum bit of KeyFlags.
+	// Important: add your flag before it, and the FlagMaxBit should always be the last one.
+	// It's used to avoid setting flags on the highest bit of KeyFlags.
+	FlagMaxBit
+
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
