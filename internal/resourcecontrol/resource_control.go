@@ -55,26 +55,51 @@ func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessL
 }
 
 // reqTypeAnalyze is the type of analyze coprocessor request.
-// ref: https://github.com/pingcap/tidb/blob/ee4eac2ccb83e1ea653b8131d9a43495019cb5ac/pkg/kv/kv.go#L340
+// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/kv.go#L340
 const reqTypeAnalyze = 104
+
+// bypassResourceSourceList maintains a list of resource sources that should be bypassed from the resource control.
+var bypassResourceSourceList = []string{
+	/* DDL */
+	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/ddl/job_worker.go#L503
+	"add_index",
+	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/ddl/backfilling_operators.go#L1230
+	"merge_temp_index",
+	/* BR */
+	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L214
+	util.InternalTxnBR,
+	/* Import Into */
+	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L224
+	util.InternalImportInto,
+}
 
 func shouldBypass(req *tikvrpc.Request) bool {
 	requestSource := req.Context.GetRequestSource()
-	// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
-	// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
-	// This bypass currently only works with NextGen.
-	if config.NextGen && strings.Contains(requestSource, util.InternalTxnStats) {
-		var tp int64
-		switch req.Type {
-		case tikvrpc.CmdBatchCop:
-			tp = req.BatchCop().GetTp()
-		case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
-			tp = req.Cop().GetTp()
+
+	// These bypasses currently only works with NextGen.
+	if config.NextGen {
+		// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
+		// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
+		if strings.Contains(requestSource, util.InternalTxnStats) {
+			var tp int64
+			switch req.Type {
+			case tikvrpc.CmdBatchCop:
+				tp = req.BatchCop().GetTp()
+			case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+				tp = req.Cop().GetTp()
+			}
+			if tp == reqTypeAnalyze {
+				return true
+			}
 		}
-		if tp == reqTypeAnalyze {
-			return true
+		// Check other resource source types that should be bypassed.
+		for _, source := range bypassResourceSourceList {
+			if strings.Contains(requestSource, source) {
+				return true
+			}
 		}
 	}
+
 	// Some internal requests should be bypassed, which may affect the user experience.
 	// For example, the `alter user password` request completely bypasses resource control.
 	// Although it does not consume many resources, it can still impact the user experience.
