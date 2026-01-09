@@ -85,6 +85,24 @@ func TestBackoffErrorType(t *testing.T) {
 	assert.Fail(t, "should not be here")
 }
 
+func TestRetryLimit(t *testing.T) {
+	globalConfig := NewConfigWithRetryLimit("TestConfig", nil, NewBackoffFnCfg(1, 1000, NoJitter), NewRetryRateLimiter(1, 1), errors.New("test error"))
+	b := NewBackofferWithVars(context.TODO(), 100, nil)
+	// test we start with retry limit at cap (1 in this test)
+	assert.Nil(t, b.Backoff(globalConfig, errors.New("test error")))
+	// test retry limit hit
+	assert.NotNil(t, b.Backoff(globalConfig, errors.New("test error")))
+	// test the limit is global across difference Backoff instances
+	b2 := NewBackofferWithVars(context.TODO(), 100, nil)
+	assert.NotNil(t, b2.Backoff(globalConfig, errors.New("test error")))
+	// test the limit is repopulated with the cap by populating 2 tokens
+	b.OnSuccess(globalConfig)
+	b.OnSuccess(globalConfig)
+	// test we have only one token due to cap
+	assert.Nil(t, b2.Backoff(globalConfig, errors.New("test error")))
+	assert.NotNil(t, b2.Backoff(globalConfig, errors.New("test error")))
+}
+
 func TestBackoffDeepCopy(t *testing.T) {
 	var err error
 	b := NewBackofferWithVars(context.TODO(), 4, nil)

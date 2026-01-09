@@ -2273,7 +2273,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 	opts = append(opts, opt.WithBuckets())
 	for {
 		if backoffErr != nil {
-			err := bo.Backoff(retry.BoPDRPC, backoffErr)
+			err := bo.Backoff(retry.BoPDRegionMetadata, backoffErr)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
@@ -2291,6 +2291,10 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 			metrics.RegionCacheCounterWithGetCacheMissError.Inc()
 		} else {
 			metrics.RegionCacheCounterWithGetCacheMissOK.Inc()
+			if backoffErr == nil {
+				// refill retry allowance only for the original call
+				bo.OnSuccess(retry.BoPDRegionMetadata)
+			}
 		}
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2326,7 +2330,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 	var backoffErr error
 	for {
 		if backoffErr != nil {
-			err := bo.Backoff(retry.BoPDRPC, backoffErr)
+			err := bo.Backoff(retry.BoPDRegionMetadata, backoffErr)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
@@ -2338,6 +2342,10 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
 		} else {
 			metrics.RegionCacheCounterWithGetRegionByIDOK.Inc()
+			if backoffErr == nil {
+				// refill retry allowance only for the original call
+				bo.OnSuccess(retry.BoPDRegionMetadata)
+			}
 		}
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
