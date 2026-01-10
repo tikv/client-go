@@ -15,6 +15,7 @@
 package client
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -122,6 +123,10 @@ func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
 	}
 	re.True(checkReferences(), "expected no references in backing array yet")
 
+	runtime.GC()
+	re.True(checkReferences(), "expected no references in backing array yet")
+
 	pq.Clean()
 	re.False(checkReferences(), "expected no references in backing array yet")
+
 }
