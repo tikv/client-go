@@ -58,6 +58,7 @@ func (ps *prioritySlice) Pop() interface{} {
 	old := *ps
 	n := len(old)
 	item := old[n-1]
+	old[n-1] = nil // avoid memory leak
 	*ps = old[0 : n-1]
 	return item
 }
@@ -92,20 +93,26 @@ func (pq *PriorityQueue) pop() Item {
 }
 
 // Take returns the highest priority entries from the priority queue.
-func (pq *PriorityQueue) Take(n int) []Item {
+// notice that the caller should ensure that call the clean method periodically to remove canceled entries.
+// to avoid the weak reference in the backing array.
+func (pq *PriorityQueue) Take(n int) ([]Item, func()) {
 	if n <= 0 {
-		return nil
+		return nil, func() {}
 	}
 	if n >= pq.Len() {
 		ret := pq.ps
 		pq.ps = pq.ps[:0]
-		return ret
+		return ret, func() {
+			for i := range ret {
+				ret[i] = nil
+			}
+		}
 	} else {
 		ret := make([]Item, n)
 		for i := 0; i < n; i++ {
 			ret[i] = pq.pop()
 		}
-		return ret
+		return ret, func() {}
 	}
 
 }
