@@ -43,52 +43,37 @@ func TestPriority(t *testing.T) {
 		}
 		re.Equal(5, aq.Len())
 		re.Equal(uint64(5), aq.highestPriority())
-		aq.Clean()
+		aq.clean()
 		re.Equal(5, aq.Len())
 
-		arr := aq.Take(1)
+		arr, fn := aq.Take(1)
 		re.Len(arr, 1)
 		re.Equal(uint64(5), arr[0].priority())
 		re.Equal(uint64(4), aq.highestPriority())
+		fn()
 
-		arr = aq.Take(2)
+		arr, fn = aq.Take(2)
 		re.Len(arr, 2)
 		re.Equal(uint64(4), arr[0].priority())
 		re.Equal(uint64(3), arr[1].priority())
 		re.Equal(uint64(2), aq.highestPriority())
+		fn()
 
-		arr = aq.Take(5)
+		arr, fn = aq.Take(5)
 		re.Len(arr, 2)
 		re.Equal(uint64(2), arr[0].priority())
 		re.Equal(uint64(1), arr[1].priority())
 		re.Equal(uint64(0), aq.highestPriority())
 		re.Equal(0, aq.Len())
+		fn()
 
 		aq.Push(&FakeItem{value: 1, pri: 1, canceled: true})
 		re.Equal(1, aq.Len())
-		aq.Clean()
+		aq.clean()
 		re.Equal(0, aq.Len())
 	}
 	hq := NewPriorityQueue()
 	testFunc(hq)
-}
-
-func TestPriorityQueuePopLeavesReferenceInBackingArray(t *testing.T) {
-	pq := NewPriorityQueue()
-	it := &FakeItem{pri: 1}
-	pq.Push(it)
-
-	_ = pq.pop()
-	if pq.Len() != 0 {
-		t.Fatalf("expected empty queue, got len=%d", pq.Len())
-	}
-
-	// Expand to full capacity to inspect the backing array.
-	backing := pq.ps[:cap(pq.ps)]
-	// If the removed slot is not cleared, it stays non-nil and retains the item.
-	if backing[len(backing)-1] == nil {
-		t.Fatalf("expected backing array to still hold a reference; got nil")
-	}
 }
 
 func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
@@ -110,23 +95,20 @@ func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
 	re.False(checkReferences(), "expected no references in backing array yet")
 
 	// pop one item, should leave reference in backing array.
-	item := pq.pop()
+	item, fn := pq.Take(1)
+	fn()
 	re.Len(pq.ps, 2)
 	re.NotNil(item)
 	re.False(checkReferences(), "expected no references in backing array yet")
 
 	// Take all items without clean, the references remain in the backing array.
-	_ = pq.Take(pq.Len())
-	re.Len(pq.ps, 0)
-	if pq.Len() != 0 {
-		t.Fatalf("expected empty queue, got len=%d", pq.Len())
-	}
+	_, freeFn := pq.Take(pq.Len())
+	re.Empty(pq.ps)
 	re.True(checkReferences(), "expected no references in backing array yet")
 
 	runtime.GC()
 	re.True(checkReferences(), "expected no references in backing array yet")
 
-	pq.Clean()
+	freeFn()
 	re.False(checkReferences(), "expected no references in backing array yet")
-
 }
