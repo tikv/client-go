@@ -58,6 +58,7 @@ func (ps *prioritySlice) Pop() interface{} {
 	old := *ps
 	n := len(old)
 	item := old[n-1]
+	old[n-1] = nil // avoid memory leak
 	*ps = old[0 : n-1]
 	return item
 }
@@ -127,13 +128,19 @@ func (pq *PriorityQueue) all() []Item {
 }
 
 // clean removes all canceled entries from the priority queue.
-func (pq *PriorityQueue) clean() {
+func (pq *PriorityQueue) Clean() {
 	for i := 0; i < pq.Len(); {
 		if pq.ps[i].isCanceled() {
 			heap.Remove(&pq.ps, i)
 			continue
 		}
 		i++
+	}
+
+	// clean up the references in the backing array
+	cleanQueue := pq.ps[len(pq.ps):cap(pq.ps)]
+	for i := range cleanQueue {
+		cleanQueue[i] = nil
 	}
 }
 
