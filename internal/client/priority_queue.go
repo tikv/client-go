@@ -64,8 +64,6 @@ func (ps *prioritySlice) Pop() interface{} {
 }
 
 // PriorityQueue is a priority queue.
-// notice that the caller should ensure that call the clean method periodically to remove canceled entries.
-// to avoid the weak reference in the backing array.
 type PriorityQueue struct {
 	ps prioritySlice
 }
@@ -95,20 +93,26 @@ func (pq *PriorityQueue) pop() Item {
 }
 
 // Take returns the highest priority entries from the priority queue.
-func (pq *PriorityQueue) Take(n int) []Item {
+// notice that the caller should ensure that call the clean method periodically to remove canceled entries.
+// to avoid the weak reference in the backing array.
+func (pq *PriorityQueue) Take(n int) ([]Item, func()) {
 	if n <= 0 {
-		return nil
+		return nil, func() {}
 	}
 	if n >= pq.Len() {
 		ret := pq.ps
 		pq.ps = pq.ps[:0]
-		return ret
+		return ret, func() {
+			for i := range ret {
+				ret[i] = nil
+			}
+		}
 	} else {
 		ret := make([]Item, n)
 		for i := 0; i < n; i++ {
 			ret[i] = pq.pop()
 		}
-		return ret
+		return ret, func() {}
 	}
 
 }
@@ -130,19 +134,13 @@ func (pq *PriorityQueue) all() []Item {
 }
 
 // clean removes all canceled entries from the priority queue.
-func (pq *PriorityQueue) Clean() {
+func (pq *PriorityQueue) clean() {
 	for i := 0; i < pq.Len(); {
 		if pq.ps[i].isCanceled() {
 			heap.Remove(&pq.ps, i)
 			continue
 		}
 		i++
-	}
-
-	// clean up the references in the backing array
-	cleanQueue := pq.ps[len(pq.ps):cap(pq.ps)]
-	for i := range cleanQueue {
-		cleanQueue[i] = nil
 	}
 }
 

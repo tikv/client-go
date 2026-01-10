@@ -185,11 +185,12 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 		if limit == 0 {
 			n = 1
 		}
-		reqs := b.entries.Take(int(n))
+		reqs, freeFn := b.entries.Take(int(n))
 		if len(reqs) == 0 {
 			break
 		}
 		build(reqs)
+		freeFn()
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
@@ -212,7 +213,7 @@ func (b *batchCommandsBuilder) cancel(e error) {
 // reset resets the builder to the initial state.
 // Should call it before collecting a new batch.
 func (b *batchCommandsBuilder) reset() {
-	b.entries.Clean()
+	b.entries.clean()
 	// NOTE: We can't simply set entries = entries[:0] here.
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
