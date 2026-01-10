@@ -42,7 +42,7 @@ func TestPriority(t *testing.T) {
 		}
 		re.Equal(5, aq.Len())
 		re.Equal(uint64(5), aq.highestPriority())
-		aq.clean()
+		aq.Clean()
 		re.Equal(5, aq.Len())
 
 		arr := aq.Take(1)
@@ -65,9 +65,63 @@ func TestPriority(t *testing.T) {
 
 		aq.Push(&FakeItem{value: 1, pri: 1, canceled: true})
 		re.Equal(1, aq.Len())
-		aq.clean()
+		aq.Clean()
 		re.Equal(0, aq.Len())
 	}
 	hq := NewPriorityQueue()
 	testFunc(hq)
+}
+
+func TestPriorityQueuePopLeavesReferenceInBackingArray(t *testing.T) {
+	pq := NewPriorityQueue()
+	it := &FakeItem{pri: 1}
+	pq.Push(it)
+
+	_ = pq.pop()
+	if pq.Len() != 0 {
+		t.Fatalf("expected empty queue, got len=%d", pq.Len())
+	}
+
+	// Expand to full capacity to inspect the backing array.
+	backing := pq.ps[:cap(pq.ps)]
+	// If the removed slot is not cleared, it stays non-nil and retains the item.
+	if backing[len(backing)-1] == nil {
+		t.Fatalf("expected backing array to still hold a reference; got nil")
+	}
+}
+
+func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
+	re := require.New(t)
+	pq := NewPriorityQueue()
+	checkReferences := func() bool {
+		backing := pq.ps[len(pq.ps):cap(pq.ps)]
+		for _, v := range backing {
+			if v != nil {
+				return true
+			}
+		}
+		return false
+	}
+
+	for i := 0; i < 3; i++ {
+		pq.Push(&FakeItem{pri: uint64(i + 1)})
+	}
+	re.False(checkReferences(), "expected no references in backing array yet")
+
+	// pop one item, should leave reference in backing array.
+	item := pq.pop()
+	re.Len(pq.ps, 2)
+	re.NotNil(item)
+	re.False(checkReferences(), "expected no references in backing array yet")
+
+	// Take all items without clean, the references remain in the backing array.
+	_ = pq.Take(pq.Len())
+	re.Len(pq.ps, 0)
+	if pq.Len() != 0 {
+		t.Fatalf("expected empty queue, got len=%d", pq.Len())
+	}
+	re.True(checkReferences(), "expected no references in backing array yet")
+
+	pq.Clean()
+	re.False(checkReferences(), "expected no references in backing array yet")
 }
