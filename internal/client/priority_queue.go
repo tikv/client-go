@@ -64,6 +64,8 @@ func (ps *prioritySlice) Pop() interface{} {
 }
 
 // PriorityQueue is a priority queue.
+// notice that the caller should ensure that call the clean method periodically to remove canceled entries.
+// to avoid the weak reference in the backing array.
 type PriorityQueue struct {
 	ps prioritySlice
 }
