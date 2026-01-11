@@ -186,11 +186,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 		if limit == 0 {
 			n = 1
 		}
-		reqs := b.entries.Take(int(n))
-		if len(reqs) == 0 {
-			break
-		}
-		build(reqs)
+		b.entries.Take(int(n), build)
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
