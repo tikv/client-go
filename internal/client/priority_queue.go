@@ -92,27 +92,32 @@ func (pq *PriorityQueue) pop() Item {
 	return e.(Item)
 }
 
-// Take returns the highest priority entries from the priority queue.
-// notice that the caller should ensure that call the clean method periodically to remove canceled entries.
-// to avoid the weak reference in the backing array.
-func (pq *PriorityQueue) Take(n int) ([]Item, func()) {
+// Take returns the highest priority entries from the priority queue and run the provided function on them.
+// ref https://github.com/tikv/client-go/issues/1834
+// Take retrieves and removes the first n items from the priority queue and passes them to the callback function.
+// If n is less than or equal to 0, the function returns without performing any operation.
+// If n is greater than or equal to the queue length, all items are removed and passed to the callback.
+// Otherwise, exactly n items are popped from the queue and passed to the callback.
+// The callback function fn is responsible for processing the items; it receives a slice of Items.
+// Ref issue: https://github.com/tikv/client-go/issues/1834
+func (pq *PriorityQueue) Take(n int, cb func([]Item)) {
 	if n <= 0 {
-		return nil, func() {}
+		return
 	}
 	if n >= pq.Len() {
 		ret := pq.ps
 		pq.ps = pq.ps[:0]
-		return ret, func() {
-			for i := range ret {
-				ret[i] = nil
-			}
+		cb(ret)
+		for i := range ret {
+			ret[i] = nil
 		}
+		return
 	} else {
 		ret := make([]Item, n)
 		for i := 0; i < n; i++ {
 			ret[i] = pq.pop()
 		}
-		return ret, func() {}
+		cb(ret)
 	}
 
 }

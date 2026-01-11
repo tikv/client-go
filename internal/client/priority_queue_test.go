@@ -15,7 +15,6 @@
 package client
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,27 +44,29 @@ func TestPriority(t *testing.T) {
 		re.Equal(uint64(5), aq.highestPriority())
 		aq.clean()
 		re.Equal(5, aq.Len())
+		arr := make([]Item, 0)
+		collect := func(items []Item) {
+			arr = arr[:0]
+			arr = append(arr, items...)
+		}
 
-		arr, fn := aq.Take(1)
+		aq.Take(1, collect)
 		re.Len(arr, 1)
 		re.Equal(uint64(5), arr[0].priority())
 		re.Equal(uint64(4), aq.highestPriority())
-		fn()
 
-		arr, fn = aq.Take(2)
+		aq.Take(2, collect)
 		re.Len(arr, 2)
 		re.Equal(uint64(4), arr[0].priority())
 		re.Equal(uint64(3), arr[1].priority())
 		re.Equal(uint64(2), aq.highestPriority())
-		fn()
 
-		arr, fn = aq.Take(5)
+		aq.Take(5, collect)
 		re.Len(arr, 2)
 		re.Equal(uint64(2), arr[0].priority())
 		re.Equal(uint64(1), arr[1].priority())
 		re.Equal(uint64(0), aq.highestPriority())
 		re.Equal(0, aq.Len())
-		fn()
 
 		aq.Push(&FakeItem{value: 1, pri: 1, canceled: true})
 		re.Equal(1, aq.Len())
@@ -94,21 +95,27 @@ func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
 	}
 	re.False(checkReferences(), "expected no references in backing array yet")
 
+	arr := make([]Item, 0)
+	collect := func(items []Item) {
+		arr = arr[:0]
+		arr = append(arr, items...)
+	}
+
 	// pop one item, should leave reference in backing array.
-	item, fn := pq.Take(1)
-	fn()
+	pq.Take(1, collect)
 	re.Len(pq.ps, 2)
-	re.NotNil(item)
+	re.Len(arr, 1)
 	re.False(checkReferences(), "expected no references in backing array yet")
 
 	// Take all items without clean, the references remain in the backing array.
-	_, freeFn := pq.Take(pq.Len())
+	pq.Take(pq.Len(), collect)
 	re.Empty(pq.ps)
-	re.True(checkReferences(), "expected no references in backing array yet")
+	re.False(checkReferences(), "expected no references in backing array yet")
 
-	runtime.GC()
-	re.True(checkReferences(), "expected no references in backing array yet")
-
-	freeFn()
+	for i := 0; i < 3; i++ {
+		pq.Push(&FakeItem{pri: uint64(i + 1), canceled: true})
+	}
+	pq.clean()
+	re.Empty(pq.ps)
 	re.False(checkReferences(), "expected no references in backing array yet")
 }
