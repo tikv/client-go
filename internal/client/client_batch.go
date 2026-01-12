@@ -152,6 +152,7 @@ func (b *batchCommandsBuilder) hasHighPriorityTask() bool {
 func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
 	count := int64(0)
+	exhaust := false
 	build := func(reqs []Item) {
 		for _, e := range reqs {
 			e := e.(*batchCommandsEntry)
@@ -178,6 +179,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 				batchReq.Requests = append(batchReq.Requests, e.req)
 			}
 			b.idAlloc++
+			exhaust = len(reqs) == 0
 		}
 	}
 	for (count < limit && b.entries.Len() > 0) || b.hasHighPriorityTask() {
@@ -186,6 +188,9 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 			n = 1
 		}
 		b.entries.Take(int(n), build)
+		if exhaust {
+			break
+		}
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
