@@ -64,6 +64,60 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+// globalEncodedMsgDataPool is used to pool pre-encoded message data for batch commands.
+var globalEncodedMsgDataPool grpc.SharedBufferPool
+
+func init() {
+	globalEncodedMsgDataPool = grpc.NewSharedBufferPool()
+}
+
+type encodedBatchCmd struct {
+	// implement isBatchCommandsRequest_Request_Cmd
+	tikvpb.BatchCommandsRequest_Request_Empty
+	// pre-encoded message data
+	data []byte
+}
+
+func (p *encodedBatchCmd) MarshalTo(data []byte) (int, error) {
+	n := copy(data, p.data)
+	return n, nil
+}
+
+func (p *encodedBatchCmd) Size() int {
+	return len(p.data)
+}
+
+// encodeRequestCmd encodes the `req.Cmd` into a `preparedBatchCmd` and updates the `req.Cmd` to it in place.
+func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
+	if _, ok := req.Cmd.(*encodedBatchCmd); ok {
+		return nil
+	}
+	data := globalEncodedMsgDataPool.Get(req.Cmd.Size())
+	n, err := req.Cmd.MarshalTo(data)
+	if err != nil {
+		globalEncodedMsgDataPool.Put(&data)
+		return errors.WithStack(err)
+	} else if n != len(data) {
+		globalEncodedMsgDataPool.Put(&data)
+		return errors.Errorf("unexpected marshaled size: got %d, want %d", n, len(data))
+	}
+	req.Cmd = &encodedBatchCmd{data: data}
+	return nil
+}
+
+// reuseRequestData puts back all pre-encoded message data in the request to the `globalEncodedMsgDataPool`. The
+// returned count is used for testing.
+func reuseRequestData(req *tikvpb.BatchCommandsRequest) int {
+	count := 0
+	for _, r := range req.Requests {
+		if cmd, ok := r.Cmd.(*encodedBatchCmd); ok {
+			globalEncodedMsgDataPool.Put(&cmd.data)
+			count++
+		}
+	}
+	return count
+}
+
 type batchCommandsEntry struct {
 	ctx context.Context
 	req *tikvpb.BatchCommandsRequest_Request
@@ -509,6 +563,8 @@ func (c *batchCommandsClient) available() int64 {
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
+	defer reuseRequestData(req)
+
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
@@ -834,6 +890,9 @@ func sendBatchRequest(
 	timeout time.Duration,
 	priority uint64,
 ) (*tikvrpc.Response, error) {
+	if err := encodeRequestCmd(req); err != nil {
+		return nil, err
+	}
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
