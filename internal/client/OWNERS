@@ -1,5 +1,6 @@
 # See the OWNERS docs at https://www.kubernetes.dev/docs/guide/owners/#owners
 # Batch client critical path - requires approval from core team
-inherit: false
+options:
+  no_parent_owners: true
 approvers:
   - sig-client-approvers
