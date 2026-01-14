@@ -1,4 +1,5 @@
 # See the OWNERS docs at https://www.kubernetes.dev/docs/guide/owners/#owners
 # Transaction KV related logic, transaction processing critical path
+inherit: false
 approvers:
   - sig-txn-approvers
