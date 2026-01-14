@@ -82,3 +82,16 @@ aliases:
     - zhongzc
     - zhouqiang-cl
     - zyguan
+  sig-client-approvers:
+    - cfzjywxk
+    - lcwangchao
+    - zyguan
+  sig-memdb-approvers:
+    - cfzjywxk
+    - lcwangchao
+    - zyguan
+    - you06
+  sig-txn-approvers:
+    - cfzjywxk
+    - lcwangchao
+    - zyguan
