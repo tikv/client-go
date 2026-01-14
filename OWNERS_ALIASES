@@ -86,12 +86,18 @@ aliases:
     - cfzjywxk
     - lcwangchao
     - zyguan
+    - MyonKeminta
+    - ekexium
   sig-memdb-approvers:
     - cfzjywxk
     - lcwangchao
     - zyguan
     - you06
+    - MyonKeminta
+    - ekexium
   sig-txn-approvers:
     - cfzjywxk
     - lcwangchao
     - zyguan
+    - MyonKeminta
+    - ekexium
