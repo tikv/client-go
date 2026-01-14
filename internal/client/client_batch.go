@@ -75,16 +75,22 @@ type encodedBatchCmd struct {
 	// implement isBatchCommandsRequest_Request_Cmd
 	tikvpb.BatchCommandsRequest_Request_Empty
 	// pre-encoded message data
-	data []byte
+	data *[]byte
 }
 
 func (p *encodedBatchCmd) MarshalTo(data []byte) (int, error) {
-	n := copy(data, p.data)
+	if p.data == nil {
+		return 0, errors.New("message data has been released")
+	}
+	n := copy(data, *p.data)
 	return n, nil
 }
 
 func (p *encodedBatchCmd) Size() int {
-	return len(p.data)
+	if p.data == nil {
+		return 0
+	}
+	return len(*p.data)
 }
 
 // encodeRequestCmd encodes the `req.Cmd` into a `preparedBatchCmd` and updates the `req.Cmd` to it in place.
@@ -93,7 +99,10 @@ func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
 		// req.Cmd might be nil in unit tests.
 		return nil
 	}
-	if _, ok := req.Cmd.(*encodedBatchCmd); ok {
+	if encoded, ok := req.Cmd.(*encodedBatchCmd); ok {
+		if encoded.data == nil {
+			return errors.New("request has already been encoded and sent")
+		}
 		return nil
 	}
 	data := globalEncodedMsgDataPool.Get(req.Cmd.Size())
@@ -105,7 +114,7 @@ func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
 		globalEncodedMsgDataPool.Put(&data)
 		return errors.Errorf("unexpected marshaled size: got %d, want %d", n, len(data))
 	}
-	req.Cmd = &encodedBatchCmd{data: data}
+	req.Cmd = &encodedBatchCmd{data: &data}
 	return nil
 }
 
@@ -114,8 +123,9 @@ func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
 func reuseRequestData(req *tikvpb.BatchCommandsRequest) int {
 	count := 0
 	for _, r := range req.Requests {
-		if cmd, ok := r.Cmd.(*encodedBatchCmd); ok {
-			globalEncodedMsgDataPool.Put(&cmd.data)
+		if cmd, ok := r.Cmd.(*encodedBatchCmd); ok && cmd.data != nil {
+			globalEncodedMsgDataPool.Put(cmd.data)
+			cmd.data = nil
 			count++
 		}
 	}
