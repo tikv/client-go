@@ -89,6 +89,10 @@ func (p *encodedBatchCmd) Size() int {
 
 // encodeRequestCmd encodes the `req.Cmd` into a `preparedBatchCmd` and updates the `req.Cmd` to it in place.
 func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
+	if req.Cmd == nil {
+		// req.Cmd might be nil in unit tests.
+		return nil
+	}
 	if _, ok := req.Cmd.(*encodedBatchCmd); ok {
 		return nil
 	}
