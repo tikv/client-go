@@ -1769,6 +1769,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTSMgr.tryUpdate(latestTS+1, twoPCAccess)
 	}
@@ -1904,6 +1905,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetCommitTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		logutil.Event(ctx, "finish get commit ts")
 		logutil.SetTag(ctx, "commitTs", commitTS)
 	}
