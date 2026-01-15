@@ -679,11 +679,16 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		server.Stop()
 	}()
 
+<<<<<<< HEAD
 	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	conn, err := client.getConnArray(addr, true)
+=======
+	conn, err := client.getConnPool(addr, true)
+>>>>>>> e5f6398d (client: pre-encode request before sending to batch-send-loop (#1841))
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
@@ -694,6 +699,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be failed since server is down.
 	for i := 0; i < 10; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
@@ -737,6 +743,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
@@ -1049,6 +1056,8 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 		// mock all client a in recreate.
 		c.lockForRecreate()
 	}
+
+	req = &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	start := time.Now()
 	timeout := time.Second
 	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, timeout, 0)
