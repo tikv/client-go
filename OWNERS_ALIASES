@@ -84,20 +84,22 @@ aliases:
     - zyguan
   sig-client-approvers:
     - cfzjywxk
-    - lcwangchao
-    - zyguan
-    - MyonKeminta
     - ekexium
+    - lcwangchao
+    - MyonKeminta
+    - you06
+    - zyguan
   sig-memdb-approvers:
     - cfzjywxk
-    - lcwangchao
-    - zyguan
-    - you06
-    - MyonKeminta
     - ekexium
+    - lcwangchao
+    - MyonKeminta
+    - you06
+    - zyguan
   sig-txn-approvers:
     - cfzjywxk
-    - lcwangchao
-    - zyguan
-    - MyonKeminta
     - ekexium
+    - lcwangchao
+    - MyonKeminta
+    - you06
+    - zyguan
