@@ -136,10 +136,6 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKey
 	return keys
 }
 
-func (txn TxnProbe) GetCommitWaitUntilTSOTimeout() time.Duration {
-	return txn.KVTxn.commitWaitUntilTSOTimeout
-}
-
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
