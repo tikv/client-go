@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/mem"
 )
 
 type connPool struct {
@@ -76,6 +77,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	//nolint:SA1019
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -141,8 +143,8 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
