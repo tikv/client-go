@@ -51,9 +51,9 @@ func TestEncodeRequestCmd_Basic(t *testing.T) {
 	err := encodeRequestCmd(batch1.Requests[0])
 	require.NoError(t, err)
 
-	// Verify req.Cmd is now a preparedBatchCmd
+	// Verify req.Cmd is now a encodedBatchCmd
 	_, ok := batch1.Requests[0].Cmd.(*encodedBatchCmd)
-	require.True(t, ok, "req.Cmd should be converted to *preparedBatchCmd")
+	require.True(t, ok, "req.Cmd should be converted to *encodedBatchCmd")
 
 	// Verify two batches have the same size after encoding
 	require.Equal(t, batch1.Size(), batch2.Size())

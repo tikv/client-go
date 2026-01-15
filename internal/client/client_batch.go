@@ -65,11 +65,7 @@ import (
 )
 
 // globalEncodedMsgDataPool is used to pool pre-encoded message data for batch commands.
-var globalEncodedMsgDataPool grpc.SharedBufferPool
-
-func init() {
-	globalEncodedMsgDataPool = grpc.NewSharedBufferPool()
-}
+var globalEncodedMsgDataPool = grpc.NewSharedBufferPool()
 
 type encodedBatchCmd struct {
 	// implement isBatchCommandsRequest_Request_Cmd
@@ -81,6 +77,8 @@ type encodedBatchCmd struct {
 func (p *encodedBatchCmd) MarshalTo(data []byte) (int, error) {
 	if p.data == nil {
 		return 0, errors.New("message data has been released")
+	} else if len(data) < len(*p.data) {
+		return 0, errors.New("no enough space to marshal message")
 	}
 	n := copy(data, *p.data)
 	return n, nil
@@ -93,7 +91,14 @@ func (p *encodedBatchCmd) Size() int {
 	return len(*p.data)
 }
 
-// encodeRequestCmd encodes the `req.Cmd` into a `preparedBatchCmd` and updates the `req.Cmd` to it in place.
+// encodeRequestCmd encodes the `req.Cmd` into a `encodedBatchCmd` and updates the `req.Cmd` to it in place.
+//
+// SAFETY: This function is called just after `tikvrpc.Request.ToBatchCommandsRequest()` and before constructing
+// `batchCommandsEntry`. Note that the `req` argument is the output of `ToBatchCommandsRequest`, which is a new object
+// of `tikvpb.BatchCommandsRequest_Request`. So `req.Cmd` can be only modified inside the batch client by
+// `reuseRequestData` after the `req` has been sent. So there should be no data race on `req.Cmd` via public API
+// (`SendRequest` and `SendRequestAsync`). When writing unit tests, please make sure it's only called once for one `req`
+// (do NOT reuse `req`).
 func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
 	if req.Cmd == nil {
 		// req.Cmd might be nil in unit tests.
