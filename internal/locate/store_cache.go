@@ -312,7 +312,7 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
-// GetLabels returns the labels of the store
+// GetLabels returns the labels of the store, it is not safe to modify the returned labels.
 func (s *Store) GetLabels() []*metapb.StoreLabel {
 	s.metaMu.RLock()
 	defer s.metaMu.RUnlock()
@@ -506,6 +506,8 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	if addr == "" {
 		return false, errors.Errorf("empty store(%d) address", s.storeID)
 	}
+	s.resolveMutex.Lock()
+	defer s.resolveMutex.Unlock()
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
 		logutil.BgLogger().Info("store meta(address or labels changed), replacing with new store",
 			zap.Uint64("store", s.storeID),

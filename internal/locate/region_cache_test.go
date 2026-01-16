@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -3115,7 +3116,7 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	s.Require().NotNil(store1)
 	s.Require().Equal(resolved, store1.getResolveState())
 	// change store1 label.
-	labels := store1.GetLabels()
+	labels := slices.Clone(store1.GetLabels())
 	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), labels...)
 
@@ -3144,6 +3145,83 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return newStore1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
+}
+
+// TestUpdateLeaderWithStoreLabelChangeAndReachableLiveness tests that updateLeader
+// can successfully switch to a new leader when the store's label has changed but
+// the liveness state remains reachable.
+func (s *testRegionCacheSuite) TestUpdateLeaderWithStoreLabelChangeAndReachableLiveness() {
+	// Initialize region cache
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Require().NoError(err)
+	s.Require().NotNil(loc)
+
+	// Get the leader store (store1 is typically the leader)
+	store1, exists := s.cache.stores.get(s.store1)
+	s.Require().True(exists)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+
+	// Ensure store liveness is reachable
+	atomic.StoreUint32(&store1.livenessState, uint32(reachable))
+
+	// Change store1's label (address stays the same)
+	oldLabels := slices.Clone(store1.GetLabels())
+	newLabels := append(oldLabels, &metapb.StoreLabel{Key: "zone", Value: "zone1"})
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), newLabels...)
+
+	// Trigger store metadata update by marking it as needCheck and resolving
+	store1.setResolveState(needCheck)
+	s.cache.checkAndResolve(nil, func(st *Store) bool {
+		return st.getResolveState() == needCheck
+	})
+
+	// Verify the store's label has been updated
+	newStore1, exists := s.cache.stores.get(s.store1)
+	s.Require().True(exists)
+	s.Require().NotNil(newStore1)
+	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "zone", "zone1"))
+	s.Require().Equal(reachable, newStore1.getLivenessState())
+
+	// Create a replica selector to test updateLeader
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.Require().NotNil(region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	replicaSelector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Require().NoError(err)
+	s.Require().NotNil(replicaSelector)
+
+	// Find the peer on store1 (the store with updated label and reachable liveness)
+	var leaderPeer *metapb.Peer
+	for _, peer := range region.GetMeta().Peers {
+		if peer.StoreId == s.store1 {
+			leaderPeer = peer
+			break
+		}
+	}
+	s.Require().NotNil(leaderPeer)
+
+	// Create an RPCContext for the current leader
+	rpcCtx, err := replicaSelector.next(s.bo, req)
+	s.Require().NoError(err)
+	s.Require().NotNil(rpcCtx)
+
+	// Simulate NotLeader error with new leader on store1 (which has updated label and is reachable)
+	notLeaderErr := &errorpb.NotLeader{
+		RegionId: region.GetID(),
+		Leader:   leaderPeer,
+	}
+
+	// Call onNotLeader which will internally call updateLeader
+	// Since store1's liveness is reachable, updateLeader should succeed
+	shouldRetry, err := replicaSelector.onNotLeader(s.bo, rpcCtx, notLeaderErr)
+	s.Require().NoError(err)
+	s.Require().True(shouldRetry, "updateLeader should succeed when liveness is reachable")
+
+	// Verify that the leader was successfully updated
+	// The updateLeader should have returned a valid index (>= 0)
+	// We can verify by checking that the replica selector can continue
+	s.Require().True(region.isValid(), "region should still be valid after successful leader update")
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
