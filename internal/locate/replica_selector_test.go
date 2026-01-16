@@ -67,8 +67,8 @@ func (s *testReplicaSelectorSuite) SetupTest(t *testing.T) {
 	s.Equal(r.GetLeaderStoreID(), uint64(1)) // region's leader in store1.
 	s.Equal(len(r.getStore().stores), 3)     // region has 3 peer(stores).
 	for _, store := range r.getStore().stores {
-		s.Equal(store.labels[0].Key, "id") // Each store has a label "id", and the value is the store's ID.
-		s.Equal(store.labels[0].Value, fmt.Sprintf("%v", store.storeID))
+		s.Equal(store.GetLabels()[0].Key, "id") // Each store has a label "id", and the value is the store's ID.
+		s.Equal(store.GetLabels()[0].Value, fmt.Sprintf("%v", store.storeID))
 	}
 }
 
