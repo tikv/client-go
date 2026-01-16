@@ -1917,6 +1917,184 @@ func (s *testRegionCacheSuite) TestLocateBucket() {
 	}
 }
 
+// TestBucketClampingToRegion tests that bucket boundaries exceeding region
+// boundaries are clamped correctly.
+func TestBucketClampingToRegion(t *testing.T) {
+	tests := []struct {
+		name            string
+		regionStart     []byte
+		regionEnd       []byte
+		bucketStart     []byte
+		bucketEnd       []byte
+		wantStart       []byte
+		wantEnd         []byte
+		shouldBeClamped bool
+	}{
+		{
+			name:            "bucket within region - no clamping",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"),
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket start before region - clamp start",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("a"), // Before region start
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket end after region - clamp end",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte("z"), // After region end
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket exceeds both boundaries - clamp both",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("a"), // Before region start
+			bucketEnd:       []byte("z"), // After region end
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "empty region start - bucket start not clamped",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("a"),
+			wantEnd:         []byte("m"), // Only end clamped
+			shouldBeClamped: true,
+		},
+		{
+			name:            "empty region end - bucket end not clamped",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("f"), // Only start clamped
+			wantEnd:         []byte("z"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket completely before region - fallback to region",
+			regionStart:     []byte("m"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("f"), // Ends before region starts
+			wantStart:       []byte("m"), // Falls back to region boundaries
+			wantEnd:         []byte("z"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty startKey - clamp to region start",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty endKey - clamp to region end",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty startKey and region with empty startKey - no start clamping",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte{}, // No clamping needed
+			wantEnd:         []byte("m"),
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket with empty endKey and region with empty endKey - no end clamping",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte{}, // No clamping needed
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket spanning full keyspace - clamp to region",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte{},    // Beginning of keyspace
+			bucketEnd:       []byte{},    // End of keyspace (infinity)
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "infinity region - no clamping needed",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("a"),
+			wantEnd:         []byte("z"),
+			shouldBeClamped: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loc := &KeyLocation{
+				Region:   RegionVerID{id: 1},
+				StartKey: tt.regionStart,
+				EndKey:   tt.regionEnd,
+			}
+			bucket := &Bucket{
+				StartKey: tt.bucketStart,
+				EndKey:   tt.bucketEnd,
+			}
+
+			result := loc.clampBucketToRegion(bucket)
+
+			if !bytes.Equal(result.StartKey, tt.wantStart) {
+				t.Errorf("StartKey = %q, want %q", result.StartKey, tt.wantStart)
+			}
+			if !bytes.Equal(result.EndKey, tt.wantEnd) {
+				t.Errorf("EndKey = %q, want %q", result.EndKey, tt.wantEnd)
+			}
+
+			// Verify that clamped bucket is different from original if clamping was expected
+			isSameBucket := result == bucket
+			if tt.shouldBeClamped && isSameBucket {
+				t.Error("Expected bucket to be clamped (new object), but got same object")
+			}
+			if !tt.shouldBeClamped && !isSameBucket {
+				t.Error("Expected no clamping (same object), but got new object")
+			}
+		})
+	}
+}
+
 func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	// Split at "b", "c", "d", "e"
 	regions := s.cluster.AllocIDs(4)

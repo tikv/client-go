@@ -138,10 +138,37 @@ type ReqDetailInfo struct {
 	ExecDetails  TiKVExecDetails
 }
 
+// CommitTSLagDetails contain the detail when the commit timestamp
+// from PD lags the expected ts set by `SetCommitWaitUntilTSO`.
+type CommitTSLagDetails struct {
+	// WaitTime indicates the total wait time for the lagged PD TSO exceeds `WaitUntilTS`.
+	WaitTime time.Duration
+	// BackoffCnt indicates the backoff count to wait the lagged PD TSO exceeds `WaitUntilTS`.
+	BackoffCnt int
+	// FirstLagTS indicates the first fetched TSO that lags behind `WaitUntilTS`.
+	FirstLagTS uint64
+	// WaitUntilTS indicates the min timestamp of the commit ts, the txn should wait PD TSO to exceeds this value.
+	WaitUntilTS uint64
+}
+
+// Merge merges CommitTSLagDetails with another one
+func (d *CommitTSLagDetails) Merge(other *CommitTSLagDetails) {
+	if other == nil || other.FirstLagTS <= 0 {
+		// other.FirstLagTS <= 0 indicates no lag happen, do not need to merge the new details.
+		return
+	}
+	d.WaitTime += other.WaitTime
+	d.BackoffCnt += other.BackoffCnt
+	// For sample, we use the last lag timestamps after merge
+	d.FirstLagTS = other.FirstLagTS
+	d.WaitUntilTS = other.WaitUntilTS
+}
+
 // CommitDetails contains commit detail information.
 type CommitDetails struct {
 	GetCommitTsTime        time.Duration
 	GetLatestTsTime        time.Duration
+	LagDetails             CommitTSLagDetails
 	PrewriteTime           time.Duration
 	WaitPrewriteBinlogTime time.Duration
 	CommitTime             time.Duration
@@ -169,7 +196,7 @@ type CommitDetails struct {
 func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.GetCommitTsTime += other.GetCommitTsTime
 	cd.GetLatestTsTime += other.GetLatestTsTime
-	cd.PrewriteTime += other.PrewriteTime
+	cd.LagDetails.Merge(&other.LagDetails)
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime
 	cd.LocalLatchTime += other.LocalLatchTime
@@ -230,6 +257,7 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 	commit := &CommitDetails{
 		GetCommitTsTime:        cd.GetCommitTsTime,
 		GetLatestTsTime:        cd.GetLatestTsTime,
+		LagDetails:             cd.LagDetails,
 		PrewriteTime:           cd.PrewriteTime,
 		WaitPrewriteBinlogTime: cd.WaitPrewriteBinlogTime,
 		CommitTime:             cd.CommitTime,

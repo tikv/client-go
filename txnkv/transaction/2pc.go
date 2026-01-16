@@ -1761,7 +1761,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if commitTSMayBeCalculated && c.needLinearizability() {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
 		start := time.Now()
-		latestTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+		latestTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
@@ -1769,6 +1769,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTSMgr.tryUpdate(latestTS+1, twoPCAccess)
 	}
@@ -1896,7 +1897,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
-		commitTS, err = c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+		commitTS, err = c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
 		if err != nil {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
@@ -1904,6 +1905,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetCommitTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		logutil.Event(ctx, "finish get commit ts")
 		logutil.SetTag(ctx, "commitTs", commitTS)
 	}
