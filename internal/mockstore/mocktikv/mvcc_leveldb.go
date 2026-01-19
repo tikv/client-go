@@ -941,7 +941,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 			}
 		}
 
-		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
+		switch dec.value.valueType {
+		case typePut, typeLock:
 			if needCheckShouldNotExistForPessimisticLock {
 				if writeConflictErr != nil {
 					return nil, writeConflictErr
@@ -960,7 +961,7 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 					ExistingCommitTS: dec.value.commitTS,
 				}
 			}
-		} else if dec.value.valueType == typeDelete {
+		case typeDelete:
 			if lockOnlyIfExists && writeConflictErr != nil {
 				// If lockOnlyIfExists is enabled and the key doesn't exist, force locking shouldn't take effect.
 				return nil, writeConflictErr
@@ -1149,11 +1150,12 @@ func commitKey(db *leveldb.DB, batch *leveldb.Batch, key []byte, startTS, commit
 
 func commitLock(batch *leveldb.Batch, lock mvccLock, key []byte, startTS, commitTS uint64) error {
 	var valueType mvccValueType
-	if lock.op == kvrpcpb.Op_Put {
+	switch lock.op {
+	case kvrpcpb.Op_Put:
 		valueType = typePut
-	} else if lock.op == kvrpcpb.Op_Lock {
+	case kvrpcpb.Op_Lock:
 		valueType = typeLock
-	} else {
+	default:
 		valueType = typeDelete
 	}
 	value := mvccValue{

@@ -426,7 +426,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -461,7 +461,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -495,7 +495,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.

@@ -131,7 +131,7 @@ type ErrDeadlock struct {
 }
 
 func (d *ErrDeadlock) Error() string {
-	return d.Deadlock.String()
+	return d.String()
 }
 
 // PDError wraps *pdpb.Error to implement the error interface.
@@ -154,7 +154,7 @@ type ErrKeyExist struct {
 }
 
 func (k *ErrKeyExist) Error() string {
-	return k.AlreadyExist.String()
+	return k.String()
 }
 
 // IsErrKeyExist returns true if it is ErrKeyExist.
@@ -169,7 +169,7 @@ type ErrWriteConflict struct {
 }
 
 func (k *ErrWriteConflict) Error() string {
-	return fmt.Sprintf("write conflict { %s }", k.WriteConflict.String())
+	return fmt.Sprintf("write conflict { %s }", k.String())
 }
 
 // IsErrWriteConflict returns true if it is ErrWriteConflict.
@@ -312,7 +312,7 @@ type ErrLockOnlyIfExistsNoPrimaryKey struct {
 }
 
 func (e *ErrAssertionFailed) Error() string {
-	return fmt.Sprintf("assertion failed { %s }", e.AssertionFailed.String())
+	return fmt.Sprintf("assertion failed { %s }", e.String())
 }
 
 func (e *ErrLockOnlyIfExistsNoReturnValue) Error() string {

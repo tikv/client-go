@@ -1,6 +1,6 @@
 module integration_tests
 
-go 1.25.5
+go 1.25.6
 
 require (
 	github.com/google/uuid v1.6.0
@@ -10,10 +10,12 @@ require (
 	github.com/pingcap/kvproto v0.0.0-20251218093338-9f0ac2fc9a1a
 	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_golang v1.23.0
+	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
 	github.com/tikv/client-go/v2 v2.0.8-0.20251215121014-01758810e841
-	github.com/tikv/pd/client v0.0.0-20251216162211-a0bf0e9fc204
+	github.com/tikv/pd/client v0.0.0-20260119083144-b273ae0421dd
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.63.2
 )
@@ -117,8 +119,6 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
-	github.com/prometheus/client_golang v1.23.0 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/qri-io/jsonpointer v0.1.1 // indirect
