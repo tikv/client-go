@@ -1758,7 +1758,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// all nodes, we have to make sure the commit TS of this transaction is greater
 	// than the snapshot TS of all existent readers. So we get a new timestamp
 	// from PD and plus one as our MinCommitTS.
-	if commitTSMayBeCalculated && c.needLinearizability() {
+	// If `commitWaitUntilTSO > 0`, we also need to get a new timestamp from TSO to ensure the constraint satisfied.
+	if commitTSMayBeCalculated && (c.needLinearizability() || c.txn.commitWaitUntilTSO > 0) {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
 		start := time.Now()
 		latestTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())
