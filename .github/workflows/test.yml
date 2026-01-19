@@ -10,12 +10,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
-        go-version: 1.23.2
+        go-version: '1.25.6'
 
     - name: Test
       run: go test --tags=intest ./...
@@ -23,12 +23,12 @@ jobs:
   race-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
-        go-version: 1.23.2
+        go-version: '1.25.6'
 
     - name: Test with race
       run: go test -race --tags=intest ./...
@@ -42,7 +42,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.25.6
 
       - name: Go generate and check diff
         run: |
@@ -50,7 +50,7 @@ jobs:
           git diff --exit-code
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v1.61.0
-          skip-pkg-cache: true
+          version: v2.8.0
+          skip-cache: true
