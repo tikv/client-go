@@ -794,7 +794,8 @@ func (s *mockTikvGrpcServer) BroadcastTxnStatus(ctx context.Context, request *kv
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"
-	lis, err := net.Listen("tcp", addr)
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	s.Nil(err)
 	server := grpc.NewServer()
 	tikvpb.RegisterTikvServer(server, &mockTikvGrpcServer{})
@@ -1174,7 +1175,7 @@ type noCauseError struct {
 	error
 }
 
-func (_ noCauseError) Cause() error {
+func (noCauseError) Cause() error {
 	return nil
 }
 

@@ -411,7 +411,8 @@ func (t *turboBatchTrigger) turboWaitTime() time.Duration {
 }
 
 func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool {
-	if t.opts.V == turboBatchTimeBased {
+	switch t.opts.V {
+	case turboBatchTimeBased:
 		thisArrivalInterval := reqArrivalInterval.Seconds()
 		if t.maxArrivalInterval == 0 {
 			t.maxArrivalInterval = t.turboWaitSeconds() * float64(t.opts.N)
@@ -425,14 +426,14 @@ func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool
 			t.estArrivalInterval = t.opts.W*thisArrivalInterval + (1-t.opts.W)*t.estArrivalInterval
 		}
 		return t.estArrivalInterval < t.turboWaitSeconds()*t.opts.P
-	} else if t.opts.V == turboBatchProbBased {
+	case turboBatchProbBased:
 		thisProb := .0
 		if reqArrivalInterval.Seconds() < t.turboWaitSeconds() {
 			thisProb = 1
 		}
 		t.estFetchMoreProb = t.opts.W*thisProb + (1-t.opts.W)*t.estFetchMoreProb
 		return t.estFetchMoreProb > t.opts.P
-	} else {
+	default:
 		return true
 	}
 }

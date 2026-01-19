@@ -59,7 +59,7 @@ func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessL
 const reqTypeAnalyze = 104
 
 func shouldBypass(req *tikvrpc.Request) bool {
-	requestSource := req.Context.GetRequestSource()
+	requestSource := req.GetRequestSource()
 	// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
 	// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
 	// This bypass currently only works with NextGen.
@@ -184,8 +184,8 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
-			detailsV2 = r.Response.GetExecDetailsV2()
-			details = r.Response.GetExecDetails()
+			detailsV2 = r.GetExecDetailsV2()
+			details = r.GetExecDetails()
 		}
 		readBytes = uint64(r.Data.Size())
 	case *kvrpcpb.GetResponse:

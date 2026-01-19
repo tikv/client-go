@@ -573,7 +573,7 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 		// In this case 1PC is not expected to be used, but still check it for safety.
 		if int64(handler.committer.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
 			prewriteResp.OnePcCommitTs == 0 {
-			handler.committer.ttlManager.run(handler.committer, nil, false)
+			handler.committer.run(handler.committer, nil, false)
 		}
 	}
 	if handler.committer.isOnePC() {
