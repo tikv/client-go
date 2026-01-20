@@ -110,7 +110,7 @@ func newTestTxn(t *testing.T, startTS uint64) *testTxn {
 func TestLockKeys(t *testing.T) {
 
 	requireNoRequest := func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-		require.FailNow(t, "locking keys in optismistic mode do not invoke SendRequest")
+		require.FailNow(t, "locking keys in optimistic mode do not invoke SendRequest")
 		return nil, errors.New("mock error")
 	}
 
