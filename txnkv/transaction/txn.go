@@ -62,6 +62,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
@@ -211,24 +212,33 @@ type KVTxn struct {
 	flushBatchDurationEWMA ewma.MovingAverage
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
+
+	// Used when this transaction is a replication transaction from upstream cluster.
+	// LWW (last write wins policy) is used to resolve conflicts between upstream and downstream.
+	// The commit TS of this transaction (downstream) must be greater than original CommitTS (upstream).
+	// GetTimestampWithRetry may sleep and retry to guarantee this constraint.
+	commitWaitUntilTSO uint64
+	// commitWaitUntilTSOTimeout is the maximum clock drift allowed in active-active replication.
+	commitWaitUntilTSOTimeout time.Duration
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:               snapshot,
-		store:                  store,
-		startTS:                startTS,
-		startTime:              time.Now(),
-		valid:                  true,
-		vars:                   tikv.DefaultVars,
-		scope:                  options.TxnScope,
-		enableAsyncCommit:      cfg.EnableAsyncCommit,
-		enable1PC:              cfg.Enable1PC,
-		diskFullOpt:            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:          snapshot.RequestSource,
-		flushBatchDurationEWMA: ewma.NewMovingAverage(defaultEWMAAge),
+		snapshot:                  snapshot,
+		store:                     store,
+		startTS:                   startTS,
+		startTime:                 time.Now(),
+		valid:                     true,
+		vars:                      tikv.DefaultVars,
+		scope:                     options.TxnScope,
+		enableAsyncCommit:         cfg.EnableAsyncCommit,
+		enable1PC:                 cfg.Enable1PC,
+		diskFullOpt:               kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:             snapshot.RequestSource,
+		flushBatchDurationEWMA:    ewma.NewMovingAverage(defaultEWMAAge),
+		commitWaitUntilTSOTimeout: time.Second,
 	}
 	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
@@ -272,13 +282,13 @@ func (txn *KVTxn) GetVars() *tikv.Variables {
 }
 
 // Get implements transaction interface.
-func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
-	ret, err := txn.us.Get(ctx, k)
+func (txn *KVTxn) Get(ctx context.Context, k []byte, options ...tikv.GetOption) (tikv.ValueEntry, error) {
+	ret, err := txn.us.Get(ctx, k, options...)
 	if tikverr.IsErrNotFound(err) {
-		return nil, err
+		return tikv.ValueEntry{}, err
 	}
 	if err != nil {
-		return nil, err
+		return tikv.ValueEntry{}, err
 	}
 
 	return ret, nil
@@ -287,8 +297,8 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 // BatchGet gets kv from the memory buffer of statement and transaction, and the kv storage.
 // Do not use len(value) == 0 or value == nil to represent non-exist.
 // If a key doesn't exist, there shouldn't be any corresponding entry in the result map.
-func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys)
+func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte, options ...tikv.BatchGetOption) (map[string]tikv.ValueEntry, error) {
+	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys, options...)
 }
 
 // Set sets the value for key k as v into kv store.
@@ -333,6 +343,18 @@ func (txn *KVTxn) SetSchemaLeaseChecker(checker SchemaLeaseChecker) {
 // EnableForceSyncLog indicates tikv to always sync log for the transaction.
 func (txn *KVTxn) EnableForceSyncLog() {
 	txn.syncLog = true
+}
+
+// SetCommitWaitUntilTSO sets the minimum commit timestamp constraint for the transaction.
+func (txn *KVTxn) SetCommitWaitUntilTSO(commitWaitUntilTSO uint64) {
+	if commitWaitUntilTSO > txn.commitWaitUntilTSO {
+		txn.commitWaitUntilTSO = commitWaitUntilTSO
+	}
+}
+
+// SetCommitWaitUntilTSOTimeout sets the maximum clock drift allowed in active-active replication.
+func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
+	txn.commitWaitUntilTSOTimeout = val
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -567,8 +589,8 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	// generation is increased when the memdb is flushed to kv store.
 	// note the first generation is 1, which can mark pipelined dml's lock.
 	flushedKeys, flushedSize := 0, 0
-	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
+	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string]tikv.ValueEntry, error) {
+		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier, tikv.BatchGetOptions{})
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
@@ -1940,6 +1962,49 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 // MemHookSet returns whether the mem buffer has a memory footprint change hook set.
 func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
+}
+
+// GetTimestampForCommit returns the timestamp for commit.
+// Unlike a direct wrap, it also checks commitWaitUntilTSO constraint from the SetcommitWaitUntilTSO option.
+func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint64, error) {
+	ts, err := txn.store.GetTimestampWithRetry(bo, scope)
+	if err != nil {
+		return ts, err
+	}
+	if ts > txn.commitWaitUntilTSO {
+		return ts, nil
+	}
+
+	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
+	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
+	// If the TSO drift is larger than the maxSleep, return error directly.
+	maxSleep := 1000
+	if txn.commitWaitUntilTSOTimeout > 0 {
+		maxSleep = int(txn.commitWaitUntilTSOTimeout.Milliseconds())
+	}
+	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
+	if int(interval.Milliseconds()) > maxSleep {
+		return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
+	}
+
+	bo = retry.NewBackoffer(bo.GetCtx(), maxSleep)
+	mockErr := errors.Errorf("clock drift from the upstream cluster")
+	for ts <= txn.commitWaitUntilTSO {
+		// It's neither sleeping interval milliseconds (maybe sleep too long without handling any context.Cancel)
+		// nor sleep every 1ms until we reach the lag interval (maybe we just lag for 1ms, and but PD update the physical time every 50ms,
+		// so after sleeping 1ms, the next GetTimestamp still return the same physical part value)
+		// Just backoff, blindly.
+		err = bo.Backoff(retry.BoMaxTsNotSynced, mockErr)
+		if err != nil {
+			return 0, err
+		}
+
+		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return ts, err
 }
 
 // LifecycleHooks is a struct that contains hooks for a background goroutine.

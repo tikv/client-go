@@ -2,7 +2,7 @@ name: Compatibility Test
 
 on:
   push:
-    branches: [master]
+    branches: [master, "feature/*"]
 
 jobs:
   tidb-compatibility:
