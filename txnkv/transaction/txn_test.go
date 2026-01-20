@@ -30,15 +30,18 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 type mockPDClient struct {
 	unimplementedPDClient
 }
 
-func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	peer := &metapb.Peer{Id: 1, StoreId: 1}
-	return &pd.Region{
+	return &router.Region{
 		Meta: &metapb.Region{
 			Id:       1,
 			StartKey: []byte{},
@@ -54,6 +57,10 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.St
 		Id:      storeID,
 		Address: "mock-store",
 	}, nil
+}
+
+func (c *mockPDClient) WithCallerComponent(caller.Component) pd.Client {
+	return c
 }
 
 type fnClient struct {

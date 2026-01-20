@@ -31,7 +31,14 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util/async"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/clients/tso"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
+	sd "github.com/tikv/pd/client/servicediscovery"
 )
 
 var _ oracle.Oracle = (*unimplementedOracle)(nil)
@@ -118,7 +125,7 @@ func (u *unimplementedPDClient) AddResourceGroup(ctx context.Context, metaGroup 
 }
 
 // BatchScanRegions implements pd.Client.
-func (u *unimplementedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (u *unimplementedPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	panic("unimplemented")
 }
 
@@ -133,7 +140,7 @@ func (u *unimplementedPDClient) DeleteResourceGroup(ctx context.Context, resourc
 }
 
 // Get implements pd.Client.
-func (u *unimplementedPDClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error) {
+func (u *unimplementedPDClient) Get(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.GetResponse, error) {
 	panic("unimplemented")
 }
 
@@ -143,12 +150,12 @@ func (u *unimplementedPDClient) GetAllKeyspaces(ctx context.Context, startID uin
 }
 
 // GetAllMembers implements pd.Client.
-func (u *unimplementedPDClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
+func (u *unimplementedPDClient) GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error) {
 	panic("unimplemented")
 }
 
 // GetAllStores implements pd.Client.
-func (u *unimplementedPDClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
+func (u *unimplementedPDClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	panic("unimplemented")
 }
 
@@ -173,7 +180,7 @@ func (u *unimplementedPDClient) GetLocalTS(ctx context.Context, dcLocation strin
 }
 
 // GetLocalTSAsync implements pd.Client.
-func (u *unimplementedPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
+func (u *unimplementedPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) tso.TSFuture {
 	panic("unimplemented")
 }
 
@@ -188,22 +195,22 @@ func (u *unimplementedPDClient) GetOperator(ctx context.Context, regionID uint64
 }
 
 // GetPrevRegion implements pd.Client.
-func (u *unimplementedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (u *unimplementedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	panic("unimplemented")
 }
 
 // GetRegion implements pd.Client.
-func (u *unimplementedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (u *unimplementedPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	panic("unimplemented")
 }
 
 // GetRegionByID implements pd.Client.
-func (u *unimplementedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (u *unimplementedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
 	panic("unimplemented")
 }
 
 // GetRegionFromMember implements pd.Client.
-func (u *unimplementedPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (u *unimplementedPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*router.Region, error) {
 	panic("unimplemented")
 }
 
@@ -213,7 +220,7 @@ func (u *unimplementedPDClient) GetResourceGroup(ctx context.Context, resourceGr
 }
 
 // GetServiceDiscovery implements pd.Client.
-func (u *unimplementedPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
+func (u *unimplementedPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
 	panic("unimplemented")
 }
 
@@ -228,7 +235,7 @@ func (u *unimplementedPDClient) GetTS(ctx context.Context) (int64, int64, error)
 }
 
 // GetTSAsync implements pd.Client.
-func (u *unimplementedPDClient) GetTSAsync(ctx context.Context) pd.TSFuture {
+func (u *unimplementedPDClient) GetTSAsync(ctx context.Context) tso.TSFuture {
 	panic("unimplemented")
 }
 
@@ -258,12 +265,12 @@ func (u *unimplementedPDClient) ModifyResourceGroup(ctx context.Context, metaGro
 }
 
 // Put implements pd.Client.
-func (u *unimplementedPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
+func (u *unimplementedPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.PutResponse, error) {
 	panic("unimplemented")
 }
 
 // ScanRegions implements pd.Client.
-func (u *unimplementedPDClient) ScanRegions(ctx context.Context, key []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (u *unimplementedPDClient) ScanRegions(ctx context.Context, key []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	panic("unimplemented")
 }
 
@@ -273,7 +280,7 @@ func (u *unimplementedPDClient) ScatterRegion(ctx context.Context, regionID uint
 }
 
 // ScatterRegions implements pd.Client.
-func (u *unimplementedPDClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...pd.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
+func (u *unimplementedPDClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...opt.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
 	panic("unimplemented")
 }
 
@@ -283,12 +290,12 @@ func (u *unimplementedPDClient) SetExternalTimestamp(ctx context.Context, timest
 }
 
 // SplitAndScatterRegions implements pd.Client.
-func (u *unimplementedPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+func (u *unimplementedPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
 	panic("unimplemented")
 }
 
 // SplitRegions implements pd.Client.
-func (u *unimplementedPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+func (u *unimplementedPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	panic("unimplemented")
 }
 
@@ -313,7 +320,7 @@ func (u *unimplementedPDClient) UpdateKeyspaceState(ctx context.Context, id uint
 }
 
 // UpdateOption implements pd.Client.
-func (u *unimplementedPDClient) UpdateOption(option pd.DynamicOption, value any) error {
+func (u *unimplementedPDClient) UpdateOption(option opt.DynamicOption, value any) error {
 	panic("unimplemented")
 }
 
@@ -328,7 +335,7 @@ func (u *unimplementedPDClient) UpdateServiceSafePointV2(ctx context.Context, ke
 }
 
 // Watch implements pd.Client.
-func (u *unimplementedPDClient) Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error) {
+func (u *unimplementedPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error) {
 	panic("unimplemented")
 }
 
@@ -345,6 +352,46 @@ func (u *unimplementedPDClient) WatchGlobalConfig(ctx context.Context, configPat
 // WatchKeyspaces implements pd.Client.
 func (u *unimplementedPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
 	panic("unimplemented")
+}
+
+// WatchResourceGroup implements pd.Client.
+func (u *unimplementedPDClient) WatchResourceGroup(ctx context.Context, revision int64) (chan []*resource_manager.ResourceGroup, error) {
+	panic("unimplemented")
+}
+
+// GetTSWithinKeyspace implements pd.Client.
+func (u *unimplementedPDClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint32) (int64, int64, error) {
+	panic("unimplemented")
+}
+
+// GetTSWithinKeyspaceAsync implements pd.Client.
+func (u *unimplementedPDClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) tso.TSFuture {
+	panic("unimplemented")
+}
+
+// GetLocalTSWithinKeyspace implements pd.Client.
+func (u *unimplementedPDClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation string, keyspaceID uint32) (int64, int64, error) {
+	panic("unimplemented")
+}
+
+// GetLocalTSWithinKeyspaceAsync implements pd.Client.
+func (u *unimplementedPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) tso.TSFuture {
+	panic("unimplemented")
+}
+
+// GetGCInternalController implements pd.Client.
+func (u *unimplementedPDClient) GetGCInternalController(keyspaceID uint32) gc.InternalController {
+	panic("unimplemented")
+}
+
+// GetGCStatesClient implements pd.Client.
+func (u *unimplementedPDClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
+	panic("unimplemented")
+}
+
+// WithCallerComponent implements pd.Client.
+func (u *unimplementedPDClient) WithCallerComponent(caller.Component) pd.Client {
+	return u
 }
 
 var _ kvstore = (*unimplementedKVStore)(nil)
@@ -452,5 +499,10 @@ func (u *unimplementedKVClient) SendRequest(ctx context.Context, addr string, re
 
 // SetEventListener implements client.Client.
 func (u *unimplementedKVClient) SetEventListener(listener client.ClientEventListener) {
+	panic("unimplemented")
+}
+
+// SendRequestAsync implements client.Client.
+func (u *unimplementedKVClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	panic("unimplemented")
 }
