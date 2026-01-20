@@ -1,0 +1,6 @@
+# See the OWNERS docs at https://www.kubernetes.dev/docs/guide/owners/#owners
+# MemDB memory, transaction uncommitted data storage structure
+options:
+  no_parent_owners: true
+approvers:
+  - sig-memdb-approvers
