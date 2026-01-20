@@ -679,12 +679,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		server.Stop()
 	}()
 
-<<<<<<< HEAD
-	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	conn, err := client.getConnArray(addr, true)
-=======
-	conn, err := client.getConnPool(addr, true)
->>>>>>> e5f6398d (client: pre-encode request before sending to batch-send-loop (#1841))
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
