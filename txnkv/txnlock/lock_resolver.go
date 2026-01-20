@@ -818,7 +818,7 @@ type txnNotFoundErr struct {
 }
 
 func (e txnNotFoundErr) Error() string {
-	return e.TxnNotFound.String()
+	return e.String()
 }
 
 type primaryMismatch struct {

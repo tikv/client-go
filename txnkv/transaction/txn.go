@@ -68,6 +68,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -220,6 +221,12 @@ type KVTxn struct {
 	commitWaitUntilTSO uint64
 	// commitWaitUntilTSOTimeout is the maximum clock drift allowed in active-active replication.
 	commitWaitUntilTSOTimeout time.Duration
+	// commitLagWaitInfo collects the wait stats when when waiting for the lagging PD TSO to reach `commitWaitUntilTSO`
+	commitLagWaitStats struct {
+		waitDuration   time.Duration
+		firstAttemptTS uint64
+		backoffCnt     int
+	}
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -352,9 +359,21 @@ func (txn *KVTxn) SetCommitWaitUntilTSO(commitWaitUntilTSO uint64) {
 	}
 }
 
+// GetCommitWaitUntilTSO returns the value set by `SetCommitWaitUntilTSO`.
+// If it returns zero, it means no wait
+func (txn *KVTxn) GetCommitWaitUntilTSO() uint64 {
+	return txn.commitWaitUntilTSO
+}
+
 // SetCommitWaitUntilTSOTimeout sets the maximum clock drift allowed in active-active replication.
 func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
 	txn.commitWaitUntilTSOTimeout = val
+}
+
+// GetCommitWaitUntilTSOTimeout returns the timeout to wait for the commit tso reach the expected value.
+// If it returns zero, it means it is not set and the default timeout should be used
+func (txn *KVTxn) GetCommitWaitUntilTSOTimeout() time.Duration {
+	return txn.commitWaitUntilTSOTimeout
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -592,13 +611,13 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string]tikv.ValueEntry, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier, tikv.BatchGetOptions{})
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
-		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
+		if atomic.LoadUint32((*uint32)(&txn.committer.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
 		}
 		startTime := time.Now()
 		defer func() {
 			if err != nil {
-				txn.committer.ttlManager.close()
+				txn.committer.close()
 			}
 			flushedKeys += memdb.Len()
 			flushedSize += memdb.Size()
@@ -833,7 +852,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	committer.SetTxnSource(txn.txnSource)
 	txn.committer.forUpdateTSConstraints = txn.forUpdateTSChecks
 
-	defer committer.ttlManager.close()
+	defer committer.close()
 
 	if !txn.isPipelined {
 		initRegion := trace.StartRegion(ctx, "InitKeys")
@@ -945,7 +964,7 @@ func (txn *KVTxn) Rollback() error {
 		if !skipPessimisticRollback {
 			err = txn.rollbackPessimisticLocks()
 		}
-		txn.committer.ttlManager.close()
+		txn.committer.close()
 		if err != nil {
 			logutil.BgLogger().Error(err.Error())
 		}
@@ -954,7 +973,7 @@ func (txn *KVTxn) Rollback() error {
 		// wait all flush to finish, this avoids data race.
 		txn.pipelinedCancel()
 		txn.GetMemBuffer().FlushWait()
-		txn.committer.ttlManager.close()
+		txn.committer.close()
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
@@ -1198,7 +1217,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	// If finally no key locked and ttlManager is just started during the current fair locking procedure, reset the
 	// ttlManager as no key will be the primary.
 	if txn.aggressiveLockingContext.lastAssignedPrimaryKey && !txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
@@ -1588,7 +1607,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			for _, key := range unmarkKeys {
 				txn.us.UnmarkPresumeKeyNotExists(key)
 			}
-			keyMayBeLocked := !(tikverr.IsErrWriteConflict(err) || tikverr.IsErrKeyExist(err))
+			keyMayBeLocked := !tikverr.IsErrWriteConflict(err) && !tikverr.IsErrKeyExist(err)
 			// If there is only 1 key and lock fails, no need to do pessimistic rollback.
 			if len(keys) > 1 || keyMayBeLocked {
 				dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
@@ -1717,7 +1736,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 	txn.committer.primaryKey = nil
 	if !keepTTLManager {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 }
 
@@ -1740,7 +1759,7 @@ func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bo
 	//     as the ttlManager is already running.
 	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
 	if hasNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 }
 
@@ -1795,7 +1814,7 @@ func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
 	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
 		if !val.Exists {
 			txn.committer.primaryKey = nil
-			txn.committer.ttlManager.reset()
+			txn.committer.reset()
 		}
 	}
 }
@@ -1843,12 +1862,13 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		defer txn.store.WaitGroup().Done()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
-				if s == "skip" {
+				switch s {
+				case "skip":
 					logutil.Logger(ctx).Info("[failpoint] injected skip async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS))
 					wg.Done()
 					return
-				} else if s == "delay" {
+				case "delay":
 					duration := time.Duration(rand.Int63n(int64(time.Second) * 2))
 					logutil.Logger(ctx).Info("[failpoint] injected delay before async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS), zap.Duration("duration", duration))
@@ -1877,7 +1897,7 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load())
+	return !txn.us.GetMemBuffer().Dirty() && !txn.aggressiveLockingDirty.Load()
 }
 
 // StartTS returns the transaction start timestamp.
@@ -1964,47 +1984,110 @@ func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
 }
 
+type ctxInGetTimestampForCommitKeyType struct{}
+
+var CtxInGetTimestampForCommitKey = ctxInGetTimestampForCommitKeyType{}
+
 // GetTimestampForCommit returns the timestamp for commit.
 // Unlike a direct wrap, it also checks commitWaitUntilTSO constraint from the SetcommitWaitUntilTSO option.
-func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (uint64, error) {
-	ts, err := txn.store.GetTimestampWithRetry(bo, scope)
+func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (_ uint64, err error) {
+	if intest.InTest {
+		ctx := bo.GetCtx()
+		bo.SetCtx(context.WithValue(ctx, CtxInGetTimestampForCommitKey, txn.StartTS()))
+		defer bo.SetCtx(ctx)
+	}
+	firstAttemptTS, err := txn.store.GetTimestampWithRetry(bo, scope)
 	if err != nil {
-		return ts, err
+		return firstAttemptTS, err
 	}
-	if ts > txn.commitWaitUntilTSO {
-		return ts, nil
+
+	if firstAttemptTS > txn.commitWaitUntilTSO {
+		return firstAttemptTS, nil
 	}
+
+	start := time.Now()
+	attempts := 1
+	defer func() {
+		// If the first attempt got a valid TSO, it is not the lag case,
+		// so only to record the metrics when firstAttempt lags.
+		duration := time.Since(start)
+		txn.commitLagWaitStats.waitDuration = duration
+		txn.commitLagWaitStats.firstAttemptTS = firstAttemptTS
+		txn.commitLagWaitStats.backoffCnt = attempts - 1
+		if err != nil {
+			metrics.LagCommitTSAttemptHistogramWithError.Observe(float64(attempts))
+			metrics.LagCommitTSWaitHistogramWithError.Observe(duration.Seconds())
+		} else {
+			metrics.LagCommitTSAttemptHistogramWithOK.Observe(float64(attempts))
+			metrics.LagCommitTSWaitHistogramWithOK.Observe(duration.Seconds())
+		}
+	}()
 
 	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
 	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
 	// If the TSO drift is larger than the maxSleep, return error directly.
-	maxSleep := 1000
+	maxSleep := time.Second
 	if txn.commitWaitUntilTSOTimeout > 0 {
-		maxSleep = int(txn.commitWaitUntilTSOTimeout.Milliseconds())
+		maxSleep = txn.commitWaitUntilTSOTimeout
 	}
-	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(ts))
-	if int(interval.Milliseconds()) > maxSleep {
-		return 0, errors.Errorf("commit_ts(%d) << origin_commit_ts(%d), clock drift and lag more than %v", ts, txn.commitWaitUntilTSO, interval)
+	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(firstAttemptTS))
+	if interval > maxSleep {
+		return 0, errors.Wrapf(
+			tikverr.ErrCommitTSLag,
+			"PD TSO '%d' lags the expected timestamp '%d', clock drift %v exceeds maximum allowed timeout %v",
+			firstAttemptTS, txn.commitWaitUntilTSO,
+			interval,
+			maxSleep,
+		)
 	}
 
-	bo = retry.NewBackoffer(bo.GetCtx(), maxSleep)
+	lastAttemptTS := firstAttemptTS
+	bo = retry.NewBackoffer(bo.GetCtx(), int(maxSleep.Milliseconds()))
 	mockErr := errors.Errorf("clock drift from the upstream cluster")
-	for ts <= txn.commitWaitUntilTSO {
+	for ts := firstAttemptTS; ts <= txn.commitWaitUntilTSO; {
 		// It's neither sleeping interval milliseconds (maybe sleep too long without handling any context.Cancel)
 		// nor sleep every 1ms until we reach the lag interval (maybe we just lag for 1ms, and but PD update the physical time every 50ms,
 		// so after sleeping 1ms, the next GetTimestamp still return the same physical part value)
 		// Just backoff, blindly.
-		err = bo.Backoff(retry.BoMaxTsNotSynced, mockErr)
+		err = bo.Backoff(retry.BoCommitTSLag, mockErr)
 		if err != nil {
-			return 0, err
+			break
 		}
 
+		attempts++
 		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
 		if err != nil {
-			return 0, err
+			break
 		}
+		lastAttemptTS = ts
 	}
-	return ts, err
+
+	if err != nil {
+		if tikverr.IsErrorCommitTSLag(err) {
+			err = errors.Wrapf(
+				err,
+				"PD TSO '%d' lags the expected timestamp '%d', retry timeout: %v, attempts: %d, last attempted commit TS: %d",
+				firstAttemptTS,
+				txn.commitWaitUntilTSO,
+				maxSleep,
+				attempts,
+				lastAttemptTS,
+			)
+		}
+		return 0, err
+	}
+
+	return lastAttemptTS, err
+}
+
+func (txn *KVTxn) fillCommitTSLagDetails(details *util.CommitTSLagDetails) {
+	// only fill when `firstAttemptTS > 0` which indicates there is actually a lag
+	if stats := txn.commitLagWaitStats; stats.firstAttemptTS > 0 {
+		details.WaitTime = stats.waitDuration
+		details.FirstLagTS = stats.firstAttemptTS
+		details.BackoffCnt = stats.backoffCnt
+		details.WaitUntilTS = txn.commitWaitUntilTSO
+	}
 }
 
 // LifecycleHooks is a struct that contains hooks for a background goroutine.

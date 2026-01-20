@@ -162,7 +162,8 @@ func (s *MockServer) Start(addr string) int {
 		addr = fmt.Sprintf("%s:%d", "127.0.0.1", 0)
 	}
 	port := -1
-	lis, err := net.Listen("tcp", addr)
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		logutil.BgLogger().Error("can't listen", zap.Error(err))
 		logutil.BgLogger().Error("can't start mock tikv service because no available ports")
