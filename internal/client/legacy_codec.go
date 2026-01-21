@@ -60,5 +60,5 @@ func messageV2Of(v any) proto.Message {
 }
 
 func (legacyCodec) Name() string {
-	return ""
+	return "proto"
 }
