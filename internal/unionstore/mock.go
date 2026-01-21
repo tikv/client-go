@@ -53,7 +53,7 @@ func (s *mockSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOptio
 
 	var getOpts kv.GetOptions
 	getOpts.Apply(options)
-	if getOpts.RequireCommitTS() {
+	if getOpts.ReturnCommitTS() {
 		entry.CommitTS = 1
 		if len(k) > 0 {
 			entry.CommitTS = 1000 + uint64(k[0])

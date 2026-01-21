@@ -58,12 +58,12 @@ func TestUnionStoreGetSet(t *testing.T) {
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)
 	MustGet(t, us, []byte("1"), []byte("1"), 0)
-	MustGet(t, us, []byte("1"), []byte("1"), 1000+'1', kv.WithRequireCommitTS())
+	MustGet(t, us, []byte("1"), []byte("1"), 1000+'1', kv.WithReturnCommitTS())
 
 	err = us.GetMemBuffer().Set([]byte("1"), []byte("2"))
 	assert.Nil(err)
 	MustGet(t, us, []byte("1"), []byte("2"), 0)
-	MustGet(t, us, []byte("1"), []byte("2"), 0, kv.WithRequireCommitTS())
+	MustGet(t, us, []byte("1"), []byte("2"), 0, kv.WithReturnCommitTS())
 	assert.Equal(us.GetMemBuffer().Size(), 2)
 	assert.Equal(us.GetMemBuffer().Len(), 1)
 }

@@ -1883,7 +1883,9 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (_ ui
 		return firstAttemptTS, nil
 	}
 
-	// slow path
+	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
+	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
+	// If the TSO drift is larger than the maxSleep, return error directly.
 	start := time.Now()
 	attempts := 1
 	defer func() {

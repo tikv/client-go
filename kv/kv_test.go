@@ -31,9 +31,9 @@ func TestGetOptions(t *testing.T) {
 			},
 		},
 		{
-			options: []GetOption{WithRequireCommitTS()},
+			options: []GetOption{WithReturnCommitTS()},
 			check: func(opt *GetOptions) {
-				require.True(t, opt.RequireCommitTS())
+				require.True(t, opt.ReturnCommitTS())
 			},
 		},
 		{
@@ -43,9 +43,9 @@ func TestGetOptions(t *testing.T) {
 			},
 		},
 		{
-			options: BatchGetToGetOptions([]BatchGetOption{WithRequireCommitTS()}),
+			options: BatchGetToGetOptions([]BatchGetOption{WithReturnCommitTS()}),
 			check: func(opt *GetOptions) {
-				require.True(t, opt.RequireCommitTS())
+				require.True(t, opt.ReturnCommitTS())
 			},
 		},
 	}
@@ -68,9 +68,9 @@ func TestBatchGetOptions(t *testing.T) {
 			},
 		},
 		{
-			options: []BatchGetOption{WithRequireCommitTS()},
+			options: []BatchGetOption{WithReturnCommitTS()},
 			check: func(opt *BatchGetOptions) {
-				require.True(t, opt.RequireCommitTS())
+				require.True(t, opt.ReturnCommitTS())
 			},
 		},
 	}

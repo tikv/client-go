@@ -166,6 +166,6 @@ func (db *artDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *artDBWithContext) SnapshotGetter() Getter {
+func (db *artDBWithContext) SnapshotGetter() kv.Getter {
 	return db.ART.SnapshotGetter()
 }

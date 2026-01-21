@@ -169,12 +169,12 @@ func (e ValueEntry) Size() int {
 }
 
 type basicOptions struct {
-	requireCommitTS bool
+	returnCommitTS bool
 }
 
-// RequireCommitTS indicates whether to require commit ts in the returned value.
-func (o *basicOptions) RequireCommitTS() bool {
-	return o.requireCommitTS
+// ReturnCommitTS indicates whether to require commit ts in the returned value.
+func (o *basicOptions) ReturnCommitTS() bool {
+	return o.returnCommitTS
 }
 
 // GetOptions contains options for Get operation.
@@ -240,13 +240,13 @@ type BatchGetter interface {
 	BatchGet(ctx context.Context, keys [][]byte, options ...BatchGetOption) (map[string]ValueEntry, error)
 }
 
-var withRequireCommitTS basicGetOptionFunc = func(opts *basicOptions) {
-	opts.requireCommitTS = true
+var withReturnCommitTS basicGetOptionFunc = func(opts *basicOptions) {
+	opts.returnCommitTS = true
 }
 
-// WithRequireCommitTS is used to indicate that the returned value should contain commit ts.
-func WithRequireCommitTS() GetOrBatchGetOption {
-	return withRequireCommitTS
+// WithReturnCommitTS is used to indicate that the returned value should contain commit ts.
+func WithReturnCommitTS() GetOrBatchGetOption {
+	return withReturnCommitTS
 }
 
 // BatchGetToGetOptions converts BatchGetOption list to GetOption list

@@ -176,6 +176,6 @@ func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *rbtDBWithContext) SnapshotGetter() Getter {
+func (db *rbtDBWithContext) SnapshotGetter() kv.Getter {
 	return db.RBT.SnapshotGetter()
 }

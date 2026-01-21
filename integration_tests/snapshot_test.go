@@ -114,7 +114,7 @@ func (s *testSnapshotSuite) checkAll(keys [][]byte) {
 		v := scan.Value()
 		v2, ok := m[string(k)]
 		s.True(ok, fmt.Sprintf("key: %q", k))
-		s.Equal(v, v2)
+		s.Equal(v, v2.Value)
 		scan.Next()
 	}
 	err = txn.Commit(context.Background())
@@ -150,7 +150,7 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
-func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
+func (s *testSnapshotSuite) TestGetAndBatchGetWithReturnCommitTS() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("a"), []byte("a1")))
 	s.Nil(txn.Set([]byte("b"), []byte("b1")))
@@ -160,7 +160,7 @@ func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
 
-	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithRequireCommitTS())
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Len(entries, 2)
 	s.Equal([]byte("a1"), entries["a"].Value)
@@ -168,11 +168,11 @@ func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
 	s.Greater(commitTS, uint64(0))
 	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries["b"])
 
-	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithRequireCommitTS())
+	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
 
-	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithRequireCommitTS())
+	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithReturnCommitTS())
 	s.EqualError(err, tikverr.ErrNotExist.Error())
 	s.Equal(kv.ValueEntry{}, entry)
 }
@@ -214,22 +214,19 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	s.Equal(kv.ValueEntry{}, entry)
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
-	if config.NextGen {
-		s.T().Skip("NextGen does not support WithRequireCommitTS option")
-	}
 
 	var expectedCommitTS uint64
 	for i := range 2 {
 		ctx := context.Background()
 		if i == 1 {
-			// WithRequireCommitTS will update the cache again
+			// WithReturnCommitTS will update the cache again
 			s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
 			ctx = context.WithValue(context.Background(), "TestSnapshotCache", true)
 		}
 
 		// check BatchGet
 		// When require commit ts, it should return the correct commit ts instead of the cached zero.
-		entries, err = snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")}, kv.WithRequireCommitTS())
+		entries, err = snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")}, kv.WithReturnCommitTS())
 		s.Nil(err)
 		s.Len(entries, 1)
 		s.Equal([]byte("x"), entries["x"].Value)
@@ -242,7 +239,7 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 
 		// check Get
 		// When require commit ts, it should return the correct commit ts instead of the cached zero.
-		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithRequireCommitTS())
+		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithReturnCommitTS())
 		s.Nil(err)
 		s.Equal(kv.NewValueEntry([]byte("a"), expectedCommitTS), entry)
 		entry, err = snapshot.Get(ctx, []byte("b"))
@@ -456,14 +453,14 @@ func (s *testSnapshotSuite) TestRCRead() {
 		v, err := snapshot.Get(context.Background(), key0)
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
-		s.Equal(v, valueBytes(0))
+		s.Equal(v.Value, valueBytes(0))
 		// batch get
 		m, err := snapshot.BatchGet(context.Background(), keys)
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
 		s.Equal(len(m), rowNum)
 		for i, k := range keys {
-			s.Equal(m[string(k)], valueBytes(i))
+			s.Equal(m[string(k)].Value, valueBytes(i))
 		}
 
 		committer1.Cleanup(context.Background())
