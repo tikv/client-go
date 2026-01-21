@@ -120,8 +120,8 @@ func (c *storeCacheImpl) setMockRequestLiveness(f livenessFunc) {
 	c.testingKnobs.mockRequestLiveness.Store(&f)
 }
 
-func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64) (*metapb.Store, error) {
-	return c.pdClient.GetStore(ctx, id)
+func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
+	return c.pdClient.GetStore(ctx, id, opts...)
 }
 
 func (c *storeCacheImpl) fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
