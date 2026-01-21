@@ -180,14 +180,14 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	case *coprocessor.Response:
 		detailsV2 = r.GetExecDetailsV2()
 		details = r.GetExecDetails()
-		readBytes = uint64(len(r.Data))
+		readBytes = uint64(r.Data.Size())
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
 			detailsV2 = r.GetExecDetailsV2()
 			details = r.GetExecDetails()
 		}
-		readBytes = uint64(len(r.Data))
+		readBytes = uint64(r.Data.Size())
 	case *kvrpcpb.GetResponse:
 		detailsV2 = r.GetExecDetailsV2()
 	case *kvrpcpb.BatchGetResponse:
