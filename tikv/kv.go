@@ -504,20 +504,22 @@ func (s *KVStore) Close() error {
 	s.wg.Wait()
 
 	s.oracle.Close()
-	s.pdClient.Close()
-	if s.pdHttpClient != nil {
-		s.pdHttpClient.Close()
+	if s.txnLatches != nil {
+		s.txnLatches.Close()
 	}
 	s.lockResolver.Close()
+	// Close region cache before closing clients it depends on. Otherwise, its background tasks might still try
+	// to access PD/TiKV and encounter "grpc: the client connection is closing".
+	s.regionCache.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
 		return err
 	}
 
-	if s.txnLatches != nil {
-		s.txnLatches.Close()
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
 	}
-	s.regionCache.Close()
+	s.pdClient.Close()
 
 	if err := s.kv.Close(); err != nil {
 		return err
