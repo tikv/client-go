@@ -57,7 +57,7 @@ type testingKnobs interface {
 }
 
 type storeRegistry interface {
-	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
+	fetchStore(ctx context.Context, id uint64, opts ...opt.GetStoreOption) (*metapb.Store, error)
 	fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error)
 }
 
@@ -431,10 +431,12 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		return
 	}
 	var store *metapb.Store
+	opts := []opt.GetStoreOption{opt.WithAllowRouterServiceHandleStoreRequest()}
 	for {
 		start := time.Now()
-		store, err = c.fetchStore(bo.GetCtx(), s.storeID)
+		store, err = c.fetchStore(bo.GetCtx(), s.storeID, opts...)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
+		opts = nil // only allow router service handle request for the first time
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
@@ -1135,7 +1137,7 @@ type storeCacheUpdater struct {
 }
 
 func (u *storeCacheUpdater) tick(ctx context.Context, now time.Time) bool {
-	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone())
+	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithAllowRouterServiceHandleStoreRequest())
 	if err != nil {
 		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
 		return false
