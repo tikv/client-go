@@ -122,6 +122,10 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
 
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			callOptions = append(callOptions, grpc.ForceCodec(&lagecyCodec{}))
+		}
+
 		opts = append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
