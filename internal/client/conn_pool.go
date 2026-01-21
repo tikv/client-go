@@ -123,7 +123,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		}
 
 		if !cfg.TiKVClient.GrpcSharedBufferPool {
-			callOptions = append(callOptions, grpc.ForceCodec(&lagecyCodec{}))
+			callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 		}
 
 		opts = append([]grpc.DialOption{

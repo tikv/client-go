@@ -20,10 +20,16 @@ import (
 	"google.golang.org/protobuf/protoadapt"
 )
 
-// lagecyCodec is a lagecy Codec implementation with protobuf used by gRPC < 1.66.
-type lagecyCodec struct{}
+// legacyCodec is a legacy Codec implementation used by gRPC < 1.66, copied from
+// https://github.com/grpc/grpc-go/blob/v1.65.x/encoding/proto/proto.go
+// In tipb and kvproto, we reuse the buffer from grpc-go by "overriding" the
+// `Unmarshal` method. But in grpc-go >= 1.66, the Codec interface is changed
+// to CodecV2, which uses mem.BufferSlice. And this mem.BufferSlice will be freed
+// after `Unmarshal` returns. So we need to manually switch to use the old Codec
+// interface.
+type legacyCodec struct{}
 
-func (lagecyCodec) Marshal(v any) ([]byte, error) {
+func (legacyCodec) Marshal(v any) ([]byte, error) {
 	vv := messageV2Of(v)
 	if vv == nil {
 		return nil, fmt.Errorf("failed to marshal, message is %T, want proto.Message", v)
@@ -32,7 +38,7 @@ func (lagecyCodec) Marshal(v any) ([]byte, error) {
 	return proto.Marshal(vv)
 }
 
-func (lagecyCodec) Unmarshal(data []byte, v any) error {
+func (legacyCodec) Unmarshal(data []byte, v any) error {
 	vv := messageV2Of(v)
 	if vv == nil {
 		return fmt.Errorf("failed to unmarshal, message is %T, want proto.Message", v)
@@ -52,6 +58,6 @@ func messageV2Of(v any) proto.Message {
 	return nil
 }
 
-func (lagecyCodec) Name() string {
+func (legacyCodec) Name() string {
 	return ""
 }
