@@ -145,8 +145,8 @@ func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, re
 		sender.SetStoreAddr(directStoreAddr)
 	}
 	sender.Stats = ch.Stats
-	req.Context.ResolvedLocks = ch.resolvedLocks.GetAll()
-	req.Context.CommittedLocks = ch.committedLocks.GetAll()
+	req.ResolvedLocks = ch.resolvedLocks.GetAll()
+	req.CommittedLocks = ch.committedLocks.GetAll()
 	resp, ctx, _, err := sender.SendReqCtx(bo, req, regionID, timeout, et, opts...)
 	return resp, ctx, sender.GetStoreAddr(), err
 }
@@ -162,7 +162,7 @@ func (ch *ClientHelper) SendReqAsync(
 ) {
 	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client, ch.oracle)
 	sender.Stats = ch.Stats
-	req.Context.ResolvedLocks = ch.resolvedLocks.GetAll()
-	req.Context.CommittedLocks = ch.committedLocks.GetAll()
+	req.ResolvedLocks = ch.resolvedLocks.GetAll()
+	req.CommittedLocks = ch.committedLocks.GetAll()
 	sender.SendReqAsync(bo, req, regionID, timeout, cb, opts...)
 }

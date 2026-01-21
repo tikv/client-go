@@ -121,11 +121,14 @@ var (
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
+	TiKVBucketClampedCounter                       prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 	TiKVTxnWriteConflictCounter                    prometheus.Counter
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
 	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
+	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
+	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -893,6 +896,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of stale region from PD",
 			ConstLabels: constLabels,
 		})
+	TiKVBucketClampedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "bucket_clamped",
+			Help:        "Counter of bucket boundaries clamped to region boundaries",
+			ConstLabels: constLabels,
+		})
 	TiKVPipelinedFlushThrottleSecondsHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
@@ -937,6 +948,26 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:      "read_request_bytes",
 			Help:      "Summary of read requests bytes",
 		}, []string{LblType, LblResult})
+
+	TiKVTxnLagCommitTSWaitHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_wait_seconds",
+			Help:        "Bucketed histogram of seconds waiting commit TSO lag.",
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 16), // 0.5ms ~ 16s
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
+	TiKVTxnLagCommitTSAttemptHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_attempt_count",
+			Help:        "Bucketed histogram of attempts to get the lagging TSO in one commit",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 6), // 1 ~ 32
+			ConstLabels: constLabels,
+		}, []string{LblResult})
 
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
@@ -1035,11 +1066,14 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
 	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVBucketClampedCounter)
 	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
 	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
 	prometheus.MustRegister(TiKVAsyncSendReqCounter)
 	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
 	prometheus.MustRegister(TiKVReadRequestBytes)
+	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
+	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

@@ -138,7 +138,7 @@ func TestSendRequestAsyncAttachContext(t *testing.T) {
 	})
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("foo"), Version: math.MaxUint64})
 
-	require.Zero(t, req.Context.RegionId)
+	require.Zero(t, req.RegionId)
 	tikvrpc.AttachContext(req, req.Context)
 	tikvrpc.SetContextNoAttach(req, &metapb.Region{Id: 1}, &metapb.Peer{})
 

@@ -102,11 +102,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) || config.NextGen {
-			// For next-gen builds, we need to perform constraint checks on all non-locked keys.
-			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
-			// which can be problematic for CDC and could potentially break correctness.
-			// see https://github.com/tikv/tikv/issues/11187.
+		} else if m.NeedConstraintCheckInPrewrite(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
@@ -238,11 +234,13 @@ func (action actionPrewrite) handleSingleBatch(
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
 
-	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
-		zap.Uint64("startTS", c.startTS),
-		zap.Uint64("regionID", batch.region.GetID()),
-		zap.Bool("isPrimary", batch.isPrimary),
-		zap.Int("keyCount", batch.mutations.Len()))
+	if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("regionID", batch.region.GetID()),
+			zap.Bool("isPrimary", batch.isPrimary),
+			zap.Int("keyCount", batch.mutations.Len()))
+	}
 
 	var retryable bool
 	for {
@@ -250,9 +248,11 @@ func (action actionPrewrite) handleSingleBatch(
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
-			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
-				zap.Uint64("regionID", batch.region.GetID()),
-				zap.Bool("success", err == nil))
+			if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+				trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
+					zap.Uint64("regionID", batch.region.GetID()),
+					zap.Bool("success", err == nil))
+			}
 			handler.drop(err)
 			return err
 		}
@@ -573,7 +573,7 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 		// In this case 1PC is not expected to be used, but still check it for safety.
 		if int64(handler.committer.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
 			prewriteResp.OnePcCommitTs == 0 {
-			handler.committer.ttlManager.run(handler.committer, nil, false)
+			handler.committer.run(handler.committer, nil, false)
 		}
 	}
 	if handler.committer.isOnePC() {
