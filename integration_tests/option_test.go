@@ -119,9 +119,6 @@ func (s *testOptionSuite) GetHistogramMetricSampleCount(m any) uint64 {
 }
 
 func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
-	if *withTiKV {
-		s.T().Skip("TestSetCommitWaitUntilTSO only runs on local mock storage")
-	}
 	origInTest := intest.InTest
 	defer func() {
 		intest.InTest = origInTest
@@ -150,6 +147,7 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 		//	}
 		mockCommitTSO  []uint64
 		setWaitTimeout time.Duration
+		extraPrepare   func(transaction.TxnProbe)
 		err            bool
 	}{
 		{
@@ -180,11 +178,38 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 			setWaitTimeout: time.Millisecond,
 			err:            true,
 		},
+		{
+			name:          "should also check for 1pc",
+			commitWaitTSO: oracle.ComposeTS(10000, 0),
+			mockCommitTSO: []uint64{100},
+			extraPrepare: func(txn transaction.TxnProbe) {
+				txn.SetEnableAsyncCommit(true)
+				txn.SetEnable1PC(true)
+			},
+			err: true,
+		},
+		{
+			name:          "should also check for causal consistency",
+			commitWaitTSO: oracle.ComposeTS(10000, 0),
+			mockCommitTSO: []uint64{100},
+			extraPrepare: func(txn transaction.TxnProbe) {
+				txn.SetEnableAsyncCommit(true)
+				txn.SetEnable1PC(true)
+				txn.SetCausalConsistency(true)
+			},
+			err: true,
+		},
 	} {
 		s.Run(tc.name, func() {
 			txn, err := s.store.Begin()
 			s.NoError(err)
 			s.NoError(txn.Set([]byte("somekey:"+uuid.NewString()), []byte("somevalue")))
+			// by default, 1pc and async commit are disabled, but it can be overridden in extraPrepare
+			txn.SetEnableAsyncCommit(false)
+			txn.SetEnable1PC(false)
+			if tc.extraPrepare != nil {
+				tc.extraPrepare(txn)
+			}
 
 			txn.SetCommitWaitUntilTSO(tc.commitWaitTSO + txn.StartTS())
 			if tc.setWaitTimeout > 0 {
