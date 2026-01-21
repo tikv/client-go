@@ -122,9 +122,8 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
 
-		if !cfg.TiKVClient.GrpcSharedBufferPool {
-			callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
-		}
+		// Don't remove this until we no longer use sharedBytes in tipb and kvproto.
+		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 
 		opts = append([]grpc.DialOption{
 			opt,

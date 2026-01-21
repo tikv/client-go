@@ -20,13 +20,14 @@ import (
 	"google.golang.org/protobuf/protoadapt"
 )
 
-// legacyCodec is a legacy Codec implementation used by gRPC < 1.66, copied from
+// legacyCodec copies the legacy proto Codec used in grpc-go < 1.66, see
 // https://github.com/grpc/grpc-go/blob/v1.65.x/encoding/proto/proto.go
-// In tipb and kvproto, we reuse the buffer from grpc-go by "overriding" the
-// `Unmarshal` method. But in grpc-go >= 1.66, the Codec interface is changed
-// to CodecV2, which uses mem.BufferSlice. And this mem.BufferSlice will be freed
-// after `Unmarshal` returns. So we need to manually switch to use the old Codec
-// interface.
+// tipb/kvproto rely on grpc-go passing a []byte into `Unmarshal` that can be
+// owned by the callee, so we override the `Marshal` to reduce the copy overhead.
+// But after grpc-go >= 1.66, it switches to CodecV2. And the buffer passed into
+// `Unmarshal` is now from a shared pool, which will be returned to the pool right
+// after `Unmarshal` returns, which breaks the assumption of tipb/kvproto. So we
+// force the old Codec behavior until sharedBytes is gone.
 type legacyCodec struct{}
 
 func (legacyCodec) Marshal(v any) ([]byte, error) {
