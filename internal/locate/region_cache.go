@@ -785,6 +785,13 @@ func (c *RegionCache) Close() {
 	c.bg.shutdown(true)
 }
 
+// IsBackgroundRunnerClosed returns whether RegionCache's background runner context has been canceled.
+//
+// It is intended for tests/debugging only.
+func (c *RegionCache) IsBackgroundRunnerClosed() bool {
+	return c.bg.closed()
+}
+
 // checkAndResolve checks and resolve addr of failed stores.
 // this method isn't thread-safe and only be used by one goroutine.
 func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*Store) bool) []*Store {
