@@ -196,6 +196,7 @@ type CommitDetails struct {
 func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.GetCommitTsTime += other.GetCommitTsTime
 	cd.GetLatestTsTime += other.GetLatestTsTime
+	cd.PrewriteTime += other.PrewriteTime
 	cd.LagDetails.Merge(&other.LagDetails)
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime

@@ -265,6 +265,8 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
+	checkNonEmptyCommitTS := readTier == BatchGetSnapshotTier && opt.ReturnCommitTS()
+	var emptyCommitTSKey []byte
 	err = s.batchGetKeysByRegions(bo, keys, readTier, config.GetGlobalConfig().EnableAsyncBatchGet, opt, func(k []byte, v kv.ValueEntry) {
 		// when read buffer tier, empty value means a delete record, should also collect it.
 		if v.IsValueEmpty() && readTier != BatchGetBufferTier {
@@ -273,6 +275,9 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 
 		mu.Lock()
 		m[string(k)] = v
+		if checkNonEmptyCommitTS && v.CommitTS == 0 {
+			emptyCommitTSKey = k
+		}
 		mu.Unlock()
 	})
 	s.recordBackoffInfo(bo)
@@ -283,6 +288,13 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	err = s.store.CheckVisibility(s.version)
 	if err != nil {
 		return nil, err
+	}
+
+	if emptyCommitTSKey != nil {
+		return nil, errors.Errorf(
+			"commit ts is required but not returned for key: %s, startTS: %d",
+			redact.Key(emptyCommitTSKey), s.version,
+		)
 	}
 
 	if readTier != BatchGetSnapshotTier {
