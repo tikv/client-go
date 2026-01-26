@@ -497,7 +497,7 @@ func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 }
 
 // Close store
-func (s *KVStore) Close() (retErr error) {
+func (s *KVStore) Close() error {
 	defer s.gP.Close()
 	s.close.Store(true)
 	s.cancel()
@@ -519,8 +519,8 @@ func (s *KVStore) Close() (retErr error) {
 	if s.pdHttpClient != nil {
 		s.pdHttpClient.Close()
 	}
-	if _, err := util.EvalFailpoint("checkRegionCacheClosedBeforePDClose"); err == nil && retErr == nil && !s.regionCache.IsBackgroundRunnerClosed() {
-		retErr = errors.New("region cache is not closed before closing pd client")
+	if _, err := util.EvalFailpoint("checkRegionCacheClosedBeforePDClose"); err == nil && !s.regionCache.IsBackgroundRunnerClosed() {
+		panic("region cache is not closed before closing pd client")
 	}
 	s.pdClient.Close()
 
@@ -530,7 +530,7 @@ func (s *KVStore) Close() (retErr error) {
 	if err := s.compatibleTxnSafePointLoader.Close(); err != nil {
 		return err
 	}
-	return retErr
+	return nil
 }
 
 // UUID return a unique ID which represents a Storage.
