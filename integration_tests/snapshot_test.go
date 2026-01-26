@@ -151,10 +151,6 @@ func (s *testSnapshotSuite) TestBatchGet() {
 }
 
 func (s *testSnapshotSuite) TestGetAndBatchGetWithRequireCommitTS() {
-	if config.NextGen {
-		s.T().Skip("NextGen does not support WithRequireCommitTS option")
-	}
-
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("a"), []byte("a1")))
 	s.Nil(txn.Set([]byte("b"), []byte("b1")))
@@ -295,16 +291,7 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
-<<<<<<< HEAD
 	_, err = txn1.Get(ctx, x)
-=======
-	r, err := txn1.Get(ctx, x)
-	if err != nil {
-		println(err.Error())
-	} else {
-		println(hex.EncodeToString(r.Value))
-	}
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 	s.True(tikverr.IsErrNotFound(err))
 
 	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))

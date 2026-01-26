@@ -37,8 +37,6 @@ package txnsnapshot
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
-	"fmt"
 	"math"
 	"runtime"
 	"strconv"
@@ -66,7 +64,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -229,22 +226,6 @@ const (
 
 // BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
 func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int, opt kv.BatchGetOptions) (m map[string]kv.ValueEntry, err error) {
-	if intest.InTest && opt.RequireCommitTS() && readTier == BatchGetSnapshotTier {
-		defer func() {
-			if err != nil {
-				return
-			}
-			for key, entry := range m {
-				if entry.CommitTS == 0 {
-					panic(fmt.Sprintf(
-						"commit ts is required but not returned for key: %s, value: %s",
-						hex.EncodeToString([]byte(key)), hex.EncodeToString(entry.Value),
-					))
-				}
-			}
-		}()
-	}
-
 	// Check the cached value first.
 	m = make(map[string]kv.ValueEntry)
 	s.mu.RLock()
@@ -474,13 +455,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		batch := batch1
 		go func() {
 			growStackForBatchGetWorker()
-<<<<<<< HEAD
-			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
-=======
-			e := s.batchGetSingleRegion(backoffer, batch, readTier, opt, collectF)
-			lastForkedBo.Store(backoffer)
-			ch <- e
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
+			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, opt, collectF)
 		}()
 	}
 	for i := 0; i < len(batches); i++ {
@@ -686,11 +661,11 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
 		}
 
-		if intest.InTest && err == nil && opt.RequireCommitTS() && entry.CommitTS == 0 {
-			panic(fmt.Sprintf(
-				"commit ts is required but not returned for key: %s, value: %s",
-				hex.EncodeToString(k), hex.EncodeToString(entry.Value),
-			))
+		if err == nil && opt.RequireCommitTS() && entry.CommitTS == 0 {
+			err = errors.Errorf(
+				"commit ts is required but not returned for key: %s, startTS: %d",
+				redact.Key(k), s.version,
+			)
 		}
 	}(time.Now())
 
@@ -822,19 +797,14 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 			return kv.ValueEntry{}, err
 		}
 		if regionErr != nil {
-<<<<<<< HEAD
 			// For other region error and the fake region error, backoff because
 			// there's something wrong.
 			// For the real EpochNotMatch error, don't backoff.
 			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 				if err != nil {
-					return nil, err
+					return kv.ValueEntry{}, err
 				}
-=======
-			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
-				return kv.ValueEntry{}, err
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 			}
 			continue
 		}

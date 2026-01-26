@@ -79,7 +79,6 @@ func (db *RBT) SnapshotIterReverse(k, lowerBound []byte) *rbtSnapIter {
 	return it
 }
 
-<<<<<<< HEAD
 func (db *RBT) getSnapshot() arena.MemDBCheckpoint {
 	if len(db.stages) > 0 {
 		return db.stages[0]
@@ -92,10 +91,7 @@ type rbtSnapGetter struct {
 	cp arena.MemDBCheckpoint
 }
 
-func (snap *rbtSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
-=======
-func (snap *Snapshot) Get(_ context.Context, key []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
+func (snap *rbtSnapGetter) Get(ctx context.Context, key []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
 	x := snap.db.traverse(key, false)
 	if x.isNull() {
 		return kv.ValueEntry{}, tikverr.ErrNotExist

@@ -38,7 +38,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
-	"github.com/tikv/pd/client/constants"
 )
 
 const (
@@ -62,11 +61,7 @@ func (s *testPipelinedMemDBSuite) SetupTest() {
 		return
 	}
 
-<<<<<<< HEAD
 	client, pdClient, cluster, err := unistore.New("", nil)
-=======
-	client, pdClient, cluster, err := unistore.New("", nil, constants.NullKeyspaceID, nil)
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)

@@ -76,20 +76,20 @@ type SnapGetter struct {
 	cp   arena.MemDBCheckpoint
 }
 
-func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (snap *SnapGetter) Get(ctx context.Context, key []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
 	addr, lf := snap.tree.traverse(key, false)
 	if addr.IsNull() {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	if lf.vAddr.IsNull() {
 		// A flags only key, act as value not exists
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vAddr, &snap.cp)
 	if !ok {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
-	return v, nil
+	return kv.NewValueEntry(v, 0), nil
 }
 
 type SnapIter struct {
@@ -132,24 +132,3 @@ func (i *SnapIter) setValue() bool {
 	}
 	return false
 }
-<<<<<<< HEAD
-=======
-
-func (snap *Snapshot) Get(_ context.Context, key []byte, _ ...kv.GetOption) (entry kv.ValueEntry, _ error) {
-	addr, lf := snap.tree.traverse(key, false)
-	if addr.IsNull() {
-		return kv.ValueEntry{}, tikverr.ErrNotExist
-	}
-	if lf.vLogAddr.IsNull() {
-		// A flags only key, act as value not exists
-		return kv.ValueEntry{}, tikverr.ErrNotExist
-	}
-	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
-	if !ok {
-		return kv.ValueEntry{}, tikverr.ErrNotExist
-	}
-	return kv.NewValueEntry(v, 0), nil
-}
-
-func (snap *Snapshot) Close() {}
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))

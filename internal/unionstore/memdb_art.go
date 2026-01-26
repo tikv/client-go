@@ -155,14 +155,6 @@ func (db *artDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.ART.IterReverse(upper, lower)
 }
 
-<<<<<<< HEAD
-=======
-// SnapshotGetter implements the Getter interface, by wrapping GetSnapshot.
-func (db *artDBWithContext) SnapshotGetter() kv.Getter {
-	return db.ART.GetSnapshot()
-}
-
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
 	return db.ART.SnapshotIter(lower, upper)

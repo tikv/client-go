@@ -199,13 +199,7 @@ type MemBuffer interface {
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
 	SnapshotIterReverse([]byte, []byte) Iterator
 	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-<<<<<<< HEAD
-	SnapshotGetter() Getter
-=======
-	// Deprecated: use GetSnapshot instead.
 	SnapshotGetter() kv.Getter
-
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
 	// SetEntrySizeLimit sets the size limit for each entry and total buffer.
@@ -257,40 +251,3 @@ var (
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}
 )
-<<<<<<< HEAD
-=======
-
-type memdbSnapshot interface {
-	kv.Getter
-	NewSnapshotIterator(start, end []byte, desc bool) Iterator
-}
-
-type MemBufferSnapshot interface {
-	kv.Getter
-
-	// ForEachInSnapshotRange scans the key-value pairs in the state[0] snapshot if it exists,
-	// otherwise it uses the current checkpoint as snapshot.
-	//
-	// NOTE: returned kv-pairs are only valid during the iteration. If you want to use them after the iteration,
-	// you need to make a copy.
-	//
-	// The method is protected by a RWLock to prevent potential iterator invalidation, i.e.
-	// You cannot modify the MemBuffer during the iteration.
-	//
-	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
-	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
-
-	// BatchedSnapshotIter returns an iterator of the "snapshot", namely stage[0].
-	// It iterates in batches and prevents iterator invalidation.
-	//
-	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
-	// NOTE: you should never use it when there are no stages.
-	//
-	// The iterator becomes invalid when any operation that may modify the "snapshot",
-	// e.g. RevertToCheckpoint or releasing stage[0].
-	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
-
-	// Close releases the snapshot.
-	Close()
-}
->>>>>>> c75405d (*: return commit timestamp for Get / BatchGet if needed (#1796))
