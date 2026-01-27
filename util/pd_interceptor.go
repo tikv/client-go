@@ -137,9 +137,9 @@ func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte
 }
 
 // GetStore implements pd.Client#GetStore.
-func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	start := time.Now()
-	s, err := m.Client.GetStore(ctx, storeID)
+	s, err := m.Client.GetStore(ctx, storeID, opts...)
 	recordPDWaitTime(ctx, start)
 	return s, err
 }

@@ -1678,7 +1678,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	if r == nil || expired {
 		// load region when it is not exists or expired.
 		observeLoadRegion(tag, r, expired, 0)
-		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle())
+		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -2410,7 +2410,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
-	pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle()}
+	pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle()}
 	var backoffErr error
 	for {
 		if backoffErr != nil {
@@ -2495,7 +2495,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 			opt.WithOutputMustContainAllKeyRange(),
 		}
 		if needFollowerHandle {
-			pdOpts = append(pdOpts, opt.WithAllowFollowerHandle())
+			pdOpts = append(pdOpts, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
 		}
 		if batchOpt.needBuckets {
 			pdOpts = append(pdOpts, opt.WithBuckets())
