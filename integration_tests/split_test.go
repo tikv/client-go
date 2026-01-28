@@ -133,8 +133,8 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	m, err := txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})])
-	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
+	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
 	s.NotContains(m, string([]byte{'b'}))
 
 	// split by 'c' without invalidating the old region, then BatchGet('a', 'b', 'c') will meet region error when handling batch{keys: ['b', 'c']}.
@@ -149,8 +149,8 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})])
-	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
+	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
 	s.NotContains(m, string([]byte{'b'}))
 
 	// leave a lock on 'a' so that BatchGet('a', 'b', 'c') will meet lock error.
@@ -164,8 +164,8 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})])
-	s.Equal([]byte("c"), m[string([]byte{'c'})])
+	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
+	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
 	s.NotContains(m, string([]byte{'b'}))
 
 	// inject an error on sending request.

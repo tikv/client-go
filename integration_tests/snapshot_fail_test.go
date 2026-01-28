@@ -44,6 +44,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -103,7 +104,7 @@ func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 	s.Require().Nil(err)
 	res, err := toTiDBTxn(&txn).BatchGet(context.Background(), toTiDBKeys([][]byte{[]byte("k1"), []byte("k2")}))
 	s.Nil(err)
-	s.Equal(res, map[string][]byte{"k1": []byte("v1"), "k2": []byte("v2")})
+	s.Equal(res, map[string]kv.ValueEntry{"k1": kv.NewValueEntry([]byte("v1"), 0), "k2": kv.NewValueEntry([]byte("v2"), 0)})
 }
 
 func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
@@ -171,7 +172,7 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 	s.Require().Nil(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
 
 	snapshot := s.store.GetSnapshot(math.MaxUint64)
-	getCh := make(chan []byte)
+	getCh := make(chan kv.ValueEntry)
 	go func() {
 		// Sleep a while to make the TTL of the first txn expire, then we make sure we resolve lock by this get
 		time.Sleep(200 * time.Millisecond)
@@ -183,7 +184,7 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 	// The get should be blocked by the failpoint. But the lock should have been resolved.
 	select {
 	case res := <-getCh:
-		s.Fail("too early %s", string(res))
+		s.Fail("too early %s", string(res.Value))
 	case <-time.After(1 * time.Second):
 	}
 
@@ -205,7 +206,7 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 	// After disabling the failpoint, the get request should bypass the new locks and read the old result
 	select {
 	case res := <-getCh:
-		s.Equal(res, []byte("v2"))
+		s.Equal(res.Value, []byte("v2"))
 	case <-time.After(1 * time.Second):
 		s.Fail("get timeout")
 	}
@@ -248,7 +249,7 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	snapshot = s.store.GetSnapshot(initialCommitTS)
 	v, err := snapshot.Get(context.Background(), []byte("k2"))
 	s.Nil(err)
-	s.Equal(v, []byte("v2"))
+	s.Equal(v.Value, []byte("v2"))
 }
 
 func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
@@ -275,7 +276,7 @@ func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
 	txn2, err := s.store.Begin()
 	val, err := txn2.Get(ctx, y)
 	s.Nil(err)
-	s.Equal(val, []byte("y0"))
+	s.Equal(val.Value, []byte("y0"))
 
 	// Only commit the primary key x
 	s.Nil(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return`))
@@ -292,7 +293,7 @@ func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
 	txn2.GetSnapshot().SetSnapshotTS(committer.GetCommitTS())
 	val, err = txn2.Get(ctx, y)
 	s.Nil(err)
-	s.Equal(val, []byte("y1"))
+	s.Equal(val.Value, []byte("y1"))
 }
 
 func (s *testSnapshotFailSuite) getLock(key []byte) *txnkv.Lock {
@@ -351,7 +352,7 @@ func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
 		start := time.Now()
 		val, err := snapshot.Get(ctx, y)
 		s.Nil(err)
-		s.Equal([]byte("y"), val)
+		s.Equal([]byte("y"), val.Value)
 		s.Less(time.Since(start), 200*time.Millisecond)
 		s.NotNil(s.getLock(y))
 
@@ -361,7 +362,7 @@ func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
 		start = time.Now()
 		res, err := snapshot.BatchGet(ctx, [][]byte{y})
 		s.Nil(err)
-		s.Equal([]byte("y"), res[string(y)])
+		s.Equal([]byte("y"), res[string(y)].Value)
 		s.Less(time.Since(start), 200*time.Millisecond)
 		s.NotNil(s.getLock(y))
 

@@ -88,6 +88,8 @@ var (
 	ErrRegionNotInitialized = errors.New("region not Initialized")
 	// ErrTiKVDiskFull is the error when tikv server disk usage is full.
 	ErrTiKVDiskFull = errors.New("tikv disk full")
+	// ErrCommitTSLag is the error when the commit TS which fetched from PD drifts and falls behind the expected value.
+	ErrCommitTSLag = errors.New("commit timestamp lags behind expected")
 	// ErrRegionRecoveryInProgress is the error when region is recovering.
 	ErrRegionRecoveryInProgress = errors.New("region is being online unsafe recovered")
 	// ErrRegionFlashbackInProgress is the error when a region in the flashback progress receive any other request.
@@ -348,4 +350,9 @@ func Log(err error) {
 	if err != nil {
 		log.Error("encountered error", zap.Error(err), zap.Stack("stack"))
 	}
+}
+
+// IsErrorCommitTSLag checks if the error is commit ts lag error.
+func IsErrorCommitTSLag(err error) bool {
+	return errors.Is(err, ErrCommitTSLag)
 }

@@ -90,6 +90,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 	if *withTiKV {
 		return newTiKVStore(t)
 	}
+
 	client, pdClient, cluster, err := unistore.New("", nil)
 	require.Nil(t, err)
 	unistore.BootstrapWithSingleStore(cluster)
