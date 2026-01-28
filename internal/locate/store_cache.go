@@ -804,6 +804,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
+	//nolint:staticcheck // SA1019: ignore deprecation warning
 	conn, err := grpc.DialContext(
 		ctx,
 		addr,
