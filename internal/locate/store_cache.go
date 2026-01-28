@@ -475,7 +475,8 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 	}
 }
 
-// reResolve tries to resolve addr for store that need check. It returns false if the store is a tombstone.
+// reResolve tries to resolve addr for store that need check.
+// It returns false if the store is a tombstone or removed.
 func (s *Store) reResolve(c storeCache) (bool, error) {
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
@@ -493,7 +494,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 		return false, err
 	}
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
-		// store has be removed in PD, we should invalidate all regions using those store.
+		// store has been removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
 			zap.Uint64("store", s.storeID), zap.String("addr", s.GetAddr()))
 		atomic.AddUint32(&s.epoch, 1)

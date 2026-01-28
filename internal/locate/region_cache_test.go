@@ -2278,7 +2278,7 @@ func (s *testRegionCacheSuite) TestSlowScoreStat() {
 	s.True(slowScore.isSlow())
 }
 
-func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
+func (s *testRegionCacheSuite) TestHealthCheckWithAddressChange() {
 	// init region cache
 	s.cache.LocateKey(s.bo, []byte("a"))
 
@@ -2302,18 +2302,18 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	// update store meta
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr()+"'", store1.GetLabels()...)
 
-	// assert that the new store should be added and it's also not reachable
 	newStore1, _ := s.cache.stores.get(store1.storeID)
-	s.Require().NotEqual(reachable, newStore1.getLivenessState())
 	// assert that the store pointer should be the same.
 	s.Require().Equal(store1, newStore1)
+	// assert that the store in replica should be unreachable
+	s.Require().NotEqual(reachable, store1.getLivenessState())
 
 	// recover store1
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
 
-	// assert that the new store should be reachable
+	// assert that the store should be resolved and reachable
 	s.Eventually(func() bool {
-		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 }
 
@@ -3136,12 +3136,9 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return s.getResolveState() == needCheck
 	})
 
-	// assert the new store should be added and it should be resolved and reachable.
+	// assert the store in replica should be updated and the pointer should be the same.
 	newStore1, _ := s.cache.stores.get(s.store1)
-	// the store pointer should be the same.
 	s.Equal(newStore1, store1)
-
-	// assert the store should be resolved and reachable.
 	s.Eventually(func() bool {
 		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
@@ -3189,11 +3186,11 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	s.Require().NotNil(replicaSelector)
 
 	// Find the replica with store1 to keep reference to the same store instance
-	var oldReplica *replica
+	var replicaFromStore1 *replica
 	var leaderPeer *metapb.Peer
 	for _, replica := range replicaSelector.replicas {
 		if replica.store.storeID == s.store1 {
-			oldReplica = replica
+			replicaFromStore1 = replica
 			// Find the peer for this store
 			for _, peer := range region.GetMeta().Peers {
 				if peer.StoreId == s.store1 {
@@ -3207,7 +3204,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 			break
 		}
 	}
-	s.Require().NotNil(oldReplica, "should find replica with store1")
+	s.Require().NotNil(replicaFromStore1, "should find replica with store1")
 
 	// Step 3: Same store_id changes label and restarts
 	// Change store1's label (address stays the same)
@@ -3215,7 +3212,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	newLabels := append(oldLabels, &metapb.StoreLabel{Key: "zone", Value: "zone1"})
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), newLabels...)
 
-	// Recover store1 (simulate restart) - set liveness back to reachable for new store
+	// Recover store1 (simulate restart) - set liveness back to reachable for the store in replica
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
 
 	// Trigger store metadata update by marking the store as needCheck and resolving
@@ -3231,16 +3228,16 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	}, 500*time.Millisecond, 50*time.Millisecond, "the store should be resolved")
 
 	// The store's labels should be updated
-	s.Require().True(isStoreContainLabel(store1.GetLabels(), "zone", "zone1"), "new store should have updated labels")
-	// Wait for new store to become reachable after restart
+	s.Require().True(isStoreContainLabel(store1.GetLabels(), "zone", "zone1"), "the store should have updated labels")
+	// Wait for the store in replica to become reachable after restart
 	s.Eventually(func() bool {
 		return store1.getLivenessState() == reachable
-	}, 3*time.Second, 200*time.Millisecond, "new store should become reachable after restart")
+	}, 3*time.Second, 200*time.Millisecond, "the store should become reachable after restart")
 
 	// Step 4: Test the replica selector still has reference to the same store instance
-	s.Require().Equal(store1, oldReplica.store, "replica should still reference the same store instance")
+	s.Require().Equal(store1, replicaFromStore1.store, "replica should still reference the same store instance")
 	// The store in replica should still be reachable
-	s.Require().Equal(reachable, oldReplica.store.getLivenessState(), "the store in replica should still be reachable")
+	s.Require().Equal(reachable, replicaFromStore1.store.getLivenessState(), "the store in replica should still be reachable")
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
