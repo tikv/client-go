@@ -122,6 +122,9 @@ var (
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
 	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
+	TiKVStaleRegionFromPDCounter                   prometheus.Counter
+	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
+	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -889,6 +892,34 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
+	TiKVStaleRegionFromPDCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_region_from_pd",
+			Help:      "Counter of stale region from PD",
+		})
+
+	TiKVTxnLagCommitTSWaitHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_wait_seconds",
+			Help:        "Bucketed histogram of seconds waiting commit TSO lag.",
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 16), // 0.5ms ~ 16s
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
+	TiKVTxnLagCommitTSAttemptHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_attempt_count",
+			Help:        "Bucketed histogram of attempts to get the lagging TSO in one commit",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 6), // 1 ~ 32
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -988,6 +1019,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadRequestBytes)
 	prometheus.MustRegister(TiKVAsyncSendReqCounter)
 	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
+	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
+	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

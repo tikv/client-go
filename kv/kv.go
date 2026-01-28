@@ -21,9 +21,11 @@
 package kv
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -136,4 +138,129 @@ func (ctx *LockCtx) IterateValuesNotLocked(f func([]byte, []byte)) {
 			f([]byte(key), val.Value)
 		}
 	}
+}
+
+const valueEntryStructSize = int(unsafe.Sizeof(ValueEntry{}))
+
+// ValueEntry represents a value with other attributes such as commit timestamp.
+type ValueEntry struct {
+	Value []byte
+	// CommitTS is the commit timestamp of this value.
+	// 0 means the commit timestamp is unknown (not returned / not requested).
+	CommitTS uint64
+}
+
+// NewValueEntry creates a ValueEntry.
+func NewValueEntry(value []byte, commitTS uint64) ValueEntry {
+	return ValueEntry{
+		Value:    value,
+		CommitTS: commitTS,
+	}
+}
+
+// IsValueEmpty returns true if the `ValueEntry.Value` is empty.
+func (e ValueEntry) IsValueEmpty() bool {
+	return len(e.Value) == 0
+}
+
+// Size returns the size of the ValueEntry in bytes.
+func (e ValueEntry) Size() int {
+	return valueEntryStructSize + len(e.Value)
+}
+
+type basicOptions struct {
+	returnCommitTS bool
+}
+
+// ReturnCommitTS indicates whether to require commit ts in the returned value.
+func (o *basicOptions) ReturnCommitTS() bool {
+	return o.returnCommitTS
+}
+
+// GetOptions contains options for Get operation.
+type GetOptions struct {
+	basicOptions
+}
+
+// Apply to apply the options.
+func (o *GetOptions) Apply(opts []GetOption) {
+	for _, opt := range opts {
+		opt.applyGetOptions(o)
+	}
+}
+
+// BatchGetOptions contains options for BatchGet operation.
+type BatchGetOptions struct {
+	basicOptions
+}
+
+// Apply to apply the options.
+func (o *BatchGetOptions) Apply(opts []BatchGetOption) {
+	for _, opt := range opts {
+		opt.applyBatchGetOptions(o)
+	}
+}
+
+// GetOption is the interface for Get options.
+type GetOption interface {
+	applyGetOptions(*GetOptions)
+}
+
+// BatchGetOption is the interface for BatchGet options.
+type BatchGetOption interface {
+	applyBatchGetOptions(options *BatchGetOptions)
+}
+
+// GetOrBatchGetOption is the interface for both Get and BatchGet options.
+type GetOrBatchGetOption interface {
+	GetOption
+	BatchGetOption
+}
+
+type basicGetOptionFunc func(*basicOptions)
+
+func (f basicGetOptionFunc) applyGetOptions(opts *GetOptions) {
+	f(&opts.basicOptions)
+}
+
+func (f basicGetOptionFunc) applyBatchGetOptions(opts *BatchGetOptions) {
+	f(&opts.basicOptions)
+}
+
+// Getter is the interface for Getter.
+type Getter interface {
+	// Get gets the value for key k from kv store.
+	// If the corresponding kv pair does not exist, it returns an empty ValueEntry and ErrNotExist.
+	Get(ctx context.Context, k []byte, options ...GetOption) (ValueEntry, error)
+}
+
+// BatchGetter is the interface for BatchGet.
+type BatchGetter interface {
+	// BatchGet gets a batch of values.
+	BatchGet(ctx context.Context, keys [][]byte, options ...BatchGetOption) (map[string]ValueEntry, error)
+}
+
+var withReturnCommitTS basicGetOptionFunc = func(opts *basicOptions) {
+	opts.returnCommitTS = true
+}
+
+// WithReturnCommitTS is used to indicate that the returned value should contain commit ts.
+func WithReturnCommitTS() GetOrBatchGetOption {
+	return withReturnCommitTS
+}
+
+// BatchGetToGetOptions converts BatchGetOption list to GetOption list
+func BatchGetToGetOptions(options []BatchGetOption) []GetOption {
+	var getOptions []GetOption
+	for _, o := range options {
+		opt, ok := o.(GetOption)
+		if !ok {
+			continue
+		}
+		if getOptions == nil {
+			getOptions = make([]GetOption, 0, len(options))
+		}
+		getOptions = append(getOptions, opt)
+	}
+	return getOptions
 }

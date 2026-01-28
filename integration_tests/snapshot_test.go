@@ -114,7 +114,7 @@ func (s *testSnapshotSuite) checkAll(keys [][]byte) {
 		v := scan.Value()
 		v2, ok := m[string(k)]
 		s.True(ok, fmt.Sprintf("key: %q", k))
-		s.Equal(v, v2)
+		s.Equal(v, v2.Value)
 		scan.Next()
 	}
 	err = txn.Commit(context.Background())
@@ -150,6 +150,33 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
+func (s *testSnapshotSuite) TestGetAndBatchGetWithReturnCommitTS() {
+	txn := s.beginTxn()
+	s.Nil(txn.Set([]byte("a"), []byte("a1")))
+	s.Nil(txn.Set([]byte("b"), []byte("b1")))
+	s.Nil(txn.Set([]byte("c"), []byte("c1")))
+	s.Nil(txn.Commit(context.Background()))
+
+	txn = s.beginTxn()
+	snapshot := txn.GetSnapshot()
+
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithReturnCommitTS())
+	s.Nil(err)
+	s.Len(entries, 2)
+	s.Equal([]byte("a1"), entries["a"].Value)
+	commitTS := entries["a"].CommitTS
+	s.Greater(commitTS, uint64(0))
+	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries["b"])
+
+	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithReturnCommitTS())
+	s.Nil(err)
+	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
+
+	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithReturnCommitTS())
+	s.EqualError(err, tikverr.ErrNotExist.Error())
+	s.Equal(kv.ValueEntry{}, entry)
+}
+
 func (s *testSnapshotSuite) TestSnapshotCache() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("x"), []byte("x")))
@@ -173,19 +200,52 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 
 	// check cache from BatchGet
-	value, err := snapshot.Get(ctx, []byte("x"))
+	entries, err := snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")})
 	s.Nil(err)
-	s.Equal([]byte("x"), value)
-	_, err = snapshot.Get(ctx, []byte("y"))
-	s.True(tikverr.IsErrNotFound(err))
+	s.Len(entries, 1)
+	s.Equal(kv.NewValueEntry([]byte("x"), 0), entries["x"])
 
 	// check cache from Get
-	value, err = snapshot.Get(ctx, []byte("a"))
+	entry, err := snapshot.Get(ctx, []byte("a"))
 	s.Nil(err)
-	s.Equal([]byte("a"), value)
-	_, err = snapshot.Get(ctx, []byte("b"))
+	s.Equal(kv.NewValueEntry([]byte("a"), 0), entry)
+	entry, err = snapshot.Get(ctx, []byte("b"))
 	s.True(tikverr.IsErrNotFound(err))
+	s.Equal(kv.ValueEntry{}, entry)
 
+	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
+
+	var expectedCommitTS uint64
+	for i := range 2 {
+		ctx := context.Background()
+		if i == 1 {
+			// WithReturnCommitTS will update the cache again
+			s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
+			ctx = context.WithValue(context.Background(), "TestSnapshotCache", true)
+		}
+
+		// check BatchGet
+		// When require commit ts, it should return the correct commit ts instead of the cached zero.
+		entries, err = snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")}, kv.WithReturnCommitTS())
+		s.Nil(err)
+		s.Len(entries, 1)
+		s.Equal([]byte("x"), entries["x"].Value)
+		if commitTS := entries["x"].CommitTS; expectedCommitTS == 0 {
+			s.Greater(commitTS, uint64(0))
+			expectedCommitTS = commitTS
+		} else {
+			s.Equal(expectedCommitTS, commitTS)
+		}
+
+		// check Get
+		// When require commit ts, it should return the correct commit ts instead of the cached zero.
+		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithReturnCommitTS())
+		s.Nil(err)
+		s.Equal(kv.NewValueEntry([]byte("a"), expectedCommitTS), entry)
+		entry, err = snapshot.Get(ctx, []byte("b"))
+		s.True(tikverr.IsErrNotFound(err))
+		s.Equal(kv.ValueEntry{}, entry)
+	}
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 }
 
@@ -276,7 +336,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	// Point get secondary key. Should read committed data.
 	value, err := snapshot.Get(ctx, y)
 	s.Nil(err)
-	s.Equal(value, []byte("y"))
+	s.Equal(value.Value, []byte("y"))
 	s.Less(time.Since(start), 500*time.Millisecond)
 }
 
@@ -393,14 +453,14 @@ func (s *testSnapshotSuite) TestRCRead() {
 		v, err := snapshot.Get(context.Background(), key0)
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
-		s.Equal(v, valueBytes(0))
+		s.Equal(v.Value, valueBytes(0))
 		// batch get
 		m, err := snapshot.BatchGet(context.Background(), keys)
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
 		s.Equal(len(m), rowNum)
 		for i, k := range keys {
-			s.Equal(m[string(k)], valueBytes(i))
+			s.Equal(m[string(k)].Value, valueBytes(i))
 		}
 
 		committer1.Cleanup(context.Background())
@@ -420,10 +480,10 @@ func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
 	snapshot := s.store.GetSnapshot(startTS)
 	snapshot.Get(context.Background(), []byte("x"))
 	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
-	s.Equal(snapshot.SnapCache(), map[string][]byte{
-		"x": []byte("x"),
-		"y": []byte("y"),
-		"z": []byte("z"),
+	s.Equal(snapshot.SnapCache(), map[string]kv.ValueEntry{
+		"x": kv.NewValueEntry([]byte("x"), 0),
+		"y": kv.NewValueEntry([]byte("y"), 0),
+		"z": kv.NewValueEntry([]byte("z"), 0),
 	})
 	// not cache version == math.MaxUint64
 	snapshot = s.store.GetSnapshot(math.MaxUint64)

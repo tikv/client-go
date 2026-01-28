@@ -19,6 +19,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 func (t *ART) getSnapshot() arena.MemDBCheckpoint {
@@ -75,20 +76,20 @@ type SnapGetter struct {
 	cp   arena.MemDBCheckpoint
 }
 
-func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (snap *SnapGetter) Get(ctx context.Context, key []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
 	addr, lf := snap.tree.traverse(key, false)
 	if addr.IsNull() {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	if lf.vAddr.IsNull() {
 		// A flags only key, act as value not exists
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
 	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vAddr, &snap.cp)
 	if !ok {
-		return nil, tikverr.ErrNotExist
+		return kv.ValueEntry{}, tikverr.ErrNotExist
 	}
-	return v, nil
+	return kv.NewValueEntry(v, 0), nil
 }
 
 type SnapIter struct {
