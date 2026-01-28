@@ -228,7 +228,7 @@ func (f basicGetOptionFunc) applyBatchGetOptions(opts *BatchGetOptions) {
 // Getter is the interface for Getter.
 type Getter interface {
 	// Get gets the value for key k from kv store.
-	// If the corresponding kv pair does not exist, it returns nil and ErrNotExist.
+	// If the corresponding kv pair does not exist, it returns an empty ValueEntry and ErrNotExist.
 	Get(ctx context.Context, k []byte, options ...GetOption) (ValueEntry, error)
 }
 
