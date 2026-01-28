@@ -438,7 +438,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
 
 	// Mark the store needCheck and its address and labels are changed.
-	// The resolve state should be deleted and a new store is added to the cache.
+	// The resolve state should be updated and the store pointer should be the same.
 	cache.clear()
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
@@ -448,8 +448,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	waitResolve(store)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
-	s.Equal(newStore.GetAddr(), store.GetAddr())
-	s.Equal(newStore.GetLabels(), []*metapb.StoreLabel{{Key: "k", Value: "v"}})
+	s.Equal(newStore, store)
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
@@ -3139,10 +3138,12 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 
 	// assert the new store should be added and it should be resolved and reachable.
 	newStore1, _ := s.cache.stores.get(s.store1)
-	// the store pointer should be updated
-	s.Equal(newStore1.GetAddr(), store1.GetAddr())
+	// the store pointer should be the same.
+	s.Equal(newStore1, store1)
+
+	// assert the store should be resolved and reachable.
 	s.Eventually(func() bool {
-		return newStore1.getResolveState() == resolved && store1.getLivenessState() == reachable
+		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
 }
@@ -3210,7 +3211,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 
 	// Step 3: Same store_id changes label and restarts
 	// Change store1's label (address stays the same)
-	oldLabels := slices.Clone(store1.labels)
+	oldLabels := slices.Clone(store1.GetLabels())
 	newLabels := append(oldLabels, &metapb.StoreLabel{Key: "zone", Value: "zone1"})
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), newLabels...)
 
@@ -3230,7 +3231,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	}, 500*time.Millisecond, 50*time.Millisecond, "old store should be resolved")
 
 	// The store's labels should be updated
-	s.Require().True(isStoreContainLabel(store1.labels, "zone", "zone1"), "new store should have updated labels")
+	s.Require().True(isStoreContainLabel(store1.GetLabels(), "zone", "zone1"), "new store should have updated labels")
 	// Wait for new store to become reachable after restart
 	s.Eventually(func() bool {
 		return store1.getLivenessState() == reachable
@@ -3239,7 +3240,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	// Step 4: Test the replica selector still has reference to OLD store (created before replacement)
 	s.Require().Equal(store1, oldReplica.store, "replica should still reference old store")
 	// The old store should be reachable
-	s.Require().Equal(reachable, oldReplica.store.getLivenessState(), "old store in replica should still be unreachable")
+	s.Require().Equal(reachable, oldReplica.store.getLivenessState(), "old store in replica should still be reachable")
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {

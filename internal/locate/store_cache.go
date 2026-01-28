@@ -509,7 +509,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	s.resolveMutex.Lock()
 	defer s.resolveMutex.Unlock()
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
-		logutil.BgLogger().Info("store meta(address or labels changed), replacing with new store",
+		logutil.BgLogger().Info("store meta(address or labels changed), updating store",
 			zap.Uint64("store", s.storeID),
 			zap.String("old-addr", s.GetAddr()),
 			zap.Any("old-labels", s.GetLabels()),
