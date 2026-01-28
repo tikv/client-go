@@ -69,7 +69,6 @@ import (
 	"github.com/tikv/client-go/v2/util/async"
 	"github.com/tikv/client-go/v2/util/redact"
 	"github.com/tikv/pd/client/errs"
-	pderr "github.com/tikv/pd/client/errs"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -486,8 +485,8 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	if req.Context.MaxExecutionDurationMs == 0 {
-		req.Context.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
+	if req.MaxExecutionDurationMs == 0 {
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 	}
 
 	s.reset()
@@ -997,11 +996,11 @@ func (s *sendReqState) next() (done bool) {
 
 	// Extract trace ID from context and propagate to TiKV
 	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
-		req.Context.TraceId = traceID
+		req.TraceId = traceID
 	}
 	// Set trace control flags based on the extractor function
-	req.Context.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
-	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	req.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
+	req.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}
@@ -1320,11 +1319,11 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	// Extract trace ID from context and propagate to TiKV
 	if traceID := trace.TraceIDFromContext(bo.GetCtx()); len(traceID) > 0 {
-		req.Context.TraceId = traceID
+		req.TraceId = traceID
 	}
 	// Set trace control flags based on the extractor function
-	req.Context.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
-	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	req.TraceControlFlags = uint64(trace.GetTraceControlFlags(bo.GetCtx()))
+	req.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}
@@ -1510,8 +1509,8 @@ func (s *RegionRequestSender) SendReqCtx(
 
 	// If the MaxExecutionDurationMs is not set yet, we set it to be the RPC timeout duration
 	// so TiKV can give up the requests whose response TiDB cannot receive due to timeout.
-	if req.Context.MaxExecutionDurationMs == 0 {
-		req.Context.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
+	if req.MaxExecutionDurationMs == 0 {
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 	}
 
 	state := &sendReqState{
@@ -1599,7 +1598,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 	builder.WriteString(", timeout: ")
 	builder.WriteString(util.FormatDuration(timeout))
 	builder.WriteString(", req-max-exec-timeout: ")
-	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
+	builder.WriteString(util.FormatDuration(time.Duration(int64(req.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString(", retry-times: ")
 	builder.WriteString(strconv.Itoa(retryTimes))
 	if s.AccessStats != nil {
@@ -1767,13 +1766,13 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	}
 
 	// don't need to retry for ResourceGroup error
-	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
+	if errors.Is(err, errs.ErrClientResourceGroupThrottled) {
 		return err
 	}
-	if errors.Is(err, pderr.ErrClientResourceGroupConfigUnavailable) {
+	if errors.Is(err, errs.ErrClientResourceGroupConfigUnavailable) {
 		return err
 	}
-	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
+	var errGetResourceGroup *errs.ErrClientGetResourceGroup
 	if errors.As(err, &errGetResourceGroup) {
 		return err
 	}

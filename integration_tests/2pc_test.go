@@ -2548,7 +2548,7 @@ func (s *testCommitterSuite) TestFailCommitTimeout() {
 	value, err := txn2.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
 	s.Greater(len(value.Value), 0)
-	_, err = txn2.Get(context.TODO(), []byte("b"))
+	value, err = txn2.Get(context.TODO(), []byte("b"))
 	s.Nil(err)
 	s.Greater(len(value.Value), 0)
 }

@@ -2421,6 +2421,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
+		//nolint:staticcheck
 		regionsInfo, err := c.pdClient.ScanRegions(withPDCircuitBreaker(ctx), startKey, endKey, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {

@@ -952,8 +952,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 		sizeFunc = c.keyValueSize
 		atomic.AddInt32(&c.getDetail().PrewriteRegionNum, int32(len(groups)))
 	case actionPessimisticLock:
-		if act.LockCtx.Stats != nil {
-			act.LockCtx.Stats.RegionNum = int32(len(groups))
+		if act.Stats != nil {
+			act.Stats.RegionNum = int32(len(groups))
 		}
 	}
 
@@ -1428,12 +1428,12 @@ func broadcastToAllStores(
 						TxnStatus: []*kvrpcpb.TxnStatus{status},
 					},
 				)
-				req.Context.ClusterId = store.GetClusterID()
-				req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
+				req.ClusterId = store.GetClusterID()
+				req.ResourceControlContext = &kvrpcpb.ResourceControlContext{
 					ResourceGroupName: resourceGroupName,
 				}
-				req.Context.ResourceGroupTag = resourceGroupTag
-				req.Context.RequestSource = txn.GetRequestSource()
+				req.ResourceGroupTag = resourceGroupTag
+				req.RequestSource = txn.GetRequestSource()
 
 				_, err := store.GetTiKVClient().SendRequest(
 					bo.GetCtx(),
@@ -1758,7 +1758,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// all nodes, we have to make sure the commit TS of this transaction is greater
 	// than the snapshot TS of all existent readers. So we get a new timestamp
 	// from PD and plus one as our MinCommitTS.
-	if commitTSMayBeCalculated && c.needLinearizability() {
+	// If `commitWaitUntilTSO > 0`, we also need to get a new timestamp from TSO to ensure the constraint satisfied.
+	if commitTSMayBeCalculated && (c.needLinearizability() || c.txn.commitWaitUntilTSO > 0) {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
 		start := time.Now()
 		latestTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())

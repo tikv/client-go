@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/mem"
 )
 
 type connPool struct {
@@ -76,6 +77,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	//nolint:SA1019
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -109,7 +111,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	allowBatch := (cfg.TiKVClient.MaxBatchSize > 0) && enableBatch
 	if allowBatch {
 		a.batchConn = newBatchConn(uint(len(a.conns)), cfg.TiKVClient.MaxBatchSize, idleNotify)
-		a.batchConn.initMetrics(a.target)
+		a.initMetrics(a.target)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.conns {
@@ -119,6 +121,9 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
+
+		// Don't remove this until we no longer use sharedBytes in tipb and kvproto.
+		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 
 		opts = append([]grpc.DialOption{
 			opt,
@@ -141,8 +146,8 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
 			ctx,

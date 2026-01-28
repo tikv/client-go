@@ -61,11 +61,14 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/mem"
 	"google.golang.org/grpc/metadata"
 )
 
 // globalEncodedMsgDataPool is used to pool pre-encoded message data for batch commands.
-var globalEncodedMsgDataPool = grpc.NewSharedBufferPool()
+var globalEncodedMsgDataPool = mem.NewTieredBufferPool(
+	256, 4<<10, 16<<10, 32<<10, 1<<20, // copied from defaultBufferPoolSizes
+)
 
 type encodedBatchCmd struct {
 	// implement isBatchCommandsRequest_Request_Cmd
@@ -111,15 +114,15 @@ func encodeRequestCmd(req *tikvpb.BatchCommandsRequest_Request) error {
 		return nil
 	}
 	data := globalEncodedMsgDataPool.Get(req.Cmd.Size())
-	n, err := req.Cmd.MarshalTo(data)
+	n, err := req.Cmd.MarshalTo(*data)
 	if err != nil {
-		globalEncodedMsgDataPool.Put(&data)
+		globalEncodedMsgDataPool.Put(data)
 		return errors.WithStack(err)
-	} else if n != len(data) {
-		globalEncodedMsgDataPool.Put(&data)
-		return errors.Errorf("unexpected marshaled size: got %d, want %d", n, len(data))
+	} else if n != len(*data) {
+		globalEncodedMsgDataPool.Put(data)
+		return errors.Errorf("unexpected marshaled size: got %d, want %d", n, len(*data))
 	}
-	req.Cmd = &encodedBatchCmd{data: &data}
+	req.Cmd = &encodedBatchCmd{data: data}
 	return nil
 }
 
@@ -411,7 +414,8 @@ func (t *turboBatchTrigger) turboWaitTime() time.Duration {
 }
 
 func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool {
-	if t.opts.V == turboBatchTimeBased {
+	switch t.opts.V {
+	case turboBatchTimeBased:
 		thisArrivalInterval := reqArrivalInterval.Seconds()
 		if t.maxArrivalInterval == 0 {
 			t.maxArrivalInterval = t.turboWaitSeconds() * float64(t.opts.N)
@@ -425,14 +429,14 @@ func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool
 			t.estArrivalInterval = t.opts.W*thisArrivalInterval + (1-t.opts.W)*t.estArrivalInterval
 		}
 		return t.estArrivalInterval < t.turboWaitSeconds()*t.opts.P
-	} else if t.opts.V == turboBatchProbBased {
+	case turboBatchProbBased:
 		thisProb := .0
 		if reqArrivalInterval.Seconds() < t.turboWaitSeconds() {
 			thisProb = 1
 		}
 		t.estFetchMoreProb = t.opts.W*thisProb + (1-t.opts.W)*t.estFetchMoreProb
 		return t.estFetchMoreProb > t.opts.P
-	} else {
+	default:
 		return true
 	}
 }

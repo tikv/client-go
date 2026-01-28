@@ -1,6 +1,6 @@
 module github.com/tikv/client-go/v2
 
-go 1.23.12
+go 1.25.6
 
 require (
 	github.com/VividCortex/ewma v1.2.0
@@ -22,7 +22,7 @@ require (
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20251211035544-6cebb3314abe
+	github.com/tikv/pd/client v0.0.0-20260119083144-b273ae0421dd
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10
@@ -30,7 +30,7 @@ require (
 	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/sync v0.12.0
-	google.golang.org/grpc v1.63.2
+	google.golang.org/grpc v1.73.0
 	modernc.org/mathutil v1.7.1
 )
 
@@ -53,9 +53,9 @@ require (
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240304212257-790db918fca8 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240401170217-c3f982113cda // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20250324211829-b45e905df463 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

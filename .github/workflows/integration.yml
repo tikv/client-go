@@ -17,7 +17,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.24.1
+          go-version: 1.25.6
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -36,7 +36,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.24.1
+          go-version: 1.25.6
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -55,7 +55,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.24.1
+          go-version: 1.25.6
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -101,7 +101,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.24.1
+          go-version: 1.25.6
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -144,7 +144,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.24.1
+          go-version: 1.25.6
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
