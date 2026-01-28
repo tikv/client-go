@@ -443,7 +443,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
-	s.cluster.UpdateStoreAddr(s.store1, store.GetAddr()+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
+	s.cluster.UpdateStoreAddr(s.store1, "127.0.0.1:20166", &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
@@ -2305,8 +2305,8 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	// assert that the new store should be added and it's also not reachable
 	newStore1, _ := s.cache.stores.get(store1.storeID)
 	s.Require().NotEqual(reachable, newStore1.getLivenessState())
-	// assert that the old store in region cache is replaced
-	s.Require().Equal(store1.GetAddr(), newStore1.GetAddr())
+	// assert that the store pointer should be the same.
+	s.Require().Equal(store1, newStore1)
 
 	// recover store1
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
