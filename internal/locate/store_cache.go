@@ -475,7 +475,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 	}
 }
 
-// reResolve try to resolve addr for store that need check. It returns false if the store is a tombstone.
+// reResolve tries to resolve addr for store that need check. It returns false if the store is a tombstone.
 func (s *Store) reResolve(c storeCache) (bool, error) {
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
@@ -662,7 +662,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 			if err != nil {
 				logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 			} else if !valid {
-				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
+				logutil.BgLogger().Info("[health check] store is valid(tombstone or removed), stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
 				return true
 			}
 		}

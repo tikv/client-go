@@ -3148,8 +3148,8 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
 }
 
-// TestStoreRestartWithNewLabels verifies that the store in replica selector still has
-// reference to the old store when the store is restarted with new labels.
+// TestStoreRestartWithNewLabels verifies that the store in replica selector
+// continue to reference the same store instance when the store is restarted with new labels.
 func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	// Initialize region cache
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
@@ -3180,7 +3180,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	// Start health check loop to monitor store
 	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, unreachable, time.Second)
 
-	// Create replica selector BEFORE store replacement to capture old store reference
+	// Create replica selector BEFORE store is restarted with new labels
 	region := s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.Require().NotNil(region)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
@@ -3188,7 +3188,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	s.Require().NoError(err)
 	s.Require().NotNil(replicaSelector)
 
-	// Find the replica with store1 to keep reference to old store
+	// Find the replica with store1 to keep reference to the same store instance
 	var oldReplica *replica
 	var leaderPeer *metapb.Peer
 	for _, replica := range replicaSelector.replicas {
@@ -3202,8 +3202,8 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 				}
 			}
 			s.Require().NotNil(leaderPeer, "should find peer for store1")
-			s.Require().Equal(store1, replica.store, "replica should reference old store before replacement")
-			s.Require().Equal(unreachable, replica.store.getLivenessState(), "old store should be unreachable")
+			s.Require().Equal(store1, replica.store, "replica should reference the same store instance before replacement")
+			s.Require().Equal(unreachable, replica.store.getLivenessState(), "the store in replica should be unreachable")
 			break
 		}
 	}
@@ -3218,8 +3218,8 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	// Recover store1 (simulate restart) - set liveness back to reachable for new store
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
 
-	// Trigger store metadata update by marking old store as needCheck and resolving
-	// This should trigger store_cache.go:494-497 logic: updating store metadata and resolving the store
+	// Trigger store metadata update by marking the store as needCheck and resolving
+	// This should trigger logic: updating store metadata and resolving the store
 	store1.setResolveState(needCheck)
 	s.cache.checkAndResolve(nil, func(st *Store) bool {
 		return st.getResolveState() == needCheck
@@ -3228,7 +3228,7 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 	// reResolve is synchronous, but add a small wait for robustness (max 500ms like TestResolveStateTransition)
 	s.Eventually(func() bool {
 		return store1.getResolveState() == resolved
-	}, 500*time.Millisecond, 50*time.Millisecond, "old store should be resolved")
+	}, 500*time.Millisecond, 50*time.Millisecond, "the store should be resolved")
 
 	// The store's labels should be updated
 	s.Require().True(isStoreContainLabel(store1.GetLabels(), "zone", "zone1"), "new store should have updated labels")
@@ -3237,10 +3237,10 @@ func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
 		return store1.getLivenessState() == reachable
 	}, 3*time.Second, 200*time.Millisecond, "new store should become reachable after restart")
 
-	// Step 4: Test the replica selector still has reference to OLD store (created before replacement)
-	s.Require().Equal(store1, oldReplica.store, "replica should still reference old store")
-	// The old store should be reachable
-	s.Require().Equal(reachable, oldReplica.store.getLivenessState(), "old store in replica should still be reachable")
+	// Step 4: Test the replica selector still has reference to the same store instance
+	s.Require().Equal(store1, oldReplica.store, "replica should still reference the same store instance")
+	// The store in replica should still be reachable
+	s.Require().Equal(reachable, oldReplica.store.getLivenessState(), "the store in replica should still be reachable")
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
