@@ -502,7 +502,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 		return false, err
 	}
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
-		// store has been removed in PD, we should invalidate all regions using those store.
+		// store has been removed in PD, we should mark the store as tombstone.
 		logutil.BgLogger().Info("invalidate regions in removed store",
 			zap.Uint64("store", s.storeID), zap.String("addr", s.GetAddr()))
 		atomic.AddUint32(&s.epoch, 1)
@@ -517,7 +517,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	}
 
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
-		logutil.BgLogger().Info("store meta(address or labels changed), updating store",
+		logutil.BgLogger().Info("store metadata(address or labels) changed, updating store",
 			zap.Uint64("store", s.storeID),
 			zap.String("old-addr", s.GetAddr()),
 			zap.Any("old-labels", s.GetLabels()),
