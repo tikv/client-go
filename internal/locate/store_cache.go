@@ -344,10 +344,16 @@ func (s *Store) GetLabelValue(key string) (string, bool) {
 
 // IsSameLabels returns whether the store have the same labels with target labels
 func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
-	if len(s.GetLabels()) != len(labels) {
+	currentLabels := s.GetLabels()
+	if len(currentLabels) != len(labels) {
 		return false
 	}
-	return s.IsLabelsMatch(labels)
+	for _, targetLabel := range labels {
+		if !isStoreContainLabel(currentLabels, targetLabel.Key, targetLabel.Value) {
+			return false
+		}
+	}
+	return true
 }
 
 // IsLabelsMatch return whether the store's labels match the target labels
@@ -663,7 +669,7 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 			if err != nil {
 				logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 			} else if !valid {
-				logutil.BgLogger().Info("[health check] store is valid(tombstone or removed), stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
+				logutil.BgLogger().Info("[health check] store is invalid(tombstone or removed), stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.GetAddr()), zap.String("state", s.getResolveState().String()))
 				return true
 			}
 		}

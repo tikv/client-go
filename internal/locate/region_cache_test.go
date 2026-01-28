@@ -443,7 +443,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
-	s.cluster.UpdateStoreAddr(s.store1, "127.0.0.1:20166", &metapb.StoreLabel{Key: "k", Value: "v"})
+	s.cluster.UpdateStoreAddr(s.store1, store.GetAddr()+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
