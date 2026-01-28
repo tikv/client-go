@@ -146,7 +146,7 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 	return store
 }
 
-// put puts the store into cache. for test only.
+// Put inserts or updates the store in cache. For tests only.
 func (c *storeCacheImpl) put(store *Store) {
 	c.storeMu.Lock()
 	defer c.storeMu.Unlock()
@@ -484,6 +484,8 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 // reResolve tries to resolve addr for store that need check.
 // It returns false if the store is a tombstone or removed.
 func (s *Store) reResolve(c storeCache) (bool, error) {
+	s.resolveMutex.Lock()
+	defer s.resolveMutex.Unlock()
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
 	if err != nil {
@@ -513,8 +515,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	if addr == "" {
 		return false, errors.Errorf("empty store(%d) address", s.storeID)
 	}
-	s.resolveMutex.Lock()
-	defer s.resolveMutex.Unlock()
+
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
 		logutil.BgLogger().Info("store meta(address or labels changed), updating store",
 			zap.Uint64("store", s.storeID),
