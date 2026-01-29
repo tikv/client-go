@@ -481,9 +481,10 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 	}
 }
 
-// reResolve tries to resolve addr for store that need check.
-// It returns (false, nil) if the store is a tombstone or removed,and (false, error)
-// if resolving fails due to an error when loading store from PD.
+// reResolve tries to resolve addr for store.
+// It returns (false, nil) if the store is a tombstone or removed, and (false, error)
+// if resolving fails due to an error when loading store from PD or when the loaded
+// store metadata is invalid (for example, an empty address).
 func (s *Store) reResolve(c storeCache) (bool, error) {
 	s.resolveMutex.Lock()
 	defer s.resolveMutex.Unlock()

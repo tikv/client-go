@@ -443,12 +443,14 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
-	s.cluster.UpdateStoreAddr(s.store1, store.GetAddr()+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
+	newAddr := store.GetAddr() + "0"
+	s.cluster.UpdateStoreAddr(s.store1, newAddr, &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
 	s.Equal(newStore, store)
+	s.Equal(newStore.GetAddr(), newAddr, "the store address should be updated")
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
@@ -2300,7 +2302,8 @@ func (s *testRegionCacheSuite) TestHealthCheckWithAddressChange() {
 	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, livenessState(store1Liveness), time.Second)
 
 	// update store meta
-	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr()+"'", store1.GetLabels()...)
+	newAddr := store1.GetAddr() + "0"
+	s.cluster.UpdateStoreAddr(store1.storeID, newAddr, store1.GetLabels()...)
 
 	newStore1, _ := s.cache.stores.get(store1.storeID)
 	// assert that the store pointer should be the same.
@@ -2313,7 +2316,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithAddressChange() {
 
 	// assert that the store should be resolved and reachable
 	s.Eventually(func() bool {
-		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable
+		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable && store1.GetAddr() == newAddr
 	}, 3*time.Second, time.Second)
 }
 
