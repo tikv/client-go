@@ -762,8 +762,9 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 }
 
 // only used fot test.
-func newTestRegionCache() *RegionCache {
+func NewTestRegionCache() *RegionCache {
 	c := &RegionCache{}
+	c.codec = apicodec.NewCodecV1(apicodec.ModeTxn)
 	c.bg = newBackgroundRunner(context.Background())
 	c.mu = *newRegionIndexMu(nil)
 	return c

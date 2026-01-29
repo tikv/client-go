@@ -137,6 +137,7 @@ type twoPhaseCommitter struct {
 	detail              unsafe.Pointer
 	txnSize             int
 	hasNoNeedCommitKeys bool
+	hasSharedLocks      bool
 	resourceGroupName   string
 
 	primaryKey  []byte
@@ -548,8 +549,17 @@ func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, asse
 	return assertionFailed
 }
 
+// getLockTypeFromFlags gets the lock type from the key flags. It's valid only when flags.HasLocked() is true.
+func getLockTypeFromFlags(flags kv.KeyFlags) kvrpcpb.Op {
+	if flags.HasLockedInShareMode() {
+		return kvrpcpb.Op_SharedLock
+	} else {
+		return kvrpcpb.Op_Lock
+	}
+}
+
 func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
-	var size, putCnt, delCnt, lockCnt, checkCnt int
+	var size, putCnt, delCnt, lockCnt, sharedLockCnt, checkCnt int
 
 	txn := c.txn
 	memBuf := txn.GetMemBuffer().GetMemDB()
@@ -571,7 +581,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			if !flags.HasLocked() {
 				continue
 			}
-			op = kvrpcpb.Op_Lock
+			op = getLockTypeFromFlags(flags)
 			lockCnt++
 		} else {
 			value = it.Value()
@@ -590,7 +600,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// If the key was locked before, we should prewrite the lock even if
 					// the KV needn't be committed according to the filter. Otherwise, we
 					// were forgetting removing pessimistic locks added before.
-					op = kvrpcpb.Op_Lock
+					op = getLockTypeFromFlags(flags)
 					lockCnt++
 				} else {
 					op = kvrpcpb.Op_Put
@@ -611,16 +621,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					toUpdatePrewriteOnly = append(toUpdatePrewriteOnly, key)
 				} else {
 					if flags.HasNewlyInserted() {
+						if !flags.HasLocked() {
+							continue
+						}
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
 						// other deletes for example the secondary index delete.
 						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
 						// the logic is same as the pessimistic mode.
-						if flags.HasLocked() {
-							op = kvrpcpb.Op_Lock
-							lockCnt++
-						} else {
-							continue
-						}
+						op = getLockTypeFromFlags(flags)
+						lockCnt++
 					} else {
 						op = kvrpcpb.Op_Del
 						delCnt++
@@ -636,6 +645,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
 		if c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
+		}
+		if op == kvrpcpb.Op_SharedLock {
+			sharedLockCnt++
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		size += len(key) + len(value)
@@ -678,7 +690,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			}
 		}
 
-		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_SharedLock {
 			c.primaryKey = key
 		}
 	}
@@ -689,6 +701,20 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	if c.mutations.Len() == 0 {
 		return nil
+	} else if len(c.primaryKey) == 0 {
+		// TODO(slock): A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
+		// that (it's the only place that sets `flagKeyLockedInShareMode`). Here we just double check it.
+		msg := "no suitable primary key found for the transaction"
+		logutil.BgLogger().Warn(msg,
+			zap.Uint64("session", c.sessionID),
+			zap.Int("keys", c.mutations.Len()),
+			zap.Int("puts", putCnt),
+			zap.Int("dels", delCnt),
+			zap.Int("locks", lockCnt),
+			zap.Int("sharedLocks", sharedLockCnt),
+			zap.Int("checks", checkCnt),
+			zap.Uint64("txnStartTS", txn.startTS))
+		return errors.New(msg)
 	}
 	c.txnSize = size
 
@@ -703,6 +729,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			zap.Int("puts", putCnt),
 			zap.Int("dels", delCnt),
 			zap.Int("locks", lockCnt),
+			zap.Int("sharedLocks", sharedLockCnt),
 			zap.Int("checks", checkCnt),
 			zap.Uint64("txnStartTS", txn.startTS))
 	}
@@ -730,6 +757,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
 		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
 	}
+	c.hasSharedLocks = sharedLockCnt > 0
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
@@ -1719,7 +1747,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
-	if !c.txn.isPipelined {
+	if !c.txn.isPipelined && !c.hasSharedLocks {
 		// Check async commit is available or not.
 		if c.checkAsyncCommit() {
 			commitTSMayBeCalculated = true
