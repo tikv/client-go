@@ -226,6 +226,11 @@ const (
 
 // checkCommitTSRequired checks whether the commitTS is required but not returned.
 func (s *KVSnapshot) checkCommitTSRequired(requireCommitTS bool, readTier int, key []byte, commitTS uint64) error {
+	// For testing: force overriding commitTS to 0 to simulate missing commit ts.
+	if _, err := util.EvalFailpoint("checkCommitTSRequired-force-commit-ts-zero"); err == nil {
+		commitTS = 0
+	}
+
 	// We only need to check the commitTS > 0 when commit ts is required in the options
 	// and read tier is `BatchGetSnapshotTier`.
 	// For `BatchGetBufferTier`, the rows are not committed yet, so the commit ts is not valid.
@@ -238,6 +243,7 @@ func (s *KVSnapshot) checkCommitTSRequired(requireCommitTS bool, readTier int, k
 		errMsg,
 		zap.Uint64("txnStartTS", s.version),
 		zap.String("key", redact.Key(key)),
+		zap.Stack("stack"),
 	)
 	return errors.New(errMsg)
 }
@@ -314,6 +320,18 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	if emptyCommitTSKey != nil {
 		if err = s.checkCommitTSRequired(returnCommitTS, readTier, emptyCommitTSKey, 0); err != nil {
 			return nil, err
+		}
+	}
+	// When commit timestamp is required, validate at least one returned entry even if
+	// all returned commit ts are non-zero, to make the check testable via failpoint.
+	if returnCommitTS && readTier == BatchGetSnapshotTier {
+		for _, key := range keys {
+			if entry, ok := m[string(key)]; ok && !entry.IsValueEmpty() {
+				if err = s.checkCommitTSRequired(true, readTier, key, entry.CommitTS); err != nil {
+					return nil, err
+				}
+				break
+			}
 		}
 	}
 
