@@ -72,7 +72,10 @@ var (
 	BackoffHistogramStaleCmd                 prometheus.Observer
 	BackoffHistogramDataNotReady             prometheus.Observer
 	BackoffHistogramIsWitness                prometheus.Observer
-	BackoffHistogramEmpty                    prometheus.Observer
+	BackoffHistogramTxnNotFound              prometheus.Observer
+	BackoffHistogramMaxTsNotSynced           prometheus.Observer
+	BackoffHistogramCommitTSLag              prometheus.Observer
+	BackoffHistogramRegionNotInitialized     prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshotInternal         prometheus.Observer
 	TxnRegionsNumHistogramWithSnapshot                 prometheus.Observer
@@ -234,7 +237,10 @@ func initShortcuts() {
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
 	BackoffHistogramIsWitness = TiKVBackoffHistogram.WithLabelValues("isWitness")
-	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
+	BackoffHistogramTxnNotFound = TiKVBackoffHistogram.WithLabelValues("txnNotFound")
+	BackoffHistogramMaxTsNotSynced = TiKVBackoffHistogram.WithLabelValues("maxTsNotSynced")
+	BackoffHistogramCommitTSLag = TiKVBackoffHistogram.WithLabelValues("commitTSLag")
+	BackoffHistogramRegionNotInitialized = TiKVBackoffHistogram.WithLabelValues("regionNotInitialized")
 
 	TxnRegionsNumHistogramWithSnapshotInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot", LblInternal)
 	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot", LblGeneral)
