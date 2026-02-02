@@ -227,34 +227,53 @@ const (
 	BatchGetBufferTier
 )
 
-// BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
-func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int, opt kv.BatchGetOptions) (m map[string]kv.ValueEntry, err error) {
-	if intest.InTest && opt.ReturnCommitTS() && readTier == BatchGetSnapshotTier {
-		defer func() {
-			if err != nil {
-				return
-			}
-			for key, entry := range m {
-				if entry.CommitTS == 0 {
-					panic(fmt.Sprintf(
-						"commit ts is required but not returned for key: %s, value: %s",
-						hex.EncodeToString([]byte(key)), hex.EncodeToString(entry.Value),
-					))
-				}
-			}
-		}()
+// checkCommitTSRequired checks whether the commitTS is required but not returned.
+func (s *KVSnapshot) checkCommitTSRequired(requireCommitTS bool, readTier int, key []byte, commitTS uint64) error {
+	// mockZeroCommitTS indicates we are in a test case mocking a zero commit ts.
+	// We should not panic because an error is expected to be returned in the current case.
+	var mockZeroCommitTS bool
+	// For testing: force overriding commitTS to 0 to simulate missing commit ts.
+	if _, err := util.EvalFailpoint("checkCommitTSRequired-force-commit-ts-zero"); err == nil {
+		mockZeroCommitTS = true
+		commitTS = 0
 	}
 
+	// We only need to check the commitTS > 0 when commit ts is required in the options
+	// and read tier is `BatchGetSnapshotTier`.
+	// For `BatchGetBufferTier`, the rows are not committed yet, so the commit ts is not valid.
+	if !requireCommitTS || commitTS > 0 || readTier != BatchGetSnapshotTier {
+		return nil
+	}
+
+	errMsg := "commit timestamp is required but not returned"
+	logutil.BgLogger().Error(
+		errMsg,
+		zap.Uint64("txnStartTS", s.version),
+		zap.String("key", redact.Key(key)),
+		zap.Stack("stack"),
+	)
+	if intest.InTest && !mockZeroCommitTS {
+		panic(errMsg)
+	}
+	return errors.New(errMsg)
+}
+
+// BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
+func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int, opt kv.BatchGetOptions) (m map[string]kv.ValueEntry, err error) {
 	// Check the cached value first.
 	m = make(map[string]kv.ValueEntry)
+	returnCommitTS := opt.ReturnCommitTS()
 	s.mu.RLock()
 	if s.mu.cached != nil && readTier == BatchGetSnapshotTier {
 		tmp := make([][]byte, 0, len(keys))
-		returnCommitTS := opt.ReturnCommitTS()
 		for _, key := range keys {
 			if entry, ok := s.getSnapCacheWithoutLock(key, returnCommitTS); ok {
 				atomic.AddInt64(&s.mu.hitCnt, 1)
 				if !entry.IsValueEmpty() {
+					if err = s.checkCommitTSRequired(returnCommitTS, readTier, key, entry.CommitTS); err != nil {
+						s.mu.RUnlock()
+						return nil, err
+					}
 					m[string(key)] = entry
 				}
 			} else {
@@ -284,6 +303,7 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
+	var emptyCommitTSKey []byte
 	err = s.batchGetKeysByRegions(bo, keys, readTier, config.GetGlobalConfig().EnableAsyncBatchGet, opt, func(k []byte, v kv.ValueEntry) {
 		// when read buffer tier, empty value means a delete record, should also collect it.
 		if v.IsValueEmpty() && readTier != BatchGetBufferTier {
@@ -292,6 +312,9 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 
 		mu.Lock()
 		m[string(k)] = v
+		if returnCommitTS && emptyCommitTSKey == nil && v.CommitTS == 0 {
+			emptyCommitTSKey = k
+		}
 		mu.Unlock()
 	})
 	s.recordBackoffInfo(bo)
@@ -302,6 +325,24 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	err = s.store.CheckVisibility(s.version)
 	if err != nil {
 		return nil, err
+	}
+
+	if emptyCommitTSKey != nil {
+		if err = s.checkCommitTSRequired(returnCommitTS, readTier, emptyCommitTSKey, 0); err != nil {
+			return nil, err
+		}
+	}
+	// When commit timestamp is required, validate at least one returned entry even if
+	// all returned commit ts are non-zero, to make the check testable via failpoint.
+	if returnCommitTS && readTier == BatchGetSnapshotTier {
+		for _, key := range keys {
+			if entry, ok := m[string(key)]; ok && !entry.IsValueEmpty() {
+				if err = s.checkCommitTSRequired(true, readTier, key, entry.CommitTS); err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
 	}
 
 	if readTier != BatchGetSnapshotTier {
@@ -689,14 +730,19 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 	}(time.Now())
 
 	s.mu.RLock()
+	returnCommitTS := opt.ReturnCommitTS()
 	// Check the cached values first.
 	if s.mu.cached != nil {
 		var ok bool
-		if entry, ok = s.getSnapCacheWithoutLock(k, opt.ReturnCommitTS()); ok {
+		if entry, ok = s.getSnapCacheWithoutLock(k, returnCommitTS); ok {
 			atomic.AddInt64(&s.mu.hitCnt, 1)
 			s.mu.RUnlock()
 			if entry.IsValueEmpty() {
 				return kv.ValueEntry{}, tikverr.ErrNotExist
+			}
+			// The Get operation is always read from the snapshot tier.
+			if err = s.checkCommitTSRequired(returnCommitTS, BatchGetSnapshotTier, k, entry.CommitTS); err != nil {
+				return kv.ValueEntry{}, err
 			}
 			return entry, nil
 		}
@@ -732,6 +778,10 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption)
 	s.UpdateSnapshotCache([][]byte{k}, map[string]kv.ValueEntry{string(k): entry})
 	if entry.IsValueEmpty() {
 		return kv.ValueEntry{}, tikverr.ErrNotExist
+	}
+	// The Get operation is always read from the snapshot tier.
+	if err = s.checkCommitTSRequired(returnCommitTS, BatchGetSnapshotTier, k, entry.CommitTS); err != nil {
+		return kv.ValueEntry{}, err
 	}
 	return entry, nil
 }

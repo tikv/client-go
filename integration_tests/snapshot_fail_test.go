@@ -52,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 func TestSnapshotFail(t *testing.T) {
@@ -243,6 +244,170 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	v, err := snapshot.Get(context.Background(), []byte("k2"))
 	s.Nil(err)
 	s.Equal(v.Value, []byte("v2"))
+}
+
+func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
+	// Prepare committed data for snapshot reads.
+	{
+		txn, err := s.store.Begin()
+		s.Require().Nil(err)
+		s.Require().Nil(txn.Set([]byte("k1"), []byte("v1")))
+		s.Require().Nil(txn.Set([]byte("k2"), []byte("v2")))
+		s.Require().Nil(txn.Set([]byte("k3"), []byte("v3")))
+		s.Require().Nil(txn.Set([]byte("k4"), []byte("v4")))
+		s.Require().Nil(txn.Set([]byte("k5"), []byte("v5")))
+		s.Require().Nil(txn.Commit(context.Background()))
+	}
+
+	type testCase struct {
+		name          string
+		needsSnapshot bool
+		run           func(snapshot *txnsnapshot.KVSnapshot)
+	}
+
+	cases := []testCase{
+		{
+			name:          "no_return_commit_ts_get_snapshot_and_cache",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				hitsBefore := snapshot.SnapCacheHitCount()
+				_, err := snapshot.Get(context.Background(), []byte("k5"))
+				s.Require().NoError(err)
+				_, err = snapshot.Get(context.Background(), []byte("k5"))
+				s.Require().NoError(err)
+				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
+			},
+		},
+		{
+			name:          "no_return_commit_ts_batchget_snapshot_and_cache",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				hitsBefore := snapshot.SnapCacheHitCount()
+				_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")})
+				s.Require().NoError(err)
+				_, err = snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")})
+				s.Require().NoError(err)
+				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
+			},
+		},
+		{
+			name:          "return_commit_ts_get_cache_read_must_error",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				// Pre-fill cache with commit ts present (failpoint is disabled here).
+				entry, err := snapshot.Get(context.Background(), []byte("k1"), kv.WithReturnCommitTS())
+				s.Require().NoError(err)
+				s.Require().Greater(entry.CommitTS, uint64(0))
+
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				hitsBefore := snapshot.SnapCacheHitCount()
+				_, err = snapshot.Get(context.Background(), []byte("k1"), kv.WithReturnCommitTS())
+				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
+				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
+			},
+		},
+		{
+			name:          "return_commit_ts_get_snapshot_read_must_error",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				_, err := snapshot.Get(context.Background(), []byte("k3"), kv.WithReturnCommitTS())
+				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
+			},
+		},
+		{
+			name:          "return_commit_ts_batchget_cache_read_must_error",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				// Pre-fill cache with commit ts present (failpoint is disabled here).
+				entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k2")}, kv.WithReturnCommitTS())
+				s.Require().NoError(err)
+				s.Require().Len(entries, 1)
+				s.Require().Greater(entries["k2"].CommitTS, uint64(0))
+
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				hitsBefore := snapshot.SnapCacheHitCount()
+				_, err = snapshot.BatchGet(context.Background(), [][]byte{[]byte("k2")}, kv.WithReturnCommitTS())
+				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
+				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
+			},
+		},
+		{
+			name:          "return_commit_ts_batchget_snapshot_read_must_error",
+			needsSnapshot: true,
+			run: func(snapshot *txnsnapshot.KVSnapshot) {
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")}, kv.WithReturnCommitTS())
+				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
+			},
+		},
+		{
+			name:          "batchget_buffer_tier_not_affected",
+			needsSnapshot: false,
+			run: func(_ *txnsnapshot.KVSnapshot) {
+				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
+				defer func() {
+					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
+				}()
+
+				pipelinedTxn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+				s.Require().Nil(err)
+				defer func() { s.Require().Nil(pipelinedTxn.Rollback()) }()
+
+				s.Require().Nil(pipelinedTxn.Set([]byte("bufk"), []byte("bufv")))
+				flushed, err := pipelinedTxn.GetMemBuffer().Flush(true)
+				s.Require().Nil(err)
+				s.Require().True(flushed)
+				s.Require().Nil(pipelinedTxn.GetMemBuffer().FlushWait())
+
+				var opt kv.BatchGetOptions
+				opt.Apply([]kv.BatchGetOption{kv.WithReturnCommitTS()})
+				m, err := pipelinedTxn.GetSnapshot().BatchGetWithTier(context.Background(), [][]byte{[]byte("bufk")}, txnsnapshot.BatchGetBufferTier, opt)
+				s.Require().Nil(err)
+				s.Require().Len(m, 1)
+				s.Require().Equal([]byte("bufv"), m["bufk"].Value)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			if !tc.needsSnapshot {
+				tc.run(nil)
+			} else {
+				txn, err := s.store.Begin()
+				s.Require().Nil(err)
+				defer func() { s.Require().Nil(txn.Rollback()) }()
+				tc.run(txn.GetSnapshot())
+			}
+		})
+	}
 }
 
 func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
