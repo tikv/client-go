@@ -2201,8 +2201,15 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 
 	pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
 	var backoffErr error
-	for {
+	for i := 0; ; i++ {
 		if backoffErr != nil {
+			logutil.Logger(bo.GetCtx()).Info(
+				"scanRegions should backoff for PD RPC error",
+				zap.Error(backoffErr),
+				zap.Int("currentRetry", i),
+				zap.Int("totalSleepMillis", bo.GetTotalSleep()),
+				zap.Int("totalBackOffTimes", bo.GetTotalBackoffTimes()),
+			)
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
 				return nil, errors.WithStack(err)
@@ -2290,10 +2297,17 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 	}
 	// TODO: return start key and end key after redact is introduced.
 	var backoffErr error
-	for {
+	for i := 0; ; i++ {
 		pdOpts := initPdOpts()
 
 		if backoffErr != nil {
+			logutil.Logger(bo.GetCtx()).Info(
+				"batchScanRegions should backoff for PD RPC error",
+				zap.Error(backoffErr),
+				zap.Int("currentRetry", i),
+				zap.Int("totalSleepMillis", bo.GetTotalSleep()),
+				zap.Int("totalBackOffTimes", bo.GetTotalBackoffTimes()),
+			)
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
 				return nil, errors.WithStack(err)
