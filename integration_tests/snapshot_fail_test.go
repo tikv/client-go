@@ -247,6 +247,9 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 }
 
 func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support commit ts yet")
+	}
 	// Prepare committed data for snapshot reads.
 	{
 		txn, err := s.store.Begin()
