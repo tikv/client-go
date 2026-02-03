@@ -48,7 +48,8 @@ func (s *testSharedLockSuite) SetupSuite() {
 
 func (s *testSharedLockSuite) TearDownSuite() {
 	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
-	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
+	atomic.StoreUint64(&transaction.CommitMaxBackoff, 40000)
 }
 
 func (s *testSharedLockSuite) SetupTest() {
@@ -386,4 +387,64 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 		locks = s.scanLocks(key, s.getTS())
 		s.Len(locks, 0)
 	}
+}
+
+func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
+	// Set short ManagedLockTTL so locks expire quickly
+	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 100) // 100ms
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
+
+	pk := []byte("TestPrewriteResolveExpiredSharedLock_pk")
+	key := []byte("TestPrewriteResolveExpiredSharedLock_key")
+
+	// Step 1: Create a pessimistic transaction with shared lock
+	txn1 := s.begin()
+	s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk))
+	s.Equal(pk, txn1.GetCommitter().GetPrimaryKey())
+
+	lockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+	lockCtx.InShareMode = true
+	s.Nil(txn1.LockKeys(context.Background(), lockCtx, key))
+
+	// Wait for the shared lock to be visible
+	s.Eventually(func() bool {
+		locks := s.scanLocks(key, s.getTS())
+		return len(locks) == 1
+	}, 5*time.Second, 100*time.Millisecond, "expect 1 shared lock")
+
+	// Step 2: Close TTL manager and wait for lock to expire
+	txn1.GetCommitter().CloseTTLManager()
+	time.Sleep(time.Duration(atomic.LoadUint64(&transaction.ManagedLockTTL))*time.Millisecond + 200*time.Millisecond)
+
+	// Verify the shared lock still exists (but is expired)
+	locks := s.scanLocks(key, s.getTS())
+	s.Len(locks, 1)
+	s.Equal(key, locks[0].Key)
+
+	// Step 3: Create an optimistic transaction to write to the same key
+	txn2, err := s.store.Begin()
+	s.Nil(err)
+	txn2.SetPessimistic(false) // Make it optimistic
+
+	value := []byte("value_from_txn2")
+	s.Nil(txn2.Set(key, value))
+
+	// Step 4: Commit should succeed after resolving the expired shared lock
+	// This exercises the extractKeyErrs -> GetSharedLockInfos() code path
+	err = txn2.Commit(context.Background())
+	s.Nil(err, "optimistic transaction should successfully resolve expired shared lock and commit")
+
+	// Step 5: Verify the write succeeded
+	snapshot := s.store.GetSnapshot(txn2.CommitTS())
+	v, err := snapshot.Get(context.Background(), key)
+	s.Nil(err)
+	s.Equal(value, v.Value)
+
+	// Step 6: Verify the shared lock is gone
+	locks = s.scanLocks(key, s.getTS())
+	s.Len(locks, 0, "shared lock should have been resolved")
+
+	// Cleanup
+	s.Nil(txn1.Rollback())
 }
