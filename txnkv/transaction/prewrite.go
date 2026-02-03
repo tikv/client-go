@@ -487,7 +487,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 		// Check if this is a shared lock, which needs special handling
 		lockInfo := keyErr.GetLocked()
 		if lockInfo != nil {
-			if sharedLockInfos := lockInfo.GetSharedLockInfos(); sharedLockInfos != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
 				for _, sharedLockInfo := range sharedLockInfos {
 					lock := txnlock.NewLock(sharedLockInfo)
 					if _, ok := logged[lock.TxnID]; !ok {

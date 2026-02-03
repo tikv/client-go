@@ -302,7 +302,7 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		// This should only happen for wait timeout.
 		lockInfo := keyErr.GetLocked()
 		if lockInfo != nil {
-			if sharedLockInfos := lockInfo.GetSharedLockInfos(); sharedLockInfos != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
 				for _, sharedLockInfo := range sharedLockInfos {
 					if sharedLockInfo.DurationToLastUpdateMs > 0 &&
 						sharedLockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
