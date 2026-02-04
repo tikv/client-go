@@ -189,7 +189,7 @@ func (s *Session) checkEndKeyInRegion(key []byte) bool {
 		return len(s.endKey) == 0
 	}
 	// get the previous key of the end key
-	lastIdx := len(s.endKey) - 1
+	lastIdx := len(key) - 1
 	if key[lastIdx] > 0 {
 		// not performance critical path, just clone to avoid modifying the input
 		prevKey := slices.Clone(key)
