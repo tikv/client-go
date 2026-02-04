@@ -514,7 +514,7 @@ func (s *testRawkvSuite) TestDeleteRange() {
 
 	// BatchPut
 	err := client.BatchPut(context.Background(), keys, values, SetColumnFamily(cf))
-	s.Nil(err)
+	s.NoError(err)
 
 	// make store2 using store1's addr and store1 offline
 	store1Addr := s.storeAddr(s.store1)
@@ -524,18 +524,32 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
-	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	s.NoError(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
 	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	// test DeleteRange
 	startKey, endKey := []byte("key3"), []byte(nil)
 	err = client.DeleteRange(context.Background(), startKey, endKey, SetColumnFamily(cf))
-	s.Nil(err)
+	s.NoError(err)
 
 	ks, vs, err := client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
-	s.Nil(err)
-	s.Equal(0, len(ks))
-	s.Equal(0, len(vs))
+	s.NoError(err)
+	s.Len(ks, 0)
+	s.Len(vs, 0)
+
+	startKey, endKey = nil, nil
+	ks, vs, err = client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, 3)
+	s.Len(vs, 3)
+
+	err = client.DeleteRange(context.Background(), startKey, endKey, SetColumnFamily(cf))
+	s.NoError(err)
+
+	ks, vs, err = client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, 0)
+	s.Len(vs, 0)
 }
 
 func (s *testRawkvSuite) TestCompareAndSwap() {
