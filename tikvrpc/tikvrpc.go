@@ -120,6 +120,9 @@ const (
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
+
+	// CmdVersionedCop is used to call VersionedKv services.
+	CmdVersionedCop
 )
 
 // CmdType aliases.
