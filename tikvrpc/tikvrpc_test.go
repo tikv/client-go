@@ -89,6 +89,7 @@ func TestTiDB51921(t *testing.T) {
 		NewRequest(CmdCop, &coprocessor.Request{}),
 		NewRequest(CmdCopStream, &coprocessor.Request{}),
 		NewRequest(CmdBatchCop, &coprocessor.BatchRequest{}),
+		NewRequest(CmdVersionedCop, &coprocessor.Request{}),
 		NewRequest(CmdMvccGetByKey, &kvrpcpb.MvccGetByKeyRequest{}),
 		NewRequest(CmdMvccGetByStartTs, &kvrpcpb.MvccGetByStartTsRequest{}),
 		NewRequest(CmdSplitRegion, &kvrpcpb.SplitRegionRequest{}),

@@ -119,6 +119,9 @@ const (
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
+
+	// CmdVersionedCop is used to call VersionedKv services.
+	CmdVersionedCop
 )
 
 // CmdType aliases.
@@ -192,6 +195,8 @@ func (t CmdType) String() string {
 		return "CopStream"
 	case CmdBatchCop:
 		return "BatchCop"
+	case CmdVersionedCop:
+		return "VersionedCop"
 	case CmdMPPTask:
 		return "DispatchMPPTask"
 	case CmdMPPConn:
@@ -490,6 +495,11 @@ func (req *Request) Cop() *coprocessor.Request {
 	return req.Req.(*coprocessor.Request)
 }
 
+// VersionedCop returns coprocessor request in request.
+func (req *Request) VersionedCop() *coprocessor.Request {
+	return req.Req.(*coprocessor.Request)
+}
+
 // BatchCop returns BatchCop request in request.
 func (req *Request) BatchCop() *coprocessor.BatchRequest {
 	return req.Req.(*coprocessor.BatchRequest)
@@ -697,6 +707,8 @@ func (req *Request) GetSize() int {
 		size = req.Scan().Size()
 	case CmdCop:
 		size = req.Cop().Size()
+	case CmdVersionedCop:
+		size = req.VersionedCop().Size()
 	case CmdPrewrite:
 		size = req.Prewrite().Size()
 	case CmdCommit:
@@ -1005,7 +1017,7 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.RawChecksumResponse{
 			RegionError: e,
 		}
-	case CmdCop:
+	case CmdCop, CmdVersionedCop:
 		p = &coprocessor.Response{
 			RegionError: e,
 		}
@@ -1301,6 +1313,22 @@ func CallDebugRPC(ctx context.Context, client debugpb.DebugClient, req *Request)
 	return resp, err
 }
 
+// CallVersionedKV launches a versioned kv rpc call.
+func CallVersionedKV(ctx context.Context, client tikvpb.VersionedKvClient, req *Request) (*Response, error) {
+	resp := &Response{}
+	var err error
+	switch req.Type {
+	case CmdVersionedCop:
+		resp.Resp, err = client.VersionedCoprocessor(ctx, req.VersionedCop())
+	default:
+		return nil, errors.Errorf("invalid request type: %v", req.Type)
+	}
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return resp, nil
+}
+
 // Lease is used to implement grpc stream timeout.
 type Lease struct {
 	Cancel   context.CancelFunc
@@ -1507,6 +1535,8 @@ func (req *Request) GetStartTS() uint64 {
 		return req.Cop().GetStartTs()
 	case CmdBatchCop:
 		return req.BatchCop().GetStartTs()
+	case CmdVersionedCop:
+		return req.VersionedCop().GetStartTs()
 	case CmdMvccGetByStartTs:
 		return req.MvccGetByStartTs().GetStartTs()
 	default:
