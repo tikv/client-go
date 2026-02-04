@@ -35,6 +35,8 @@
 package mocktikv
 
 import (
+	"slices"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -180,6 +182,22 @@ func (s *Session) checkRequest(ctx *kvrpcpb.Context, size int) *errorpb.Error {
 
 func (s *Session) checkKeyInRegion(key []byte) bool {
 	return regionContains(s.startKey, s.endKey, NewMvccKey(key))
+}
+
+func (s *Session) checkEndKeyInRegion(key []byte) bool {
+	if len(key) == 0 {
+		return len(s.endKey) == 0
+	}
+	// get the previous key of the end key
+	lastIdx := len(s.endKey) - 1
+	if key[lastIdx] > 0 {
+		// not performance critical path, just clone to avoid modifying the input
+		prevKey := slices.Clone(key)
+		prevKey[lastIdx]--
+		return regionContains(s.startKey, s.endKey, NewMvccKey(prevKey))
+	}
+
+	return regionContains(s.startKey, s.endKey, NewMvccKey(key[:lastIdx]))
 }
 
 func isTiFlashRelatedStore(store *metapb.Store) bool {
