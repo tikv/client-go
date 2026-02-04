@@ -52,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 const requestMaxSize = 8 * 1024 * 1024
@@ -152,8 +153,9 @@ func convertToPbPairs(pairs []Pair) []*kvrpcpb.KvPair {
 		var kvPair *kvrpcpb.KvPair
 		if p.Err == nil {
 			kvPair = &kvrpcpb.KvPair{
-				Key:   p.Key,
-				Value: p.Value,
+				Key:      p.Key,
+				Value:    p.Value,
+				CommitTs: p.CommitTS,
 			}
 		} else {
 			kvPair = &kvrpcpb.KvPair{
@@ -176,14 +178,21 @@ func (h kvHandler) handleKvGet(req *kvrpcpb.GetRequest) *kvrpcpb.GetResponse {
 		panic("KvGet: key not in region")
 	}
 
-	val, err := h.mvccStore.Get(req.Key, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
-	if err != nil {
+	pair := h.mvccStore.GetKVPair(req.Key, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
+	if pair.Err != nil {
 		return &kvrpcpb.GetResponse{
-			Error: convertToKeyError(err),
+			Error: convertToKeyError(pair.Err),
 		}
 	}
+
+	var commitTS uint64
+	if req.NeedCommitTs {
+		commitTS = pair.CommitTS
+	}
+
 	return &kvrpcpb.GetResponse{
-		Value: val,
+		Value:    pair.Value,
+		CommitTs: commitTS,
 	}
 }
 
@@ -340,8 +349,14 @@ func (h kvHandler) handleKvBatchGet(req *kvrpcpb.BatchGetRequest) *kvrpcpb.Batch
 		}
 	}
 	pairs := h.mvccStore.BatchGet(req.Keys, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
+	pbPairs := convertToPbPairs(pairs)
+	if !req.NeedCommitTs {
+		for _, p := range pbPairs {
+			p.CommitTs = 0
+		}
+	}
 	return &kvrpcpb.BatchGetResponse{
-		Pairs: convertToPbPairs(pairs),
+		Pairs: pbPairs,
 	}
 }
 
@@ -1076,6 +1091,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		return nil, errors.Errorf("unsupported this request type %v", req.Type)
 	}
 	return resp, nil
+}
+
+// SendRequestAsync sends a request to mock cluster asynchronously.
+func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		cb.Schedule(c.SendRequest(ctx, addr, req, 0))
+	}()
 }
 
 // Close closes the client.

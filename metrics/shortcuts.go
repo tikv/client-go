@@ -182,6 +182,22 @@ var (
 	ReadRequestLeaderRemoteBytes   prometheus.Observer
 	ReadRequestFollowerLocalBytes  prometheus.Observer
 	ReadRequestFollowerRemoteBytes prometheus.Observer
+
+	AsyncSendReqCounterWithOK          prometheus.Counter
+	AsyncSendReqCounterWithRegionError prometheus.Counter
+	AsyncSendReqCounterWithRPCError    prometheus.Counter
+	AsyncSendReqCounterWithSendError   prometheus.Counter
+	AsyncSendReqCounterWithOtherError  prometheus.Counter
+
+	AsyncBatchGetCounterWithOK          prometheus.Counter
+	AsyncBatchGetCounterWithRegionError prometheus.Counter
+	AsyncBatchGetCounterWithLockError   prometheus.Counter
+	AsyncBatchGetCounterWithOtherError  prometheus.Counter
+
+	LagCommitTSWaitHistogramWithOK       prometheus.Observer
+	LagCommitTSWaitHistogramWithError    prometheus.Observer
+	LagCommitTSAttemptHistogramWithOK    prometheus.Observer
+	LagCommitTSAttemptHistogramWithError prometheus.Observer
 )
 
 func initShortcuts() {
@@ -333,4 +349,20 @@ func initShortcuts() {
 	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
 	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
 	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
+
+	AsyncSendReqCounterWithOK = TiKVAsyncSendReqCounter.WithLabelValues("ok")
+	AsyncSendReqCounterWithRegionError = TiKVAsyncSendReqCounter.WithLabelValues("region_error")
+	AsyncSendReqCounterWithRPCError = TiKVAsyncSendReqCounter.WithLabelValues("rpc_error")
+	AsyncSendReqCounterWithSendError = TiKVAsyncSendReqCounter.WithLabelValues("send_error")
+	AsyncSendReqCounterWithOtherError = TiKVAsyncSendReqCounter.WithLabelValues("other_error")
+
+	AsyncBatchGetCounterWithOK = TiKVAsyncBatchGetCounter.WithLabelValues("ok")
+	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
+	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
+	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
+
+	LagCommitTSWaitHistogramWithOK = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("ok")
+	LagCommitTSWaitHistogramWithError = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("err")
+	LagCommitTSAttemptHistogramWithOK = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("ok")
+	LagCommitTSAttemptHistogramWithError = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("err")
 }
