@@ -58,6 +58,7 @@ cmds=(
   PhysicalScanLock
   Cop
   BatchCop
+  VersionedCop
   MvccGetByKey
   MvccGetByStartTs
   SplitRegion

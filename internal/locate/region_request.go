@@ -1220,7 +1220,7 @@ func (s *sendReqState) send() (canceled bool) {
 			s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
 				if val.(bool) {
-					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
+					if (req.Type == tikvrpc.CmdCop || req.Type == tikvrpc.CmdVersionedCop) && bo.GetTotalSleep() == 0 {
 						s.vars.resp, s.vars.err = &tikvrpc.Response{
 							Resp: &coprocessor.Response{RegionError: &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
 						}, nil
@@ -2258,7 +2258,10 @@ func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.R
 
 	var readTS uint64
 	switch req.Type {
-	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet, tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop, tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
+	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet,
+		tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop,
+		tikvrpc.CmdVersionedCop,
+		tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
 		readTS = req.GetStartTS()
 
 	// TODO: Check transactional write requests that has implicit read.
