@@ -188,7 +188,7 @@ func (s *Session) checkEndKeyInRegion(key []byte) bool {
 	if len(key) == 0 {
 		return len(s.endKey) == 0
 	}
-	// get the previous key of the end key
+	// get a roughly previous key of the end key 😉, just to reuse regionContains
 	lastIdx := len(key) - 1
 	if key[lastIdx] > 0 {
 		// not performance critical path, just clone to avoid modifying the input
