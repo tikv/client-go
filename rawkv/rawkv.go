@@ -853,7 +853,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		}
 
 		actualEndKey := endKey
-		if len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, endKey) < 0 {
+		if len(loc.EndKey) > 0 && (len(endKey) == 0 || bytes.Compare(loc.EndKey, endKey) < 0) {
 			actualEndKey = loc.EndKey
 		}
 
