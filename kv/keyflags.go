@@ -84,7 +84,7 @@ const (
 	// that the key has been locked in exclusive mode.
 	flagKeyLockedInShareMode
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite | flagKeyLockedInShareMode
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
