@@ -514,7 +514,7 @@ func (s *testRawkvSuite) TestDeleteRange() {
 
 	// BatchPut
 	err := client.BatchPut(context.Background(), keys, values, SetColumnFamily(cf))
-	s.Nil(err)
+	s.NoError(err)
 
 	// make store2 using store1's addr and store1 offline
 	store1Addr := s.storeAddr(s.store1)
@@ -524,18 +524,90 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
-	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	s.NoError(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
 	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	// test DeleteRange
 	startKey, endKey := []byte("key3"), []byte(nil)
 	err = client.DeleteRange(context.Background(), startKey, endKey, SetColumnFamily(cf))
-	s.Nil(err)
+	s.NoError(err)
 
 	ks, vs, err := client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
-	s.Nil(err)
-	s.Equal(0, len(ks))
-	s.Equal(0, len(vs))
+	s.NoError(err)
+	s.Len(ks, 0)
+	s.Len(vs, 0)
+
+	startKey, endKey = nil, nil
+	ks, vs, err = client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, 3)
+	s.Len(vs, 3)
+
+	err = client.DeleteRange(context.Background(), startKey, endKey, SetColumnFamily(cf))
+	s.NoError(err)
+
+	ks, vs, err = client.Scan(context.Background(), startKey, endKey, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, 0)
+	s.Len(vs, 0)
+}
+
+func (s *testRawkvSuite) TestDeleteRangeEmptyKeysMultiRegion() {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	// Split into multiple regions so DeleteRange(nil, nil) has to iterate regions.
+	newRegionID := s.cluster.AllocID()
+	newPeerIDs := s.cluster.AllocIDs(2)
+	s.cluster.SplitRaw(s.region1, newRegionID, []byte("key3"), newPeerIDs, newPeerIDs[0])
+
+	client := &Client{
+		clusterID:   0,
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
+	}
+	defer client.Close()
+
+	cf := "test_cf"
+	paris := map[string]string{
+		"db":   "TiDB",
+		"key2": "value2",
+		"key1": "value1",
+		"key4": "value4",
+		"key3": "value3",
+		"kv":   "TiKV",
+	}
+	keys := make([]key, 0, len(paris))
+	values := make([]value, 0, len(paris))
+	for k, v := range paris {
+		keys = append(keys, []byte(k))
+		values = append(values, []byte(v))
+	}
+
+	err := client.BatchPut(context.Background(), keys, values, SetColumnFamily(cf))
+	s.NoError(err)
+
+	// Sanity: ensure keys are located to different regions after split.
+	bo := retry.NewBackofferWithVars(context.Background(), 5000, nil)
+	loc1, err := client.regionCache.LocateKey(bo, []byte("key1"))
+	s.NoError(err)
+	loc2, err := client.regionCache.LocateKey(bo, []byte("key4"))
+	s.NoError(err)
+	s.NotEqual(loc1.Region.GetID(), loc2.Region.GetID())
+	s.NotEmpty(loc1.EndKey)
+
+	ks, vs, err := client.Scan(context.Background(), nil, nil, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, len(paris))
+	s.Len(vs, len(paris))
+
+	err = client.DeleteRange(context.Background(), nil, nil, SetColumnFamily(cf))
+	s.NoError(err)
+
+	ks, vs, err = client.Scan(context.Background(), nil, nil, 10, SetColumnFamily(cf))
+	s.NoError(err)
+	s.Len(ks, 0)
+	s.Len(vs, 0)
 }
 
 func (s *testRawkvSuite) TestCompareAndSwap() {
