@@ -52,7 +52,7 @@ func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.Ge
 	}, nil
 }
 
-func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	return &metapb.Store{
 		Id:      storeID,
 		Address: "mock-store",

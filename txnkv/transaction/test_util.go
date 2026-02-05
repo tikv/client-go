@@ -225,7 +225,7 @@ func (u *unimplementedPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
 }
 
 // GetStore implements pd.Client.
-func (u *unimplementedPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (u *unimplementedPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	panic("unimplemented")
 }
 
