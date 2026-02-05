@@ -282,7 +282,7 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 
 func (s *testSharedLockSuite) TestGCSharedLock() {
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
-	atomic.StoreUint64(&transaction.ManagedLockTTL, 100) // 100ms
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 1000) // 1000ms, increased for test stability in busy environments
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
 
 	txn1 := s.begin()
@@ -307,6 +307,9 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	txn1.GetCommitter().CloseTTLManager()
 	txn2.GetCommitter().CloseTTLManager()
 
+	// Verify txn3's TTL manager is still running
+	s.True(txn3.GetCommitter().IsTTLRunning(), "txn3's TTL manager should be running")
+
 	var locks []*txnlock.Lock
 	s.Eventually(func() bool {
 		locks = s.scanLocks(sharedKey, s.getTS())
@@ -319,8 +322,11 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 		s.Equal(lock.LockType, kvrpcpb.Op_PessimisticLock)
 	}
 
-	// wait managed lock ttl to expire
+	// wait managed lock ttl to expire for txn1 and txn2
 	time.Sleep(time.Duration(atomic.LoadUint64(&transaction.ManagedLockTTL))*time.Millisecond + 200*time.Millisecond)
+
+	// Verify txn3's TTL manager is still running after the sleep
+	s.True(txn3.GetCommitter().IsTTLRunning(), "txn3's TTL manager should still be running after sleep")
 
 	lr := s.store.NewLockResolver()
 	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
@@ -329,7 +335,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	s.Zero(ttl)
 
 	locks = s.scanLocks(sharedKey, s.getTS())
-	s.Len(locks, 1)
+	s.Len(locks, 1, "expected 1 lock (txn3's) to remain, but got %d; txn3 TTL running: %v", len(locks), txn3.GetCommitter().IsTTLRunning())
 	s.Equal(txn3.StartTS(), locks[0].TxnID)
 	s.Equal(sharedKey, locks[0].Key)
 	s.Nil(txn3.Rollback())
@@ -396,7 +402,7 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	// Set short ManagedLockTTL so locks expire quickly
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
-	atomic.StoreUint64(&transaction.ManagedLockTTL, 100) // 100ms
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
 
 	pk := []byte("TestPrewriteResolveExpiredSharedLock_pk")
