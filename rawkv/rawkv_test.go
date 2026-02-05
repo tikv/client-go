@@ -364,7 +364,7 @@ func (s *testRawkvSuite) TestBatch() {
 	defer client.Close()
 
 	cf := "test_cf"
-	paris := map[string]string{
+	pairs := map[string]string{
 		"db":   "TiDB",
 		"key2": "value2",
 		"key1": "value1",
@@ -373,7 +373,7 @@ func (s *testRawkvSuite) TestBatch() {
 	}
 	keys := make([]key, 0)
 	values := make([]value, 0)
-	for k, v := range paris {
+	for k, v := range pairs {
 		keys = append(keys, []byte(k))
 		values = append(values, []byte(v))
 	}
@@ -396,9 +396,9 @@ func (s *testRawkvSuite) TestBatch() {
 	// test BatchGet
 	returnValues, err := client.BatchGet(context.Background(), keys, SetColumnFamily(cf))
 	s.Nil(err)
-	s.Equal(len(returnValues), len(paris))
+	s.Equal(len(returnValues), len(pairs))
 	for i, v := range returnValues {
-		s.True(bytes.Equal(v, []byte(paris[string(keys[i])])))
+		s.True(bytes.Equal(v, []byte(pairs[string(keys[i])])))
 	}
 
 	// test BatchDelete
@@ -422,7 +422,7 @@ func (s *testRawkvSuite) TestScan() {
 	defer client.Close()
 
 	cf := "test_cf"
-	paris := map[string]string{
+	pairs := map[string]string{
 		"db":   "TiDB",
 		"key2": "value2",
 		"key1": "value1",
@@ -432,7 +432,7 @@ func (s *testRawkvSuite) TestScan() {
 	}
 	keys := make([]key, 0)
 	values := make([]value, 0)
-	for k, v := range paris {
+	for k, v := range pairs {
 		keys = append(keys, []byte(k))
 		values = append(values, []byte(v))
 	}
@@ -464,7 +464,7 @@ func (s *testRawkvSuite) TestScan() {
 	s.True(bytes.Equal(returnKeys[1], []byte("key2")))
 	s.True(bytes.Equal(returnKeys[2], []byte("key3")))
 	for i, k := range returnKeys {
-		s.True(bytes.Equal(returnValues[i], []byte(paris[string(k)])))
+		s.True(bytes.Equal(returnValues[i], []byte(pairs[string(k)])))
 	}
 
 	// test ReverseScan with onlyKey
@@ -497,7 +497,7 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	defer client.Close()
 
 	cf := "test_cf"
-	paris := map[string]string{
+	pairs := map[string]string{
 		"db":   "TiDB",
 		"key2": "value2",
 		"key1": "value1",
@@ -507,7 +507,7 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	}
 	keys := make([]key, 0)
 	values := make([]value, 0)
-	for k, v := range paris {
+	for k, v := range pairs {
 		keys = append(keys, []byte(k))
 		values = append(values, []byte(v))
 	}
@@ -569,7 +569,7 @@ func (s *testRawkvSuite) TestDeleteRangeEmptyKeysMultiRegion() {
 	defer client.Close()
 
 	cf := "test_cf"
-	paris := map[string]string{
+	pairs := map[string]string{
 		"db":   "TiDB",
 		"key2": "value2",
 		"key1": "value1",
@@ -577,9 +577,9 @@ func (s *testRawkvSuite) TestDeleteRangeEmptyKeysMultiRegion() {
 		"key3": "value3",
 		"kv":   "TiKV",
 	}
-	keys := make([]key, 0, len(paris))
-	values := make([]value, 0, len(paris))
-	for k, v := range paris {
+	keys := make([]key, 0, len(pairs))
+	values := make([]value, 0, len(pairs))
+	for k, v := range pairs {
 		keys = append(keys, []byte(k))
 		values = append(values, []byte(v))
 	}
@@ -598,8 +598,8 @@ func (s *testRawkvSuite) TestDeleteRangeEmptyKeysMultiRegion() {
 
 	ks, vs, err := client.Scan(context.Background(), nil, nil, 10, SetColumnFamily(cf))
 	s.NoError(err)
-	s.Len(ks, len(paris))
-	s.Len(vs, len(paris))
+	s.Len(ks, len(pairs))
+	s.Len(vs, len(pairs))
 
 	err = client.DeleteRange(context.Background(), nil, nil, SetColumnFamily(cf))
 	s.NoError(err)
@@ -689,7 +689,7 @@ func (s *testRawkvSuite) TestRawChecksum() {
 	defer client.Close()
 
 	cf := "CF_DEFAULT"
-	paris := map[string]string{
+	pairs := map[string]string{
 		"db":   "TiDB",
 		"key2": "value2",
 		"key1": "value1",
@@ -699,7 +699,7 @@ func (s *testRawkvSuite) TestRawChecksum() {
 	}
 	keys := make([]key, 0)
 	values := make([]value, 0)
-	for k, v := range paris {
+	for k, v := range pairs {
 		keys = append(keys, []byte(k))
 		values = append(values, []byte(v))
 	}
