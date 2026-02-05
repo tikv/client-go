@@ -701,9 +701,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	if c.mutations.Len() == 0 {
 		return nil
-	} else if len(c.primaryKey) == 0 {
-		// TODO(slock): A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
+	} else if len(c.primaryKey) == 0 && sharedLockCnt > 0 {
+		// A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
 		// that (it's the only place that sets `flagKeyLockedInShareMode`). Here we just double check it.
+		// Only report error when there are shared locks - if all keys are CheckNotExists (delete-your-writes),
+		// we allow the transaction to continue and use the first key as primary via the primary() fallback.
 		msg := "no suitable primary key found for the transaction"
 		logutil.BgLogger().Warn(msg,
 			zap.Uint64("session", c.sessionID),

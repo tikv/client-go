@@ -32,6 +32,10 @@ import (
 )
 
 func TestSharedLock(t *testing.T) {
+	if !*withTiKV {
+		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
+		return
+	}
 	suite.Run(t, new(testSharedLockSuite))
 }
 
