@@ -194,7 +194,7 @@ func (s *Session) checkRawEndKeyInRegion(endKey []byte) bool {
 	}
 
 	return bytes.Compare(s.startKey, endKey) < 0 &&
-		(bytes.Compare(endKey, s.endKey) <= 0 || len(endKey) == 0)
+		(bytes.Compare(endKey, s.endKey) <= 0 || len(s.endKey) == 0)
 }
 
 func isTiFlashRelatedStore(store *metapb.Store) bool {
