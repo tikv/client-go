@@ -298,6 +298,7 @@ func NewKVStore(
 	defer func() {
 		if retErr != nil {
 			regionCache.Close()
+			cancel()
 		}
 	}()
 
