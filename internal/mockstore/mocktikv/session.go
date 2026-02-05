@@ -35,7 +35,7 @@
 package mocktikv
 
 import (
-	"slices"
+	"bytes"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -184,20 +184,21 @@ func (s *Session) checkKeyInRegion(key []byte) bool {
 	return regionContains(s.startKey, s.endKey, NewMvccKey(key))
 }
 
-func (s *Session) checkEndKeyInRegion(key []byte) bool {
-	if len(key) == 0 {
+func (s *Session) checkEndKeyInRegion(endKey []byte) bool {
+	return s.checkRawEndKeyInRegion(NewMvccKey(endKey))
+}
+
+func (s *Session) checkRawKeyInRegion(key []byte) bool {
+	return regionContains(s.startKey, s.endKey, key)
+}
+
+func (s *Session) checkRawEndKeyInRegion(endKey []byte) bool {
+	if len(endKey) == 0 {
 		return len(s.endKey) == 0
 	}
-	// get a roughly previous key of the end key 😉, just to reuse regionContains
-	lastIdx := len(key) - 1
-	if key[lastIdx] > 0 {
-		// not performance critical path, just clone to avoid modifying the input
-		prevKey := slices.Clone(key)
-		prevKey[lastIdx]--
-		return regionContains(s.startKey, s.endKey, NewMvccKey(prevKey))
-	}
 
-	return regionContains(s.startKey, s.endKey, NewMvccKey(key[:lastIdx]))
+	return bytes.Compare(s.startKey, endKey) < 0 &&
+		bytes.Compare(endKey, s.endKey) <= 0
 }
 
 func isTiFlashRelatedStore(store *metapb.Store) bool {

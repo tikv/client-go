@@ -566,10 +566,10 @@ func (h kvHandler) handleKvRawBatchDelete(req *kvrpcpb.RawBatchDeleteRequest) *k
 }
 
 func (h kvHandler) handleKvRawDeleteRange(req *kvrpcpb.RawDeleteRangeRequest) *kvrpcpb.RawDeleteRangeResponse {
-	if !h.checkKeyInRegion(req.StartKey) {
+	if !h.checkRawKeyInRegion(req.StartKey) {
 		panic("KvDeleteRange: start key not in region")
 	}
-	if !h.checkEndKeyInRegion(req.EndKey) {
+	if !h.checkRawEndKeyInRegion(req.EndKey) {
 		panic("KvDeleteRange: end key not in region")
 	}
 	rawKV, ok := h.mvccStore.(RawKV)
