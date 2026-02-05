@@ -302,7 +302,7 @@ func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyR
 	return regions, nil
 }
 
-func (c *pdClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (c *pdClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
