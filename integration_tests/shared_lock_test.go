@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -34,6 +35,10 @@ import (
 func TestSharedLock(t *testing.T) {
 	if !*withTiKV {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
+		return
+	}
+	if config.NextGen {
+		t.Skip("skipping TestSharedLock because next-gen doesn't support shared lock yet")
 		return
 	}
 	suite.Run(t, new(testSharedLockSuite))
