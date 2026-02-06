@@ -35,6 +35,8 @@
 package mocktikv
 
 import (
+	"bytes"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -180,6 +182,19 @@ func (s *Session) checkRequest(ctx *kvrpcpb.Context, size int) *errorpb.Error {
 
 func (s *Session) checkKeyInRegion(key []byte) bool {
 	return regionContains(s.startKey, s.endKey, NewMvccKey(key))
+}
+
+func (s *Session) checkRawKeyInRegion(key []byte) bool {
+	return regionContains(s.startKey, s.endKey, key)
+}
+
+func (s *Session) checkRawEndKeyInRegion(endKey []byte) bool {
+	if len(endKey) == 0 {
+		return len(s.endKey) == 0
+	}
+
+	return bytes.Compare(s.startKey, endKey) < 0 &&
+		(bytes.Compare(endKey, s.endKey) <= 0 || len(s.endKey) == 0)
 }
 
 func isTiFlashRelatedStore(store *metapb.Store) bool {

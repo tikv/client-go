@@ -21,6 +21,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
@@ -43,7 +44,8 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 	bo *retry.Backoffer,
 	batches []batchKeys,
 	readTier int,
-	collectF func(k, v []byte),
+	opt kv.BatchGetOptions,
+	collectF func(k []byte, v kv.ValueEntry),
 ) (err error) {
 	var (
 		runloop   = async.NewRunLoop()
@@ -60,7 +62,7 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			backoffer = forkedBo.Clone()
 		}
 		batch := batch1
-		s.tryBatchGetSingleRegionUsingAsyncAPI(backoffer, batch, readTier, collectF, async.NewCallback(runloop, func(_ struct{}, e error) {
+		s.tryBatchGetSingleRegionUsingAsyncAPI(backoffer, batch, readTier, opt, collectF, async.NewCallback(runloop, func(_ struct{}, e error) {
 			// The callback is designed to be executed in the runloop's goroutine thus it should be safe to update the
 			// following variables without locks.
 			completed++
@@ -85,7 +87,8 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 	bo *retry.Backoffer,
 	batch batchKeys,
 	readTier int,
-	collectF func(k, v []byte),
+	opt kv.BatchGetOptions,
+	collectF func(k []byte, v kv.ValueEntry),
 	cb async.Callback[struct{}],
 ) {
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
@@ -97,7 +100,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			return res, err
 		})
 	}
-	req, err := s.buildBatchGetRequest(batch.keys, s.mu.busyThreshold.Milliseconds(), readTier)
+	req, err := s.buildBatchGetRequest(batch.keys, s.mu.busyThreshold.Milliseconds(), readTier, opt)
 	if err != nil {
 		s.mu.RUnlock()
 		cb.Invoke(struct{}{}, err)
@@ -153,7 +156,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 		if regionErr != nil {
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, regionErr, nil, collectF)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, regionErr, nil, opt, collectF)
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithRegionError.Inc()
@@ -169,7 +172,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 		if len(lockInfo.lockedKeys) > 0 {
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, nil, lockInfo, collectF)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, nil, lockInfo, opt, collectF)
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithLockError.Inc()
@@ -191,7 +194,8 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	readType string,
 	regionErr *errorpb.Error,
 	lockInfo *batchGetLockInfo,
-	collectF func(k, v []byte),
+	opt kv.BatchGetOptions,
+	collectF func(k []byte, v kv.ValueEntry),
 ) error {
 	var (
 		resolvingRecordToken  *int
@@ -204,7 +208,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 				return err
 			}
 			if !retriable {
-				return s.batchGetKeysByRegions(bo, batch.keys, readTier, false, collectF)
+				return s.batchGetKeysByRegions(bo, batch.keys, readTier, false, opt, collectF)
 			}
 		} else if lockInfo != nil && len(lockInfo.lockedKeys) > 0 {
 			if resolvingRecordToken == nil {
@@ -232,7 +236,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 			isStaleness = false
 			busyThresholdMs = 0
 		}
-		req, err := s.buildBatchGetRequest(batch.keys, busyThresholdMs, readTier)
+		req, err := s.buildBatchGetRequest(batch.keys, busyThresholdMs, readTier, opt)
 		if err != nil {
 			s.mu.RUnlock()
 			return err

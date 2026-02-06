@@ -193,6 +193,11 @@ var (
 	AsyncBatchGetCounterWithRegionError prometheus.Counter
 	AsyncBatchGetCounterWithLockError   prometheus.Counter
 	AsyncBatchGetCounterWithOtherError  prometheus.Counter
+
+	LagCommitTSWaitHistogramWithOK       prometheus.Observer
+	LagCommitTSWaitHistogramWithError    prometheus.Observer
+	LagCommitTSAttemptHistogramWithOK    prometheus.Observer
+	LagCommitTSAttemptHistogramWithError prometheus.Observer
 )
 
 func initShortcuts() {
@@ -355,4 +360,9 @@ func initShortcuts() {
 	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
 	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
 	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
+
+	LagCommitTSWaitHistogramWithOK = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("ok")
+	LagCommitTSWaitHistogramWithError = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("err")
+	LagCommitTSAttemptHistogramWithOK = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("ok")
+	LagCommitTSAttemptHistogramWithError = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("err")
 }

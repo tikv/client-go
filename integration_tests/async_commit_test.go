@@ -125,7 +125,7 @@ func (s *testAsyncCommitCommon) putKV(key, value []byte, enableAsyncCommit bool)
 func (s *testAsyncCommitCommon) mustGetFromTxn(txn transaction.TxnProbe, key, expectedValue []byte) {
 	v, err := txn.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(v, expectedValue)
+	s.Equal(v.Value, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetLock(key []byte) *txnkv.Lock {
@@ -152,14 +152,14 @@ func (s *testAsyncCommitCommon) mustPointGet(key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(math.MaxUint64)
 	value, err := snap.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(value, expectedValue)
+	s.Equal(value.Value, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetFromSnapshot(version uint64, key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(version)
 	value, err := snap.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(value, expectedValue)
+	s.Equal(value.Value, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetNoneFromSnapshot(version uint64, key []byte) {
@@ -520,7 +520,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 		defer cancel()
 		val, err := t2.Get(ctx, keys[idx])
 		s.Nil(err)
-		s.Equal(val, values[idx])
+		s.Equal(val.Value, values[idx])
 	}
 
 	// Case 1: Fallback primary, read primary
