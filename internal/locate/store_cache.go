@@ -473,14 +473,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 			}
 			continue
 		}
-<<<<<<< HEAD
 		return s.initByStoreMeta(store)
-=======
-		if err := s.initByStoreMeta(store); err != nil {
-			return "", err
-		}
-		return s.GetAddr(), nil
->>>>>>> beba787e (fix inconsistent store pointers between the region-cache and store-cache (#1826))
 	}
 }
 
