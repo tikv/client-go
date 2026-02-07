@@ -82,6 +82,11 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		return
 	}
 
+	if err := encodeRequestCmd(batchReq); err != nil {
+		cb.Invoke(nil, err)
+		return
+	}
+
 	var (
 		entry = &batchCommandsEntry{
 			ctx:           ctx,
