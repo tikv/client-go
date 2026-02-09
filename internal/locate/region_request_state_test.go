@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -257,20 +256,6 @@ func TestRegionCacheStaleRead(t *testing.T) {
 	defer func() {
 		retry.BoTiKVServerBusy = originBoTiKVServerBusy
 	}()
-	testRegionCacheStaleRead(t)
-}
-
-func TestRegionCacheStaleReadUsingAsyncAPI(t *testing.T) {
-	originBoTiKVServerBusy := retry.BoTiKVServerBusy
-	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
-	defer func() {
-		retry.BoTiKVServerBusy = originBoTiKVServerBusy
-		failpoint.Disable("tikvclient/useSendReqAsync")
-	}()
-	testRegionCacheStaleRead(t)
-}
-
-func testRegionCacheStaleRead(t *testing.T) {
 	retry.BoTiKVServerBusy = retry.NewConfig("tikvServerBusy", &metrics.BackoffHistogramServerBusy, retry.NewBackoffFnCfg(2, 10, retry.EqualJitter), tikverr.ErrTiKVServerBusy)
 	regionCacheTestCases := []RegionCacheTestCase{
 		{

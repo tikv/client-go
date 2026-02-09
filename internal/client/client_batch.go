@@ -58,7 +58,6 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -69,7 +68,6 @@ type batchCommandsEntry struct {
 	ctx context.Context
 	req *tikvpb.BatchCommandsRequest_Request
 	res chan *tikvpb.BatchCommandsResponse_Response
-	cb  async.Callback[*tikvrpc.Response]
 	// forwardedHost is the address of a store which will handle the request.
 	// It's different from the address the request sent to.
 	forwardedHost string
@@ -92,25 +90,9 @@ func (b *batchCommandsEntry) priority() uint64 {
 	return b.pri
 }
 
-func (b *batchCommandsEntry) async() bool {
-	return b.cb != nil
-}
-
-func (b *batchCommandsEntry) response(resp *tikvpb.BatchCommandsResponse_Response) {
-	if b.async() {
-		b.cb.Schedule(tikvrpc.FromBatchCommandsResponse(resp))
-	} else {
-		b.res <- resp
-	}
-}
-
 func (b *batchCommandsEntry) error(err error) {
 	b.err = err
-	if b.async() {
-		b.cb.Schedule(nil, err)
-	} else {
-		close(b.res)
-	}
+	close(b.res)
 }
 
 // batchCommandsBuilder collects a batch of `batchCommandsEntry`s to build
@@ -849,19 +831,6 @@ func (c *batchCommandsClient) failPendingRequests(err error, forwardedHost strin
 	})
 }
 
-// failAsyncRequestsOnClose fails all async requests when the client is closed.
-func (c *batchCommandsClient) failAsyncRequestsOnClose() {
-	err := errors.New("batch client closed")
-	c.batched.Range(func(key, value interface{}) bool {
-		id, _ := key.(uint64)
-		entry, _ := value.(*batchCommandsEntry)
-		if entry.async() {
-			c.failRequest(err, id, entry)
-		}
-		return true
-	})
-}
-
 // failRequestsByIDs fails requests by requestID.
 func (c *batchCommandsClient) failRequestsByIDs(err error, requestIDs []uint64) {
 	for _, requestID := range requestIDs {
@@ -941,8 +910,6 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
 			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, connMetrics, streamClient)
-		} else {
-			c.failAsyncRequestsOnClose()
 		}
 	}()
 
@@ -1000,7 +967,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			logutil.Eventf(entry.ctx, "receive %T response with other %d batched requests from %s", responses[i].GetCmd(), len(responses), c.target)
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
-				entry.response(responses[i])
+				entry.res <- responses[i]
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)

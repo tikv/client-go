@@ -303,23 +303,10 @@ func (dec *skipDecoder) Decode(iter *Iterator) (bool, error) {
 // Get implements the MVCCStore interface.
 // key cannot be nil or []byte{}
 func (mvcc *MVCCLevelDB) Get(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
-	pair := mvcc.GetKVPair(key, startTS, isoLevel, resolvedLocks)
-	return pair.Value, pair.Err
-}
-
-func (mvcc *MVCCLevelDB) GetKVPair(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (p Pair) {
 	mvcc.mu.RLock()
 	defer mvcc.mu.RUnlock()
-	val, err := mvcc.getValue(key, startTS, isoLevel, resolvedLocks)
-	if err != nil {
-		p.Err = err
-		return
-	}
 
-	p.Key = key
-	p.Value = val.value
-	p.CommitTS = val.commitTS
-	return p
+	return mvcc.getValue(key, startTS, isoLevel, resolvedLocks)
 }
 
 func (mvcc *MVCCLevelDB) getDB(cf string) *leveldb.DB {
@@ -343,7 +330,7 @@ func (mvcc *MVCCLevelDB) createDB(cf string) (*leveldb.DB, error) {
 	return d, nil
 }
 
-func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (mvccValue, error) {
+func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
 	startKey := mvccEncode(key, lockVer)
 	iter := newIterator(mvcc.getDB(""), &util.Range{
 		Start: startKey,
@@ -353,38 +340,38 @@ func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.I
 	return getValue(iter, key, startTS, isoLevel, resolvedLocks)
 }
 
-func getValue(iter *Iterator, key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (mvccValue, error) {
+func getValue(iter *Iterator, key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
 	dec1 := lockDecoder{expectKey: key}
 	ok, err := dec1.Decode(iter)
 	if ok && isoLevel == kvrpcpb.IsolationLevel_SI {
 		startTS, err = dec1.lock.check(startTS, key, resolvedLocks)
 	}
 	if err != nil {
-		return mvccValue{}, err
+		return nil, err
 	}
 	dec2 := valueDecoder{expectKey: key}
 	for iter.Valid() {
 		ok, err := dec2.Decode(iter)
 		if err != nil {
-			return mvccValue{}, err
+			return nil, err
 		}
 		if !ok {
 			break
 		}
 
-		value := dec2.value
+		value := &dec2.value
 		if value.valueType == typeRollback || value.valueType == typeLock {
 			continue
 		}
 		// Read the first committed value that can be seen at startTS.
 		if value.commitTS <= startTS {
 			if value.valueType == typeDelete {
-				return mvccValue{}, nil
+				return nil, nil
 			}
-			return value, nil
+			return value.value, nil
 		}
 	}
-	return mvccValue{}, nil
+	return nil, nil
 }
 
 // BatchGet implements the MVCCStore interface.
@@ -395,14 +382,13 @@ func (mvcc *MVCCLevelDB) BatchGet(ks [][]byte, startTS uint64, isoLevel kvrpcpb.
 	pairs := make([]Pair, 0, len(ks))
 	for _, k := range ks {
 		v, err := mvcc.getValue(k, startTS, isoLevel, resolvedLocks)
-		if v.value == nil && err == nil {
+		if v == nil && err == nil {
 			continue
 		}
 		pairs = append(pairs, Pair{
-			Key:      k,
-			Value:    v.value,
-			CommitTS: v.commitTS,
-			Err:      err,
+			Key:   k,
+			Value: v,
+			Err:   err,
 		})
 	}
 	return pairs
@@ -430,10 +416,10 @@ func (mvcc *MVCCLevelDB) Scan(startKey, endKey []byte, limit int, startTS uint64
 				Err: err,
 			})
 		}
-		if value.value != nil {
+		if value != nil {
 			pairs = append(pairs, Pair{
 				Key:   currKey,
-				Value: value.value,
+				Value: value,
 			})
 		}
 
@@ -845,7 +831,7 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 				anyError = true
 				continue
 			}
-			if v.value != nil {
+			if v != nil {
 				err = &ErrKeyAlreadyExist{
 					Key: m.Key,
 				}

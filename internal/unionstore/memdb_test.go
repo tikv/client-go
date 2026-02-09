@@ -71,7 +71,7 @@ func testGetSet(t *testing.T, db MemBuffer) {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
 		v, err := db.Get(context.Background(), buf[:])
 		require.Nil(err)
-		require.Equal(v, kv.NewValueEntry(buf[:], 0))
+		require.Equal(v, buf[:])
 	}
 }
 
@@ -148,7 +148,7 @@ func testDiscard(t *testing.T, db MemBuffer) {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
 		v, err := db.Get(context.Background(), buf[:])
 		assert.Nil(err)
-		assert.Equal(v.Value, buf[:])
+		assert.Equal(v, buf[:])
 	}
 
 	var i int
@@ -203,7 +203,7 @@ func testFlushOverwrite(t *testing.T, db MemBuffer) {
 		binary.BigEndian.PutUint32(vbuf[:], uint32(i+1))
 		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
-		assert.Equal(v.Value, vbuf[:])
+		assert.Equal(v, vbuf[:])
 	}
 
 	var i int
@@ -256,7 +256,7 @@ func testComplexUpdate(t *testing.T, db MemBuffer) {
 		}
 		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
-		assert.Equal(v.Value, vbuf[:])
+		assert.Equal(v, vbuf[:])
 	}
 }
 
@@ -289,7 +289,7 @@ func testNestedSandbox(t *testing.T, db MemBuffer) {
 		}
 		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
-		assert.Equal(v.Value, vbuf[:])
+		assert.Equal(v, vbuf[:])
 	}
 
 	var i int
@@ -345,7 +345,7 @@ func testOverwrite(t *testing.T, db MemBuffer) {
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
 		val, _ := db.Get(context.Background(), buf[:])
-		v := binary.BigEndian.Uint32(val.Value)
+		v := binary.BigEndian.Uint32(val)
 		if i%3 == 0 {
 			assert.Equal(v, uint32(i*10))
 		} else {
@@ -585,7 +585,7 @@ func checkConsist(t *testing.T, p1 MemBuffer, p2 *leveldb.DB) {
 	for it2.First(); it2.Valid(); it2.Next() {
 		v, err := p1.Get(context.Background(), it2.Key())
 		assert.Nil(err)
-		assert.Equal(v.Value, it2.Value())
+		assert.Equal(v, it2.Value())
 
 		assert.Equal(it1.Key(), it2.Key())
 		assert.Equal(it1.Value(), it2.Value())
@@ -709,7 +709,7 @@ func mustGet(t *testing.T, buffer MemBuffer) {
 		s := encodeInt(i * indexStep)
 		val, err := buffer.Get(context.Background(), s)
 		assert.Nil(t, err)
-		assert.Equal(t, string(val.Value), string(s))
+		assert.Equal(t, string(val), string(s))
 	}
 }
 
@@ -843,17 +843,17 @@ func testMemDBStaging(t *testing.T, buffer MemBuffer) {
 	assert.Nil(err)
 
 	v, _ := buffer.Get(context.Background(), []byte("x"))
-	assert.Equal(len(v.Value), 3)
+	assert.Equal(len(v), 3)
 
 	buffer.Release(h2)
 
 	v, _ = buffer.Get(context.Background(), []byte("yz"))
-	assert.Equal(len(v.Value), 1)
+	assert.Equal(len(v), 1)
 
 	buffer.Cleanup(h1)
 
 	v, _ = buffer.Get(context.Background(), []byte("x"))
-	assert.Equal(len(v.Value), 2)
+	assert.Equal(len(v), 2)
 }
 
 func TestMemDBMultiLevelStaging(t *testing.T) {
@@ -870,7 +870,7 @@ func testMemDBMultiLevelStaging(t *testing.T, buffer MemBuffer) {
 		buffer.Set(key, []byte{byte(i)})
 		v, err := buffer.Get(context.Background(), key)
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{byte(i)})
+		assert.Equal(v, []byte{byte(i)})
 	}
 
 	for i := 99; i >= 0; i-- {
@@ -883,7 +883,7 @@ func testMemDBMultiLevelStaging(t *testing.T, buffer MemBuffer) {
 		}
 		v, err := buffer.Get(context.Background(), key)
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{byte(expect)})
+		assert.Equal(v, []byte{byte(expect)})
 	}
 }
 
@@ -951,12 +951,12 @@ func testMemDBCheckpoint(t *testing.T, buffer MemBuffer) {
 
 	for _, k := range []string{"x", "y", "z"} {
 		v, _ := buffer.Get(context.Background(), []byte(k))
-		assert.Equal(v.Value, []byte(k))
+		assert.Equal(v, []byte(k))
 	}
 
 	buffer.RevertToCheckpoint(cp2)
 	v, _ := buffer.Get(context.Background(), []byte("x"))
-	assert.Equal(v.Value, []byte("x"))
+	assert.Equal(v, []byte("x"))
 	for _, k := range []string{"y", "z"} {
 		_, err := buffer.Get(context.Background(), []byte(k))
 		assert.NotNil(err)
@@ -1014,7 +1014,7 @@ func TestSnapshotGetIter(t *testing.T) {
 
 func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
-	var getters []kv.Getter
+	var getters []Getter
 	var iters []Iterator
 	var reverseIters []Iterator
 	for i := 0; i < 100; i++ {
@@ -1025,7 +1025,7 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 		getter := db.SnapshotGetter()
 		val, err := getter.Get(context.Background(), []byte{byte(0)})
 		assert.Nil(err)
-		assert.Equal(val.Value, []byte{byte(min(i, 50))})
+		assert.Equal(val, []byte{byte(min(i, 50))})
 		getters = append(getters, getter)
 
 		// iter
@@ -1050,7 +1050,7 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 	for _, getter := range getters {
 		val, err := getter.Get(context.Background(), []byte{byte(0)})
 		assert.Nil(err)
-		assert.Equal(val.Value, []byte{byte(50)})
+		assert.Equal(val, []byte{byte(50)})
 	}
 	for _, iter := range iters {
 		assert.Equal(iter.Key(), []byte{byte(0)})
@@ -1078,7 +1078,7 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 	snapGetter := db.SnapshotGetter()
 	v, err := snapGetter.Get(context.Background(), []byte{byte(2)})
 	assert.Nil(err)
-	assert.Equal(v.Value, []byte{byte(2)})
+	assert.Equal(v, []byte{byte(2)})
 	_, err = snapGetter.Get(context.Background(), []byte{byte(1)})
 	assert.NotNil(err)
 	_, err = snapGetter.Get(context.Background(), []byte{byte(254)})
@@ -1203,22 +1203,22 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 	cacheCheck(true, func() {
 		v, err := buffer.Get(context.Background(), []byte{2})
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{2})
+		assert.Equal(v, []byte{2})
 	})
 	cacheCheck(false, func() {
 		v, err := buffer.Get(context.Background(), []byte{1})
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{1})
+		assert.Equal(v, []byte{1})
 	})
 	cacheCheck(true, func() {
 		v, err := buffer.Get(context.Background(), []byte{1})
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{1})
+		assert.Equal(v, []byte{1})
 	})
 	cacheCheck(false, func() {
 		v, err := buffer.Get(context.Background(), []byte{2})
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{2})
+		assert.Equal(v, []byte{2})
 	})
 	cacheCheck(true, func() {
 		assert.Nil(buffer.Set([]byte{2}, []byte{2, 2}))
@@ -1226,7 +1226,7 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 	cacheCheck(true, func() {
 		v, err := buffer.Get(context.Background(), []byte{2})
 		assert.Nil(err)
-		assert.Equal(v.Value, []byte{2, 2})
+		assert.Equal(v, []byte{2, 2})
 	})
 }
 

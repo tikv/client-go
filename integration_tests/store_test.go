@@ -190,5 +190,5 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("busy")->return("")`))
 	val, err := txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
-	s.Equal(val.Value, []byte("value"))
+	s.Equal(val, []byte("value"))
 }

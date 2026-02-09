@@ -141,7 +141,7 @@ func (s *testOnePCSuite) Test1PC() {
 	for i, k := range keys {
 		v, err := snap.Get(context.Background(), k)
 		s.Nil(err)
-		s.Equal(v.Value, values[i])
+		s.Equal(v, values[i])
 	}
 }
 
@@ -221,7 +221,7 @@ func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 	for i, k := range keys {
 		v, err := snap.Get(context.Background(), []byte(k))
 		s.Nil(err)
-		s.Equal(v.Value, []byte(values[i]))
+		s.Equal(v, []byte(values[i]))
 	}
 }
 

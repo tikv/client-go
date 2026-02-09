@@ -48,7 +48,7 @@ func TestInterceptor(t *testing.T) {
 	assert.NoError(t, err)
 	value, err := txn.Get(context.Background(), []byte("KEY-1"))
 	assert.NoError(t, err)
-	assert.Equal(t, []byte("VALUE-1"), value.Value)
+	assert.Equal(t, []byte("VALUE-1"), value)
 	assert.Equal(t, 1, manager.BeginCount())
 	assert.Equal(t, 1, manager.EndCount())
 	assert.Len(t, manager.ExecLog(), 1)

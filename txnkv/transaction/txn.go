@@ -61,7 +61,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
@@ -173,38 +172,23 @@ type KVTxn struct {
 
 	isPipelined     bool
 	pipelinedCancel context.CancelFunc
-
-	// Used when this transaction is a replication transaction from upstream cluster.
-	// LWW (last write wins policy) is used to resolve conflicts between upstream and downstream.
-	// The commit TS of this transaction (downstream) must be greater than original CommitTS (upstream).
-	// GetTimestampWithRetry may sleep and retry to guarantee this constraint.
-	commitWaitUntilTSO uint64
-	// commitWaitUntilTSOTimeout is the maximum clock drift allowed in active-active replication.
-	commitWaitUntilTSOTimeout time.Duration
-	// commitLagWaitInfo collects the wait stats when when waiting for the lagging PD TSO to reach `commitWaitUntilTSO`
-	commitLagWaitStats struct {
-		waitDuration   time.Duration
-		firstAttemptTS uint64
-		backoffCnt     int
-	}
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:                  snapshot,
-		store:                     store,
-		startTS:                   startTS,
-		startTime:                 time.Now(),
-		valid:                     true,
-		vars:                      tikv.DefaultVars,
-		scope:                     options.TxnScope,
-		enableAsyncCommit:         cfg.EnableAsyncCommit,
-		enable1PC:                 cfg.Enable1PC,
-		diskFullOpt:               kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:             snapshot.RequestSource,
-		commitWaitUntilTSOTimeout: time.Second,
+		snapshot:          snapshot,
+		store:             store,
+		startTS:           startTS,
+		startTime:         time.Now(),
+		valid:             true,
+		vars:              tikv.DefaultVars,
+		scope:             options.TxnScope,
+		enableAsyncCommit: cfg.EnableAsyncCommit,
+		enable1PC:         cfg.Enable1PC,
+		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:     snapshot.RequestSource,
 	}
 	if !options.PipelinedMemDB {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
@@ -236,13 +220,13 @@ func (txn *KVTxn) GetVars() *tikv.Variables {
 }
 
 // Get implements transaction interface.
-func (txn *KVTxn) Get(ctx context.Context, k []byte, options ...tikv.GetOption) (tikv.ValueEntry, error) {
-	ret, err := txn.us.Get(ctx, k, options...)
+func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
+	ret, err := txn.us.Get(ctx, k)
 	if tikverr.IsErrNotFound(err) {
-		return tikv.ValueEntry{}, err
+		return nil, err
 	}
 	if err != nil {
-		return tikv.ValueEntry{}, err
+		return nil, err
 	}
 
 	return ret, nil
@@ -251,8 +235,8 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte, options ...tikv.GetOption) 
 // BatchGet gets kv from the memory buffer of statement and transaction, and the kv storage.
 // Do not use len(value) == 0 or value == nil to represent non-exist.
 // If a key doesn't exist, there shouldn't be any corresponding entry in the result map.
-func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte, options ...tikv.BatchGetOption) (map[string]tikv.ValueEntry, error) {
-	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys, options...)
+func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys)
 }
 
 // Set sets the value for key k as v into kv store.
@@ -297,30 +281,6 @@ func (txn *KVTxn) SetSchemaLeaseChecker(checker SchemaLeaseChecker) {
 // EnableForceSyncLog indicates tikv to always sync log for the transaction.
 func (txn *KVTxn) EnableForceSyncLog() {
 	txn.syncLog = true
-}
-
-// SetcommitWaitUntilTSO sets the minimum commit timestamp constraint for the transaction.
-func (txn *KVTxn) SetCommitWaitUntilTSO(commitWaitUntilTSO uint64) {
-	if commitWaitUntilTSO > txn.commitWaitUntilTSO {
-		txn.commitWaitUntilTSO = commitWaitUntilTSO
-	}
-}
-
-// GetCommitWaitUntilTSO returns the value set by `SetCommitWaitUntilTSO`.
-// If it returns zero, it means no wait
-func (txn *KVTxn) GetCommitWaitUntilTSO() uint64 {
-	return txn.commitWaitUntilTSO
-}
-
-// SetCommitWaitUntilTSOTimeout sets the maximum clock drift allowed in active-active replication.
-func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
-	txn.commitWaitUntilTSOTimeout = val
-}
-
-// GetCommitWaitUntilTSOTimeout returns the timeout to wait for the commit tso reach the expected value.
-// If it returns zero, it means it is not set and the default timeout should be used
-func (txn *KVTxn) GetCommitWaitUntilTSOTimeout() time.Duration {
-	return txn.commitWaitUntilTSOTimeout
 }
 
 // SetPessimistic indicates if the transaction should use pessimictic lock.
@@ -550,8 +510,8 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	// generation is increased when the memdb is flushed to kv store.
 	// note the first generation is 1, which can mark pipelined dml's lock.
 	flushedKeys, flushedSize := 0, 0
-	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string]tikv.ValueEntry, error) {
-		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier, tikv.BatchGetOptions{})
+	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
@@ -1857,117 +1817,6 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 // MemHookSet returns whether the mem buffer has a memory footprint change hook set.
 func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
-}
-
-type ctxInGetTimestampForCommitKeyType struct{}
-
-var CtxInGetTimestampForCommitKey = ctxInGetTimestampForCommitKeyType{}
-
-// GetTimestampForCommit returns the timestamp for commit.
-// Unlike a direct wrap, it also checks commitWaitUntilTSO constraint from the SetcommitWaitUntilTSO option.
-func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (_ uint64, err error) {
-	if val, fpErr := util.EvalFailpoint("InjectStartTSForCommit"); fpErr == nil {
-		if val.(bool) {
-			ctx := bo.GetCtx()
-			bo.SetCtx(context.WithValue(ctx, CtxInGetTimestampForCommitKey, txn.StartTS()))
-			defer bo.SetCtx(ctx)
-		}
-	}
-	firstAttemptTS, err := txn.store.GetTimestampWithRetry(bo, scope)
-	if err != nil {
-		return firstAttemptTS, err
-	}
-
-	if firstAttemptTS > txn.commitWaitUntilTSO {
-		return firstAttemptTS, nil
-	}
-
-	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
-	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
-	// If the TSO drift is larger than the maxSleep, return error directly.
-	start := time.Now()
-	attempts := 1
-	defer func() {
-		// If the first attempt got a valid TSO, it is not the lag case,
-		// so only to record the metrics when firstAttempt lags.
-		duration := time.Since(start)
-		txn.commitLagWaitStats.waitDuration = duration
-		txn.commitLagWaitStats.firstAttemptTS = firstAttemptTS
-		txn.commitLagWaitStats.backoffCnt = attempts - 1
-		if err != nil {
-			metrics.LagCommitTSAttemptHistogramWithError.Observe(float64(attempts))
-			metrics.LagCommitTSWaitHistogramWithError.Observe(duration.Seconds())
-		} else {
-			metrics.LagCommitTSAttemptHistogramWithOK.Observe(float64(attempts))
-			metrics.LagCommitTSWaitHistogramWithOK.Observe(duration.Seconds())
-		}
-	}()
-
-	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
-	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
-	// If the TSO drift is larger than the maxSleep, return error directly.
-	maxSleep := time.Second
-	if txn.commitWaitUntilTSOTimeout > 0 {
-		maxSleep = txn.commitWaitUntilTSOTimeout
-	}
-	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(firstAttemptTS))
-	if interval > maxSleep {
-		return 0, errors.Wrapf(
-			tikverr.ErrCommitTSLag,
-			"PD TSO '%d' lags the expected timestamp '%d', clock drift %v exceeds maximum allowed timeout %v",
-			firstAttemptTS, txn.commitWaitUntilTSO,
-			interval,
-			maxSleep,
-		)
-	}
-
-	lastAttemptTS := firstAttemptTS
-	bo = retry.NewBackoffer(bo.GetCtx(), int(maxSleep.Milliseconds()))
-	mockErr := errors.Errorf("clock drift from the upstream cluster")
-	for ts := firstAttemptTS; ts <= txn.commitWaitUntilTSO; {
-		// It's neither sleeping interval milliseconds (maybe sleep too long without handling any context.Cancel)
-		// nor sleep every 1ms until we reach the lag interval (maybe we just lag for 1ms, and but PD update the physical time every 50ms,
-		// so after sleeping 1ms, the next GetTimestamp still return the same physical part value)
-		// Just backoff, blindly.
-		err = bo.Backoff(retry.BoCommitTSLag, mockErr)
-		if err != nil {
-			break
-		}
-
-		attempts++
-		ts, err = txn.store.GetTimestampWithRetry(bo, scope)
-		if err != nil {
-			break
-		}
-		lastAttemptTS = ts
-	}
-
-	if err != nil {
-		if tikverr.IsErrorCommitTSLag(err) {
-			err = errors.Wrapf(
-				err,
-				"PD TSO '%d' lags the expected timestamp '%d', retry timeout: %v, attempts: %d, last attempted commit TS: %d",
-				firstAttemptTS,
-				txn.commitWaitUntilTSO,
-				maxSleep,
-				attempts,
-				lastAttemptTS,
-			)
-		}
-		return 0, err
-	}
-
-	return lastAttemptTS, err
-}
-
-func (txn *KVTxn) fillCommitTSLagDetails(details *util.CommitTSLagDetails) {
-	// only fill when `firstAttemptTS > 0` which indicates there is actually a lag
-	if stats := txn.commitLagWaitStats; stats.firstAttemptTS > 0 {
-		details.WaitTime = stats.waitDuration
-		details.FirstLagTS = stats.firstAttemptTS
-		details.BackoffCnt = stats.backoffCnt
-		details.WaitUntilTS = txn.commitWaitUntilTSO
-	}
 }
 
 // LifecycleHooks is a struct that contains hooks for a background goroutine.

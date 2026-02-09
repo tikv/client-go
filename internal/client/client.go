@@ -63,7 +63,6 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -104,8 +103,6 @@ type Client interface {
 	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
-	// SendRequestAsync sends a request to the target address asynchronously.
-	SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response])
 	// SetEventListener registers an event listener for the Client instance. If it's called more than once, the
 	// previously set one will be replaced.
 	SetEventListener(listener ClientEventListener)

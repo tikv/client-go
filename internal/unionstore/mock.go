@@ -38,39 +38,24 @@ import (
 	"context"
 
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
 )
 
 type mockSnapshot struct {
 	store *MemDB
 }
 
-func (s *mockSnapshot) Get(ctx context.Context, k []byte, options ...kv.GetOption) (kv.ValueEntry, error) {
-	entry, err := s.store.Get(ctx, k, options...)
-	if err != nil {
-		return kv.ValueEntry{}, err
-	}
-
-	var getOpts kv.GetOptions
-	getOpts.Apply(options)
-	if getOpts.ReturnCommitTS() {
-		entry.CommitTS = 1
-		if len(k) > 0 {
-			entry.CommitTS = 1000 + uint64(k[0])
-		}
-	}
-
-	return entry, nil
+func (s *mockSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
+	return s.store.Get(ctx, k)
 }
 
 func (s *mockSnapshot) SetPriority(priority int) {
 
 }
 
-func (s *mockSnapshot) BatchGet(ctx context.Context, keys [][]byte, options ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
-	m := make(map[string]kv.ValueEntry, len(keys))
+func (s *mockSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m := make(map[string][]byte, len(keys))
 	for _, k := range keys {
-		v, err := s.Get(ctx, k, kv.BatchGetToGetOptions(options)...)
+		v, err := s.store.Get(ctx, k)
 		if tikverr.IsErrNotFound(err) {
 			continue
 		}

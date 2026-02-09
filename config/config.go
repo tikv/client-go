@@ -82,8 +82,6 @@ type Config struct {
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.
 	EnablePreload bool
-	// EnableAsyncBatchGet indicates whether to use async api for batch get.
-	EnableAsyncBatchGet bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -101,7 +99,6 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
-		EnableAsyncBatchGet:   false,
 	}
 }
 

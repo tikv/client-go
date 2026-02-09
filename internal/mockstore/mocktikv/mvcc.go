@@ -265,7 +265,6 @@ func (e *mvccEntry) Get(ts uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLock
 // MVCCStore is a mvcc key-value storage.
 type MVCCStore interface {
 	Get(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error)
-	GetKVPair(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) Pair
 	Scan(startKey, endKey []byte, limit int, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) []Pair
 	ReverseScan(startKey, endKey []byte, limit int, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) []Pair
 	BatchGet(ks [][]byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) []Pair
@@ -308,10 +307,9 @@ type MVCCDebugger interface {
 
 // Pair is a KV pair read from MvccStore or an error if any occurs.
 type Pair struct {
-	Key      []byte
-	Value    []byte
-	CommitTS uint64
-	Err      error
+	Key   []byte
+	Value []byte
+	Err   error
 }
 
 func regionContains(startKey []byte, endKey []byte, key []byte) bool {
