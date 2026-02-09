@@ -97,7 +97,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	t2 := s.beginAsyncCommit()
 	res, err := t2.Get(context.Background(), []byte("a"))
 	s.Nil(err)
-	s.True(bytes.Equal(res.Value, []byte("a1")))
+	s.True(bytes.Equal(res, []byte("a1")))
 }
 
 func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {

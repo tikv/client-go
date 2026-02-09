@@ -29,7 +29,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -117,7 +116,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 		// txn can always read its own writes
 		val, err := txn.Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(value, val.Value))
+		s.True(bytes.Equal(value, val))
 		// txn1 cannot see it
 		_, err = txn1.Get(ctx, key)
 		s.True(tikverr.IsErrNotFound(err))
@@ -134,7 +133,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 		expect := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
 		val, err := txn1.Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(expect, val.Value))
+		s.True(bytes.Equal(expect, val))
 	}
 }
 
@@ -155,7 +154,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 		expect := key
 		val, err := txn.GetMemBuffer().Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(val.Value, expect))
+		s.True(bytes.Equal(val, expect))
 	}
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	s.Nil(txn.Rollback())
@@ -212,7 +211,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
 	defer txn.Rollback()
 	val, err := txn.Get(context.Background(), []byte("key1"))
 	s.Nil(err)
-	s.Equal([]byte("value1"), val.Value)
+	s.Equal([]byte("value1"), val)
 }
 
 func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
@@ -286,7 +285,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		key := []byte(strconv.Itoa(i))
 		val, err := txn.Get(context.Background(), key)
 		s.Nil(err)
-		s.Equal(key, val.Value)
+		s.Equal(key, val)
 	}
 }
 
@@ -308,7 +307,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 		txn, err := s.store.Begin(tikv.WithStartTS(startTS), tikv.WithPipelinedMemDB())
 		s.Nil(err)
 		defer func() { s.Nil(txn.Rollback()) }()
-		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier, kv.BatchGetOptions{})
+		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier)
 		s.Nil(err)
 		return len(storageBufferedValues) == 0
 	}, 10*time.Second, 10*time.Millisecond, "rollback should cleanup locks in time")
@@ -332,7 +331,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 		s.True(flushed)
 	}
 
-	panicWhenReadingRemoteBuffer := func(key []byte) (kv.ValueEntry, error) {
+	panicWhenReadingRemoteBuffer := func(key []byte) ([]byte, error) {
 		ctx := context.WithValue(context.Background(), "sendReqToRegionHook", func(req *tikvrpc.Request) {
 			if req.Type == tikvrpc.CmdBufferBatchGet {
 				panic("should not read remote buffer")
@@ -360,14 +359,14 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	for _, key := range prefetchKeys {
 		m, err := txn.BatchGet(context.Background(), [][]byte{key})
 		s.Nil(err)
-		result := map[string]kv.ValueEntry{string(key): kv.NewValueEntry(prefetchResult[string(key)], 0)}
+		result := map[string][]byte{string(key): prefetchResult[string(key)]}
 		s.Equal(m, result)
 	}
 	// can read prefetched keys from prefetch cache
 	for _, key := range prefetchKeys {
 		v, err := txn.GetMemBuffer().Get(context.Background(), key)
 		s.Nil(err)
-		s.Equal(v.Value, prefetchResult[string(key)])
+		s.Equal(v, prefetchResult[string(key)])
 	}
 	// panics when reading non-prefetched keys from prefetch cache
 	for _, key := range nonPrefetchKeys {
@@ -390,31 +389,31 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	txn.Set([]byte("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
 	m, err := txn.BatchGet(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
 	s.Nil(err)
-	s.Equal(m, map[string]kv.ValueEntry{"99": kv.NewValueEntry([]byte("99"), 0), "100": kv.NewValueEntry([]byte("100"), 0)})
+	s.Equal(m, map[string][]byte{"99": []byte("99"), "100": []byte("100")})
 	cache := txn.GetSnapshot().SnapCache()
 	// batch get cache: [99 -> not exist, 100 -> 100, 101 -> not exist]
 	// snapshot cache: [99 -> 99, 101 -> not exist]
 	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
-	s.Equal(cache["99"].Value, []byte("99"))
+	s.Equal(cache["99"], []byte("99"))
 	v, err := panicWhenReadingRemoteBuffer([]byte("100"))
 	s.Nil(err)
-	s.Equal(v.Value, []byte("100"))
+	s.Equal(v, []byte("100"))
 	_, err = panicWhenReadingRemoteBuffer([]byte("101"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
-	s.Equal(cache["101"].Value, []byte(nil))
+	s.Equal(cache["101"], []byte(nil))
 
 	txn.Delete([]byte("99"))
 	mustFlush(txn)
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
 	s.Nil(err)
-	s.Equal(m, map[string]kv.ValueEntry{})
+	s.Equal(m, map[string][]byte{})
 	v, err = panicWhenReadingRemoteBuffer([]byte("99"))
 	s.Nil(err)
-	s.Equal(v.Value, []byte{})
+	s.Equal(v, []byte{})
 	txn.Rollback()
 
 	// empty memdb should also cache the not exist result.
@@ -422,7 +421,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	// batch get cache: [99 -> not exist]
 	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
 	s.Nil(err)
-	s.Equal(m, map[string]kv.ValueEntry{"99": kv.NewValueEntry([]byte("99"), 0)})
+	s.Equal(m, map[string][]byte{"99": []byte("99")})
 	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))

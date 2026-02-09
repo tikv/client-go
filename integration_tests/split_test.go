@@ -39,7 +39,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -47,7 +46,6 @@ import (
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -108,72 +106,6 @@ func (s *testSplitSuite) TestSplitBatchGet() {
 	// mocktikv will panic if it meets a not-in-region key.
 	err = txn.BatchGetSingleRegion(s.bo, region, keys, func([]byte, []byte) {})
 	s.Nil(err)
-}
-
-func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
-	defer config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableAsyncBatchGet = true
-	})()
-
-	// init data
-	txn := s.begin()
-	s.Nil(txn.Set([]byte("a"), []byte("a")))
-	s.Nil(txn.Set([]byte("c"), []byte("c")))
-	s.Nil(txn.Commit(context.TODO()))
-
-	// split by 'b' and invalidate the region so that BatchGet('a', 'b', 'c') has to handle 2 batches.
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
-	s.Nil(err)
-	s.True(loc.Contains([]byte("a")))
-	s.True(loc.Contains([]byte("c")))
-	s.split(loc.Region.GetID(), []byte("b"))
-	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
-
-	txn = s.begin()
-	m, err := txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
-	s.Nil(err)
-	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
-
-	// split by 'c' without invalidating the old region, then BatchGet('a', 'b', 'c') will meet region error when handling batch{keys: ['b', 'c']}.
-	loc, err = s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
-	s.Nil(err)
-	s.False(loc.Contains([]byte("a")))
-	s.True(loc.Contains([]byte("b")))
-	s.True(loc.Contains([]byte("c")))
-	s.split(loc.Region.GetID(), []byte("c"))
-
-	txn = s.begin()
-	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
-	s.Nil(err)
-	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
-
-	// leave a lock on 'a' so that BatchGet('a', 'b', 'c') will meet lock error.
-	txnW := s.begin()
-	s.Nil(txnW.Set([]byte("a"), []byte("a")))
-	commiter, err := txnW.NewCommitter(1)
-	s.Nil(err)
-	s.Nil(commiter.PrewriteAllMutations(context.TODO()))
-
-	txn = s.begin()
-	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
-	s.Nil(err)
-	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
-
-	// inject an error on sending request.
-	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
-	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
-	txn = s.begin()
-	_, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
-	s.Error(err)
 }
 
 func (s *testSplitSuite) TestStaleEpoch() {

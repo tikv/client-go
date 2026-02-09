@@ -103,9 +103,8 @@ func (s *testIsolationSuite) SetWithRetry(k, v []byte) writeRecord {
 }
 
 type readRecord struct {
-	startTS  uint64
-	value    []byte
-	commitTS uint64
+	startTS uint64
+	value   []byte
 }
 
 type readRecords []readRecord
@@ -122,9 +121,8 @@ func (s *testIsolationSuite) GetWithRetry(k []byte) readRecord {
 		val, err := txn.Get(context.TODO(), k)
 		if err == nil {
 			return readRecord{
-				startTS:  txn.StartTS(),
-				value:    val.Value,
-				commitTS: val.CommitTS,
+				startTS: txn.StartTS(),
+				value:   val,
 			}
 		}
 		var e *kverr.ErrRetryable

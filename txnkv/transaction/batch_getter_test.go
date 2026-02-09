@@ -49,43 +49,33 @@ func TestBufferBatchGetter(t *testing.T) {
 	kb := []byte("b")
 	kc := []byte("c")
 	kd := []byte("d")
-	ke := []byte("e")
-	snap.Set(ka, kv.NewValueEntry(ka, 1))
-	snap.Set(kb, kv.NewValueEntry(kb, 2))
-	snap.Set(kc, kv.NewValueEntry(kc, 3))
-	snap.Set(kd, kv.NewValueEntry(kd, 4))
+	snap.Set(ka, ka)
+	snap.Set(kb, kb)
+	snap.Set(kc, kc)
+	snap.Set(kd, kd)
 
 	buffer := newMockStore()
-	buffer.Set(ka, kv.NewValueEntry([]byte("a1"), 11))
+	buffer.Set(ka, []byte("a1"))
 	buffer.Delete(kb)
 
-	// test batch get and with require commit ts
 	batchGetter := NewBufferBatchGetter(buffer, snap)
-	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd, ke}, kv.WithReturnCommitTS())
+	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd})
 	assert.NoError(t, err)
 	assert.Equal(t, 3, len(result))
-	assert.Equal(t, kv.NewValueEntry([]byte("a1"), 11), result[string(ka)])
-	assert.Equal(t, kv.NewValueEntry([]byte("c"), 3), result[string(kc)])
-	assert.Equal(t, kv.NewValueEntry([]byte("d"), 4), result[string(kd)])
-
-	// test batch get without require commit ts
-	result, err = batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd, ke})
-	assert.NoError(t, err)
-	assert.Equal(t, 3, len(result))
-	assert.Equal(t, kv.NewValueEntry([]byte("a1"), 0), result[string(ka)])
-	assert.Equal(t, kv.NewValueEntry([]byte("c"), 0), result[string(kc)])
-	assert.Equal(t, kv.NewValueEntry([]byte("d"), 0), result[string(kd)])
+	assert.Equal(t, "a1", string(result[string(ka)]))
+	assert.Equal(t, "c", string(result[string(kc)]))
+	assert.Equal(t, "d", string(result[string(kd)]))
 }
 
 type mockBatchGetterStore struct {
 	index [][]byte
-	value []kv.ValueEntry
+	value [][]byte
 }
 
 func newMockStore() *mockBatchGetterStore {
 	return &mockBatchGetterStore{
 		index: make([][]byte, 0),
-		value: make([]kv.ValueEntry, 0),
+		value: make([][]byte, 0),
 	}
 }
 
@@ -93,26 +83,19 @@ func (s *mockBatchGetterStore) Len() int {
 	return len(s.index)
 }
 
-func (s *mockBatchGetterStore) Get(_ context.Context, k []byte, options ...kv.GetOption) (kv.ValueEntry, error) {
-	var opt kv.GetOptions
-	opt.Apply(options)
-
+func (s *mockBatchGetterStore) Get(ctx context.Context, k []byte) ([]byte, error) {
 	for i, key := range s.index {
 		if kv.CmpKey(key, k) == 0 {
-			entry := s.value[i]
-			if !opt.ReturnCommitTS() {
-				entry.CommitTS = 0
-			}
-			return entry, nil
+			return s.value[i], nil
 		}
 	}
-	return kv.ValueEntry{}, tikverr.ErrNotExist
+	return nil, tikverr.ErrNotExist
 }
 
-func (s *mockBatchGetterStore) BatchGet(ctx context.Context, keys [][]byte, options ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
-	m := make(map[string]kv.ValueEntry)
+func (s *mockBatchGetterStore) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m := make(map[string][]byte)
 	for _, k := range keys {
-		v, err := s.Get(ctx, k, kv.BatchGetToGetOptions(options)...)
+		v, err := s.Get(ctx, k)
 		if err == nil {
 			m[string(k)] = v
 			continue
@@ -125,19 +108,19 @@ func (s *mockBatchGetterStore) BatchGet(ctx context.Context, keys [][]byte, opti
 	return m, nil
 }
 
-func (s *mockBatchGetterStore) Set(k []byte, entry kv.ValueEntry) error {
+func (s *mockBatchGetterStore) Set(k []byte, v []byte) error {
 	for i, key := range s.index {
 		if kv.CmpKey(key, k) == 0 {
-			s.value[i] = entry
+			s.value[i] = v
 			return nil
 		}
 	}
 	s.index = append(s.index, k)
-	s.value = append(s.value, entry)
+	s.value = append(s.value, v)
 	return nil
 }
 
 func (s *mockBatchGetterStore) Delete(k []byte) error {
-	s.Set(k, kv.ValueEntry{})
+	s.Set(k, []byte{})
 	return nil
 }

@@ -51,11 +51,18 @@ type Iterator interface {
 	Close()
 }
 
+// Getter is the interface for the Get method.
+type Getter interface {
+	// Get gets the value for key k from kv store.
+	// If corresponding kv pair does not exist, it returns nil and ErrNotExist.
+	Get(ctx context.Context, k []byte) ([]byte, error)
+}
+
 // uSnapshot defines the interface for the snapshot fetched from KV store.
 type uSnapshot interface {
 	// Get gets the value for key k from kv store.
 	// If corresponding kv pair does not exist, it returns nil and ErrNotExist.
-	Get(ctx context.Context, k []byte, options ...kv.GetOption) (kv.ValueEntry, error)
+	Get(ctx context.Context, k []byte) ([]byte, error)
 	// Iter creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
@@ -90,16 +97,16 @@ func (us *KVUnionStore) GetMemBuffer() MemBuffer {
 }
 
 // Get implements the Retriever interface.
-func (us *KVUnionStore) Get(ctx context.Context, k []byte, options ...kv.GetOption) (kv.ValueEntry, error) {
-	v, err := us.memBuffer.Get(ctx, k, options...)
+func (us *KVUnionStore) Get(ctx context.Context, k []byte) ([]byte, error) {
+	v, err := us.memBuffer.Get(ctx, k)
 	if tikverr.IsErrNotFound(err) {
-		v, err = us.snapshot.Get(ctx, k, options...)
+		v, err = us.snapshot.Get(ctx, k)
 	}
 	if err != nil {
 		return v, err
 	}
-	if v.IsValueEmpty() {
-		return kv.ValueEntry{}, tikverr.ErrNotExist
+	if len(v) == 0 {
+		return nil, tikverr.ErrNotExist
 	}
 	return v, nil
 }
@@ -166,16 +173,12 @@ type MemBuffer interface {
 	// RUnlock unlocks the MemBuffer for shared reading.
 	RUnlock()
 	// Get gets the value for key k from the MemBuffer.
-	// It returns `kv.ValueEntry` to implement the `kv.Getter` interface.
-	// However, `ValueEntry.CommitTS` is always 0 here.
-	Get(context.Context, []byte, ...kv.GetOption) (kv.ValueEntry, error)
+	Get(context.Context, []byte) ([]byte, error)
 	// GetLocal gets the value from the buffer in local memory.
 	// It makes nonsense for MemDB, but makes a difference for pipelined DML.
 	GetLocal(context.Context, []byte) ([]byte, error)
 	// BatchGet gets the values for given keys from the MemBuffer and cache the result if there are remote buffer.
-	// It returns `map[string]kv.ValueEntry` to implement the kv.BatchGetter interface.
-	// However, `ValueEntry.CommitTS` is always 0 here.
-	BatchGet(context.Context, [][]byte, ...kv.BatchGetOption) (map[string]kv.ValueEntry, error)
+	BatchGet(context.Context, [][]byte) (map[string][]byte, error)
 	// GetFlags gets the flags for key k from the MemBuffer.
 	GetFlags([]byte) (kv.KeyFlags, error)
 	// Set sets the value for key k in the MemBuffer.
@@ -199,7 +202,7 @@ type MemBuffer interface {
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
 	SnapshotIterReverse([]byte, []byte) Iterator
 	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-	SnapshotGetter() kv.Getter
+	SnapshotGetter() Getter
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
 	// SetEntrySizeLimit sets the size limit for each entry and total buffer.

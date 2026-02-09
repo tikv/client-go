@@ -59,7 +59,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -173,14 +172,6 @@ func (c *chanClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 	c.wg.Wait()
 	c.ch <- req
 	return nil, nil
-}
-
-func (c *chanClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
-	go func() {
-		c.wg.Wait()
-		c.ch <- req
-		cb.Schedule(nil, nil)
-	}()
 }
 
 func TestCollapseResolveLock(t *testing.T) {

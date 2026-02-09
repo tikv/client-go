@@ -58,7 +58,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/async"
 )
 
 func TestAsyncCommit(t *testing.T) {
@@ -76,12 +75,6 @@ type testAsyncCommitCommon struct {
 // TODO(youjiali1995): remove it after updating TiDB.
 type unistoreClientWrapper struct {
 	*unistore.RPCClient
-}
-
-func (c *unistoreClientWrapper) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
-	go func() {
-		cb.Schedule(c.RPCClient.SendRequest(ctx, addr, req, tikv.ReadTimeoutShort))
-	}()
 }
 
 func (c *unistoreClientWrapper) SetEventListener(listener tikv.ClientEventListener) {}
@@ -125,7 +118,7 @@ func (s *testAsyncCommitCommon) putKV(key, value []byte, enableAsyncCommit bool)
 func (s *testAsyncCommitCommon) mustGetFromTxn(txn transaction.TxnProbe, key, expectedValue []byte) {
 	v, err := txn.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(v.Value, expectedValue)
+	s.Equal(v, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetLock(key []byte) *txnkv.Lock {
@@ -152,14 +145,14 @@ func (s *testAsyncCommitCommon) mustPointGet(key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(math.MaxUint64)
 	value, err := snap.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(value.Value, expectedValue)
+	s.Equal(value, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetFromSnapshot(version uint64, key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(version)
 	value, err := snap.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(value.Value, expectedValue)
+	s.Equal(value, expectedValue)
 }
 
 func (s *testAsyncCommitCommon) mustGetNoneFromSnapshot(version uint64, key []byte) {
@@ -520,7 +513,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 		defer cancel()
 		val, err := t2.Get(ctx, keys[idx])
 		s.Nil(err)
-		s.Equal(val.Value, values[idx])
+		s.Equal(val, values[idx])
 	}
 
 	// Case 1: Fallback primary, read primary

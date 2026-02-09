@@ -42,7 +42,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util/async"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -73,36 +72,6 @@ func (r reqCollapse) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 		return resp, err
 	}
 	return r.Client.SendRequest(ctx, addr, req, timeout)
-}
-
-func (r reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
-	if r.Client == nil {
-		panic("client should not be nil")
-	}
-	if req.Type == tikvrpc.CmdResolveLock && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
-		// try collapse resolve lock request.
-		key := strconv.FormatUint(req.Context.RegionId, 10) + "-" + strconv.FormatUint(req.ResolveLock().StartVersion, 10)
-		copyReq := *req
-		rsC := resolveRegionSf.DoChan(key, func() (interface{}, error) {
-			// resolveRegionSf will call this function in a goroutine, thus use SendRequest directly.
-			return r.Client.SendRequest(context.Background(), addr, &copyReq, ReadTimeoutShort)
-		})
-		// waiting the response in another goroutine.
-		cb.Executor().Go(func() {
-			select {
-			case <-ctx.Done():
-				cb.Schedule(nil, errors.WithStack(ctx.Err()))
-			case rs := <-rsC:
-				if rs.Err != nil {
-					cb.Schedule(nil, errors.WithStack(rs.Err))
-					return
-				}
-				cb.Schedule(rs.Val.(*tikvrpc.Response), nil)
-			}
-		})
-	} else {
-		r.Client.SendRequestAsync(ctx, addr, req, cb)
-	}
 }
 
 func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (canCollapse bool, resp *tikvrpc.Response, err error) {
