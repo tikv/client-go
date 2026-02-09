@@ -463,6 +463,16 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	isMutationFailed := false
 	keyErrs := lockResp.GetErrors()
 
+	// the mutation will fail when it meets a shared lock
+	for _, keyErr := range keyErrs {
+		if lockInfo := keyErr.GetLocked(); lockInfo != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+				isMutationFailed = true
+				break
+			}
+		}
+	}
+
 	// We only allow single key in ForceLock mode now.
 	if len(mutationsPb) > 1 || len(lockResp.Results) > 1 {
 		panic("unreachable")
