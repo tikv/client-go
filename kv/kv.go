@@ -69,6 +69,7 @@ type LockCtx struct {
 	ReturnValues            bool
 	CheckExistence          bool
 	LockOnlyIfExists        bool
+	InShareMode             bool
 	Values                  map[string]ReturnedValue
 	MaxLockedWithConflictTS uint64
 	ValuesLock              sync.Mutex
