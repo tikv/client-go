@@ -88,7 +88,8 @@ func (s *testCommitterSuite) SetupSuite() {
 
 func (s *testCommitterSuite) TearDownSuite() {
 	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
-	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
+	atomic.StoreUint64(&transaction.CommitMaxBackoff, 40000)
 }
 
 func (s *testCommitterSuite) SetupTest() {
