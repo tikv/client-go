@@ -463,3 +463,56 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	// Cleanup
 	s.Nil(txn1.Rollback())
 }
+
+func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
+	pk1 := []byte("TestForceLockRetryOnSharedLock_pk1")
+	pk2 := []byte("TestForceLockRetryOnSharedLock_pk2")
+	key := []byte("TestForceLockRetryOnSharedLock_key")
+
+	// Step 1: txn1 acquires a shared lock on key
+	txn1 := s.begin()
+	s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
+	s.Equal(pk1, txn1.GetCommitter().GetPrimaryKey())
+	lockCtx1 := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+	lockCtx1.InShareMode = true
+	s.Nil(txn1.LockKeys(context.Background(), lockCtx1, key))
+
+	// Wait for the shared lock to be visible
+	s.Eventually(func() bool {
+		return len(s.scanLocks(key, s.getTS())) == 1
+	}, 5*time.Second, 100*time.Millisecond, "expect 1 shared lock")
+
+	// Step 2: txn2 in aggressive locking mode (ForceLock) acquires exclusive lock on the same key
+	txn2 := s.begin()
+	s.Nil(txn2.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk2))
+	s.Equal(pk2, txn2.GetCommitter().GetPrimaryKey())
+
+	txn2.StartAggressiveLocking()
+	lockCtx2 := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+	errCh := make(chan error, 1)
+	go func() {
+		// Single key + aggressive locking → ForceLock mode
+		errCh <- txn2.LockKeys(context.Background(), lockCtx2, key)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-errCh:
+		s.Fail("ForceLock should block on shared lock, not return immediately")
+		return
+	default:
+	}
+
+	s.Nil(txn1.Rollback())
+	s.Nil(<-errCh, "ForceLock mode should resolve expired shared lock and succeed")
+
+	txn2.DoneAggressiveLocking(context.Background())
+
+	// Verify txn2 holds the exclusive lock
+	locks := s.scanLocks(key, s.getTS())
+	s.Len(locks, 1)
+	s.Equal(txn2.StartTS(), locks[0].TxnID)
+
+	// Cleanup
+	s.Nil(txn2.Rollback())
+}
