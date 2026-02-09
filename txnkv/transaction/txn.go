@@ -317,8 +317,9 @@ func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
 	txn.commitWaitUntilTSOTimeout = val
 }
 
-// GetCommitWaitUntilTSOTimeout returns the timeout to wait for the commit tso reach the expected value.
-// If it returns zero, it means it is not set and the default timeout should be used
+// GetCommitWaitUntilTSOTimeout returns the maximum time allowed for PD TSO to
+// catch up to the commit-wait target timestamp.
+// If it returns zero, commit fails immediately once TSO lag is detected.
 func (txn *KVTxn) GetCommitWaitUntilTSOTimeout() time.Duration {
 	return txn.commitWaitUntilTSOTimeout
 }
