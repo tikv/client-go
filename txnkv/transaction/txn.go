@@ -317,8 +317,9 @@ func (txn *KVTxn) SetCommitWaitUntilTSOTimeout(val time.Duration) {
 	txn.commitWaitUntilTSOTimeout = val
 }
 
-// GetCommitWaitUntilTSOTimeout returns the timeout to wait for the commit tso reach the expected value.
-// If it returns zero, it means it is not set and the default timeout should be used
+// GetCommitWaitUntilTSOTimeout returns the maximum time allowed for PD TSO to
+// catch up to the commit-wait target timestamp.
+// If it returns zero, commit fails immediately once TSO lag is detected.
 func (txn *KVTxn) GetCommitWaitUntilTSOTimeout() time.Duration {
 	return txn.commitWaitUntilTSOTimeout
 }
@@ -1907,10 +1908,15 @@ func (txn *KVTxn) GetTimestampForCommit(bo *retry.Backoffer, scope string) (_ ui
 	// maxSleep is the maximum time we are allowed to wait for the expected commit TS.
 	// It is 1 second by default to avoid infinite blocking but can be overridden by commitWaitUntilTSOTimeout.
 	// If the TSO drift is larger than the maxSleep, return error directly.
-	maxSleep := time.Second
-	if txn.commitWaitUntilTSOTimeout > 0 {
-		maxSleep = txn.commitWaitUntilTSOTimeout
+	maxSleep := txn.commitWaitUntilTSOTimeout
+	if maxSleep == 0 {
+		return 0, errors.Wrapf(
+			tikverr.ErrCommitTSLag,
+			"PD TSO '%d' lags the expected timestamp '%d', fail immediately since zero max sleep time is set",
+			firstAttemptTS, txn.commitWaitUntilTSO,
+		)
 	}
+
 	interval := oracle.GetTimeFromTS(txn.commitWaitUntilTSO).Sub(oracle.GetTimeFromTS(firstAttemptTS))
 	if interval > maxSleep {
 		return 0, errors.Wrapf(

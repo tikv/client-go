@@ -147,6 +147,7 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 		//	}
 		mockCommitTSO  []uint64
 		setWaitTimeout time.Duration
+		setNoWait      bool
 		extraPrepare   func(transaction.TxnProbe)
 		err            bool
 	}{
@@ -159,6 +160,13 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 			name:          "lag, retry once and success",
 			commitWaitTSO: 200,
 			mockCommitTSO: []uint64{100, 201},
+		},
+		{
+			name:          "no wait",
+			commitWaitTSO: 200,
+			mockCommitTSO: []uint64{100},
+			setNoWait:     true,
+			err:           true,
 		},
 		{
 			name:          "lag, retry twice and success",
@@ -212,7 +220,10 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 			}
 
 			txn.SetCommitWaitUntilTSO(tc.commitWaitTSO + txn.StartTS())
-			if tc.setWaitTimeout > 0 {
+			if tc.setNoWait {
+				s.Zero(tc.setWaitTimeout)
+				txn.SetCommitWaitUntilTSOTimeout(0)
+			} else if tc.setWaitTimeout > 0 {
 				txn.SetCommitWaitUntilTSOTimeout(tc.setWaitTimeout)
 			}
 			var commitDetail *util.CommitDetails
