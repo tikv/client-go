@@ -314,42 +314,34 @@ func TestScanDetailMerge(t *testing.T) {
 
 func TestWriteDetailMerge(t *testing.T) {
 	a := &WriteDetail{
-		StoreBatchWaitDuration:               1 * time.Millisecond,
-		ProposeSendWaitDuration:              2 * time.Millisecond,
-		PersistLogDuration:                   3 * time.Millisecond,
-		RaftDbWriteLeaderWaitDuration:        4 * time.Millisecond,
-		RaftDbSyncLogDuration:                5 * time.Millisecond,
-		RaftDbWriteMemtableDuration:          6 * time.Millisecond,
-		CommitLogDuration:                    7 * time.Millisecond,
-		ApplyBatchWaitDuration:               8 * time.Millisecond,
-		ApplyLogDuration:                     9 * time.Millisecond,
-		ApplyMutexLockDuration:               10 * time.Millisecond,
-		ApplyWriteLeaderWaitDuration:         11 * time.Millisecond,
-		ApplyWriteWalDuration:                12 * time.Millisecond,
-		ApplyWriteMemtableDuration:           13 * time.Millisecond,
-		SchedulerLatchWaitDuration:           14 * time.Millisecond,
-		SchedulerProcessDuration:             15 * time.Millisecond,
-		SchedulerThrottleDuration:            16 * time.Millisecond,
-		SchedulerPessimisticLockWaitDuration: 17 * time.Millisecond,
+		StoreBatchWaitDuration:        1 * time.Millisecond,
+		ProposeSendWaitDuration:       2 * time.Millisecond,
+		PersistLogDuration:            3 * time.Millisecond,
+		RaftDbWriteLeaderWaitDuration: 4 * time.Millisecond,
+		RaftDbSyncLogDuration:         5 * time.Millisecond,
+		RaftDbWriteMemtableDuration:   6 * time.Millisecond,
+		CommitLogDuration:             7 * time.Millisecond,
+		ApplyBatchWaitDuration:        8 * time.Millisecond,
+		ApplyLogDuration:              9 * time.Millisecond,
+		ApplyMutexLockDuration:        10 * time.Millisecond,
+		ApplyWriteLeaderWaitDuration:  11 * time.Millisecond,
+		ApplyWriteWalDuration:         12 * time.Millisecond,
+		ApplyWriteMemtableDuration:    13 * time.Millisecond,
 	}
 	b := &WriteDetail{
-		StoreBatchWaitDuration:               1 * time.Millisecond,
-		ProposeSendWaitDuration:              2 * time.Millisecond,
-		PersistLogDuration:                   3 * time.Millisecond,
-		RaftDbWriteLeaderWaitDuration:        4 * time.Millisecond,
-		RaftDbSyncLogDuration:                5 * time.Millisecond,
-		RaftDbWriteMemtableDuration:          6 * time.Millisecond,
-		CommitLogDuration:                    7 * time.Millisecond,
-		ApplyBatchWaitDuration:               8 * time.Millisecond,
-		ApplyLogDuration:                     9 * time.Millisecond,
-		ApplyMutexLockDuration:               10 * time.Millisecond,
-		ApplyWriteLeaderWaitDuration:         11 * time.Millisecond,
-		ApplyWriteWalDuration:                12 * time.Millisecond,
-		ApplyWriteMemtableDuration:           13 * time.Millisecond,
-		SchedulerLatchWaitDuration:           14 * time.Millisecond,
-		SchedulerProcessDuration:             15 * time.Millisecond,
-		SchedulerThrottleDuration:            16 * time.Millisecond,
-		SchedulerPessimisticLockWaitDuration: 17 * time.Millisecond,
+		StoreBatchWaitDuration:        1 * time.Millisecond,
+		ProposeSendWaitDuration:       2 * time.Millisecond,
+		PersistLogDuration:            3 * time.Millisecond,
+		RaftDbWriteLeaderWaitDuration: 4 * time.Millisecond,
+		RaftDbSyncLogDuration:         5 * time.Millisecond,
+		RaftDbWriteMemtableDuration:   6 * time.Millisecond,
+		CommitLogDuration:             7 * time.Millisecond,
+		ApplyBatchWaitDuration:        8 * time.Millisecond,
+		ApplyLogDuration:              9 * time.Millisecond,
+		ApplyMutexLockDuration:        10 * time.Millisecond,
+		ApplyWriteLeaderWaitDuration:  11 * time.Millisecond,
+		ApplyWriteWalDuration:         12 * time.Millisecond,
+		ApplyWriteMemtableDuration:    13 * time.Millisecond,
 	}
 
 	a.Merge(b)
@@ -367,30 +359,22 @@ func TestWriteDetailMerge(t *testing.T) {
 	assert.Equal(t, 22*time.Millisecond, a.ApplyWriteLeaderWaitDuration)
 	assert.Equal(t, 24*time.Millisecond, a.ApplyWriteWalDuration)
 	assert.Equal(t, 26*time.Millisecond, a.ApplyWriteMemtableDuration)
-	assert.Equal(t, 28*time.Millisecond, a.SchedulerLatchWaitDuration)
-	assert.Equal(t, 30*time.Millisecond, a.SchedulerProcessDuration)
-	assert.Equal(t, 32*time.Millisecond, a.SchedulerThrottleDuration)
-	assert.Equal(t, 34*time.Millisecond, a.SchedulerPessimisticLockWaitDuration)
 }
 
 func TestTimeDetailMerge(t *testing.T) {
 	a := &TimeDetail{
-		ProcessTime:       10 * time.Millisecond,
-		SuspendTime:       2 * time.Millisecond,
-		WaitTime:          5 * time.Millisecond,
-		KvReadWallTime:    3 * time.Millisecond,
-		KvGrpcProcessTime: 1 * time.Millisecond,
-		KvGrpcWaitTime:    4 * time.Millisecond,
-		TotalRPCWallTime:  20 * time.Millisecond,
+		ProcessTime:      10 * time.Millisecond,
+		SuspendTime:      2 * time.Millisecond,
+		WaitTime:         5 * time.Millisecond,
+		KvReadWallTime:   3 * time.Millisecond,
+		TotalRPCWallTime: 20 * time.Millisecond,
 	}
 	b := &TimeDetail{
-		ProcessTime:       15 * time.Millisecond,
-		SuspendTime:       3 * time.Millisecond,
-		WaitTime:          7 * time.Millisecond,
-		KvReadWallTime:    4 * time.Millisecond,
-		KvGrpcProcessTime: 2 * time.Millisecond,
-		KvGrpcWaitTime:    5 * time.Millisecond,
-		TotalRPCWallTime:  30 * time.Millisecond,
+		ProcessTime:      15 * time.Millisecond,
+		SuspendTime:      3 * time.Millisecond,
+		WaitTime:         7 * time.Millisecond,
+		KvReadWallTime:   4 * time.Millisecond,
+		TotalRPCWallTime: 30 * time.Millisecond,
 	}
 
 	a.Merge(b)
@@ -399,8 +383,6 @@ func TestTimeDetailMerge(t *testing.T) {
 	assert.Equal(t, 5*time.Millisecond, a.SuspendTime)
 	assert.Equal(t, 12*time.Millisecond, a.WaitTime)
 	assert.Equal(t, 7*time.Millisecond, a.KvReadWallTime)
-	assert.Equal(t, 3*time.Millisecond, a.KvGrpcProcessTime)
-	assert.Equal(t, 9*time.Millisecond, a.KvGrpcWaitTime)
 	assert.Equal(t, 50*time.Millisecond, a.TotalRPCWallTime)
 }
 
