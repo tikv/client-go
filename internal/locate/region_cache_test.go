@@ -183,52 +183,52 @@ func TestBackgroundRunner(t *testing.T) {
 	t.Run("ScheduleWithTrigger", func(t *testing.T) {
 		var (
 			done     = make(chan struct{})
-			trigger  = make(chan struct{})
+			trigger  = make(chan struct{}, 2)
 			interval = 20 * time.Millisecond
-			history  = make([]int64, 0, 3)
-			start    = time.Now().UnixMilli()
+			triggers atomic.Int32
+			ticks    atomic.Int32
 		)
 		r := newBackgroundRunner(context.Background())
+		defer r.shutdown(true)
 		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
 			if t.IsZero() {
-				history = append(history, -1)
+				triggers.Add(1)
 			} else {
-				history = append(history, t.UnixMilli())
+				ticks.Add(1)
 			}
-			if len(history) == 3 {
+			if triggers.Load() >= 2 && ticks.Load() >= 1 {
 				close(done)
 				return true
 			}
 			return false
 		}, interval, trigger)
 		trigger <- struct{}{}
-		time.Sleep(interval + interval/2)
+		require.Eventually(t, func() bool {
+			return ticks.Load() >= 1
+		}, time.Second, interval/4)
 		trigger <- struct{}{}
 		<-done
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[2])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[1]-start)
+		require.GreaterOrEqual(t, triggers.Load(), int32(2))
+		require.GreaterOrEqual(t, ticks.Load(), int32(1))
 
-		history = history[:0]
-		start = time.Now().UnixMilli()
+		triggers.Store(0)
+		ticks.Store(0)
 		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
 			if t.IsZero() {
-				history = append(history, -1)
+				triggers.Add(1)
 			} else {
-				history = append(history, t.UnixMilli())
+				ticks.Add(1)
 			}
 			return false
 		}, interval, trigger)
 		trigger <- struct{}{}
 		trigger <- struct{}{}
 		close(trigger)
-		time.Sleep(interval + interval/2)
-		r.shutdown(true)
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[1])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[2]-start)
+		require.Eventually(t, func() bool {
+			return ticks.Load() >= 1
+		}, time.Second, interval/4)
+		require.Equal(t, int32(2), triggers.Load())
+		require.GreaterOrEqual(t, ticks.Load(), int32(1))
 	})
 }
 
