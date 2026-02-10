@@ -103,12 +103,14 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		c.resourceGroupTagger(req)
 	}
 
-	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.start",
-		zap.Uint64("startTS", c.startTS),
-		zap.Uint64("commitTS", c.commitTS),
-		zap.Uint64("regionID", batch.region.GetID()),
-		zap.Bool("isPrimary", batch.isPrimary),
-		zap.Int("keyCount", len(keys)))
+	if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.start",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", c.commitTS),
+			zap.Uint64("regionID", batch.region.GetID()),
+			zap.Bool("isPrimary", batch.isPrimary),
+			zap.Int("keyCount", len(keys)))
+	}
 
 	tBegin := time.Now()
 	attempts := 0
@@ -134,9 +136,11 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 
 		// Unexpected error occurs, return it.
 		if err != nil {
-			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.result",
-				zap.Uint64("regionID", batch.region.GetID()),
-				zap.Bool("success", false))
+			if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+				trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.result",
+					zap.Uint64("regionID", batch.region.GetID()),
+					zap.Bool("success", false))
+			}
 			return err
 		}
 
@@ -201,7 +205,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				}
 
 				// Update commit ts and retry.
-				commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+				commitTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())
 				if err != nil {
 					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
 						zap.Error(err),
@@ -256,9 +260,11 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 	// Group that contains primary key is always the first.
 	// We mark transaction's status committed when we receive the first success response.
 	c.mu.committed = true
-	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.result",
-		zap.Uint64("regionID", batch.region.GetID()),
-		zap.Bool("success", true))
+	if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "commit.batch.result",
+			zap.Uint64("regionID", batch.region.GetID()),
+			zap.Bool("success", true))
+	}
 	return nil
 }
 

@@ -234,11 +234,13 @@ func (action actionPrewrite) handleSingleBatch(
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
 
-	trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
-		zap.Uint64("startTS", c.startTS),
-		zap.Uint64("regionID", batch.region.GetID()),
-		zap.Bool("isPrimary", batch.isPrimary),
-		zap.Int("keyCount", batch.mutations.Len()))
+	if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.start",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("regionID", batch.region.GetID()),
+			zap.Bool("isPrimary", batch.isPrimary),
+			zap.Int("keyCount", batch.mutations.Len()))
+	}
 
 	var retryable bool
 	for {
@@ -246,9 +248,11 @@ func (action actionPrewrite) handleSingleBatch(
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
-			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
-				zap.Uint64("regionID", batch.region.GetID()),
-				zap.Bool("success", err == nil))
+			if trace.IsCategoryEnabled(trace.CategoryTxn2PC) {
+				trace.TraceEvent(bo.GetCtx(), trace.CategoryTxn2PC, "prewrite.batch.result",
+					zap.Uint64("regionID", batch.region.GetID()),
+					zap.Bool("success", err == nil))
+			}
 			handler.drop(err)
 			return err
 		}
@@ -569,7 +573,7 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 		// In this case 1PC is not expected to be used, but still check it for safety.
 		if int64(handler.committer.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
 			prewriteResp.OnePcCommitTs == 0 {
-			handler.committer.ttlManager.run(handler.committer, nil, false)
+			handler.committer.run(handler.committer, nil, false)
 		}
 	}
 	if handler.committer.isOnePC() {

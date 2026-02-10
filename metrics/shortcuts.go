@@ -192,6 +192,11 @@ var (
 	ReadRequestLeaderRemoteBytes   prometheus.Observer
 	ReadRequestFollowerLocalBytes  prometheus.Observer
 	ReadRequestFollowerRemoteBytes prometheus.Observer
+
+	LagCommitTSWaitHistogramWithOK       prometheus.Observer
+	LagCommitTSWaitHistogramWithError    prometheus.Observer
+	LagCommitTSAttemptHistogramWithOK    prometheus.Observer
+	LagCommitTSAttemptHistogramWithError prometheus.Observer
 )
 
 func initShortcuts() {
@@ -353,4 +358,9 @@ func initShortcuts() {
 	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
 	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
 	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
+
+	LagCommitTSWaitHistogramWithOK = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("ok")
+	LagCommitTSWaitHistogramWithError = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("err")
+	LagCommitTSAttemptHistogramWithOK = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("ok")
+	LagCommitTSAttemptHistogramWithError = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("err")
 }

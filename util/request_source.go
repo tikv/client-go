@@ -121,10 +121,8 @@ func BuildRequestSource(internal bool, source, explicitSource string) string {
 
 // IsRequestSourceInternal checks whether the input request source type is internal type.
 func IsRequestSourceInternal(reqSrc *RequestSource) bool {
-	isInternal := false
-	if reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource()) {
-		isInternal = true
-	}
+	isInternal := reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource())
+
 	return isInternal
 }
 
