@@ -109,6 +109,7 @@ const (
 	CmdMPPConn   // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdMPPCancel // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdMPPAlive  // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdVersionedCop
 
 	CmdMvccGetByKey CmdType = 1024 + iota
 	CmdMvccGetByStartTs
@@ -119,9 +120,6 @@ const (
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
-
-	// CmdVersionedCop is used to call VersionedKv services.
-	CmdVersionedCop
 )
 
 // CmdType aliases.
