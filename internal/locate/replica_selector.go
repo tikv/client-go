@@ -605,7 +605,8 @@ func isReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
 func isReadReq(tp tikvrpc.CmdType) bool {
 	switch tp {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
-		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream,
+		tikvrpc.CmdVersionedCop:
 		return true
 	default:
 		return false
