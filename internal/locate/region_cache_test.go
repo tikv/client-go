@@ -46,6 +46,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -145,39 +146,42 @@ func TestBackgroundRunner(t *testing.T) {
 	})
 
 	t.Run("Schedule", func(t *testing.T) {
-		var (
-			done     = make(chan struct{})
-			interval = 20 * time.Millisecond
-			history  = make([]int64, 0, 3)
-			start    = time.Now().UnixMilli()
-		)
-		r := newBackgroundRunner(context.Background())
-		r.schedule(func(_ context.Context, t time.Time) bool {
-			history = append(history, t.UnixMilli())
-			if len(history) == 3 {
-				close(done)
-				return true
+		synctest.Test(t, func(t *testing.T) {
+			var (
+				done     = make(chan struct{})
+				interval = 20 * time.Millisecond
+				history  = make([]time.Time, 0, 3)
+				start    = time.Now()
+			)
+			r := newBackgroundRunner(context.Background())
+			r.schedule(func(_ context.Context, t time.Time) bool {
+				history = append(history, t)
+				if len(history) == 3 {
+					close(done)
+					return true
+				}
+				return false
+			}, interval)
+			<-done
+			require.Equal(t, 3, len(history))
+			for i := range history {
+				require.Equal(t, interval*time.Duration(i+1), history[i].Sub(start))
 			}
-			return false
-		}, interval)
-		<-done
-		require.Equal(t, 3, len(history))
-		for i := range history {
-			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
-		}
 
-		history = history[:0]
-		start = time.Now().UnixMilli()
-		r.schedule(func(ctx context.Context, t time.Time) bool {
-			history = append(history, t.UnixMilli())
-			return false
-		}, interval)
-		time.Sleep(interval*3 + interval/2)
-		r.shutdown(true)
-		require.Equal(t, 3, len(history))
-		for i := range history {
-			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
-		}
+			history = history[:0]
+			start = time.Now()
+			r.schedule(func(ctx context.Context, t time.Time) bool {
+				history = append(history, t)
+				return false
+			}, interval)
+			time.Sleep(interval * 3)
+			synctest.Wait()
+			r.shutdown(true)
+			require.Equal(t, 3, len(history))
+			for i := range history {
+				require.Equal(t, interval*time.Duration(i+1), history[i].Sub(start))
+			}
+		})
 	})
 
 	t.Run("ScheduleWithTrigger", func(t *testing.T) {
