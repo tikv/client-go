@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -61,8 +62,10 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestConn(t *testing.T) {
@@ -1152,4 +1155,75 @@ func TestBatchPolicy(t *testing.T) {
 			require.Equal(t, trigger.opts, presetBatchPolicies[config.DefBatchPolicy])
 		}
 	})
+}
+
+type versionedCoprocessorRoutingServer struct {
+	tikvpb.UnimplementedTikvServer
+	tikvpb.UnimplementedVersionedKvServer
+
+	tikvCalled      int32
+	versionedCalled int32
+}
+
+func (s *versionedCoprocessorRoutingServer) Coprocessor(ctx context.Context, req *coprocessor.Request) (*coprocessor.Response, error) {
+	atomic.AddInt32(&s.tikvCalled, 1)
+	return &coprocessor.Response{Data: []byte("tikv")}, nil
+}
+
+func (s *versionedCoprocessorRoutingServer) VersionedCoprocessor(ctx context.Context, req *coprocessor.Request) (*coprocessor.Response, error) {
+	atomic.AddInt32(&s.versionedCalled, 1)
+	return &coprocessor.Response{Data: []byte("versioned")}, nil
+}
+
+func TestVersionedCoprocessorRouting(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+	})()
+
+	const bufSize = 1024 * 1024
+	lis := bufconn.Listen(bufSize)
+	t.Cleanup(func() { _ = lis.Close() })
+
+	srv := grpc.NewServer()
+	serverImpl := &versionedCoprocessorRoutingServer{}
+	tikvpb.RegisterTikvServer(srv, serverImpl)
+	tikvpb.RegisterVersionedKvServer(srv, serverImpl)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	client := NewRPCClient(WithGRPCDialOptions(grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
+		return lis.Dial()
+	})))
+	t.Cleanup(func() { _ = client.Close() })
+
+	addr := "bufnet"
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdVersionedCop, &coprocessor.Request{
+		VersionedRanges: []*coprocessor.VersionedKeyRange{{
+			Range:  &coprocessor.KeyRange{Start: []byte("a"), End: []byte("b")},
+			ReadTs: 1,
+		}},
+	})
+	req.StoreTp = tikvrpc.TiKV
+
+	resp, err := client.SendRequest(context.Background(), addr, req, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "versioned", string(resp.Resp.(*coprocessor.Response).Data))
+	require.Equal(t, int32(0), atomic.LoadInt32(&serverImpl.tikvCalled))
+	require.Equal(t, int32(1), atomic.LoadInt32(&serverImpl.versionedCalled))
+
+	// VersionedRanges should not affect routing; non-versioned cmd must still call TiKV services.
+	req = tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{
+		VersionedRanges: []*coprocessor.VersionedKeyRange{{
+			Range:  &coprocessor.KeyRange{Start: []byte("a"), End: []byte("b")},
+			ReadTs: 1,
+		}},
+	})
+	req.StoreTp = tikvrpc.TiKV
+
+	resp, err = client.SendRequest(context.Background(), addr, req, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "tikv", string(resp.Resp.(*coprocessor.Response).Data))
+	require.Equal(t, int32(1), atomic.LoadInt32(&serverImpl.tikvCalled))
+	require.Equal(t, int32(1), atomic.LoadInt32(&serverImpl.versionedCalled))
 }
