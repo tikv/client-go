@@ -287,6 +287,15 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 			req.Req = &cmd
 		}
 		req.rev++
+	case CmdVersionedCop:
+		if req.rev == 0 {
+			req.VersionedCop().Context = ctx
+		} else {
+			cmd := *req.VersionedCop()
+			cmd.Context = ctx
+			req.Req = &cmd
+		}
+		req.rev++
 	case CmdMvccGetByKey:
 		if req.rev == 0 {
 			req.MvccGetByKey().Context = ctx
@@ -446,6 +455,8 @@ func isValidReqType(cmd CmdType) bool {
 	case CmdCop:
 		return true
 	case CmdBatchCop:
+		return true
+	case CmdVersionedCop:
 		return true
 	case CmdMvccGetByKey:
 		return true

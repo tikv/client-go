@@ -295,6 +295,9 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.SplitRegion()
 		r.SplitKeys = c.encodeKeys(r.SplitKeys)
 		req.Req = &r
+	case tikvrpc.CmdVersionedCop:
+		// TODO: Support VersionedCop in APIv2.
+		return nil, errors.New("codecV2 does not support VersionedCop request")
 	}
 
 	return req, nil

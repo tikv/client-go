@@ -371,12 +371,20 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		return wrapErrConn(tikvrpc.CallDebugRPC(ctx1, client, req))
 	}
 
-	client := tikvpb.NewTikvClient(clientConn)
-
 	// Set metadata for request forwarding. Needn't forward DebugReq.
 	if req.ForwardedHost != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, req.ForwardedHost)
 	}
+
+	// Version-aware coprocessor requests should go through VersionedKv services.
+	if req.Type == tikvrpc.CmdVersionedCop {
+		client := tikvpb.NewVersionedKvClient(clientConn)
+		ctx1, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return wrapErrConn(tikvrpc.CallVersionedKV(ctx1, client, req))
+	}
+
+	client := tikvpb.NewTikvClient(clientConn)
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
 		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connPool))
