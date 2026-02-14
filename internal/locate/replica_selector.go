@@ -491,7 +491,7 @@ func (s *replicaSelector) onNotLeader(
 		// The region may be during transferring leader.
 		logutil.BgLogger().Warn("NotLeader error with no leader, region may be transferring leader",
 			zap.Uint64("regionID", s.region.GetID()),
-			zap.String("store", ctx.Store.addr))
+			zap.String("store", ctx.Store.GetAddr()))
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
 		return err == nil, err
 	}
