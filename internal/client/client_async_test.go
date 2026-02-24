@@ -270,11 +270,20 @@ func TestSendRequestAsyncAndCloseClientOnHandle(t *testing.T) {
 	defer srv.Stop()
 	addr := srv.Addr()
 	cli := NewRPCClient()
+	defer cli.Close()
+
+	handleCtx, releaseHandle := context.WithCancel(context.Background())
+	defer releaseHandle()
 
 	var received atomic.Bool
+	handleEntered := make(chan struct{}, 1)
 	handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
 		received.Store(true)
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case handleEntered <- struct{}{}:
+		default:
+		}
+		<-handleCtx.Done()
 		return nil, errors.New("mock server error")
 	}
 	srv.OnBatchCommandsRequest.Store(&handle)
@@ -287,8 +296,20 @@ func TestSendRequestAsyncAndCloseClientOnHandle(t *testing.T) {
 		require.ErrorContains(t, err, "batch client closed")
 	})
 	cli.SendRequestAsync(ctx, addr, req, cb)
-	time.AfterFunc(10*time.Millisecond, func() { cli.Close() })
-	rl.Exec(ctx)
+
+	select {
+	case <-handleEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request is not sent to mock server")
+	}
+
+	cli.Close()
+	releaseHandle()
+
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := rl.Exec(execCtx)
+	require.NoError(t, err)
 	require.True(t, received.Load())
 	require.True(t, called)
 }
