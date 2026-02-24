@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -637,16 +638,14 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 //     doActionOnMutations directly and return retryable false regardless of success or failure.
 //  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
-	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) {
-		// If the current transaction is async commit and prewrite fails for `UndeterminedResult`,
-		// It means the transaction's commit state is unknown.
-		// We should return the error `ErrResultUndetermined` to the caller
-		// to for further handling (.i.e disconnect the connection).
-		return false, errors.WithStack(tikverr.ErrResultUndetermined)
-	}
-
-	if err = retry.MayBackoffForRegionError(regionErr, handler.bo); err != nil {
-		return false, err
+	// For other region error and the fake region error, backoff because
+	// there's something wrong.
+	// For the real EpochNotMatch error, don't backoff.
+	if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
+		err = handler.bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
+		if err != nil {
+			return false, err
+		}
 	}
 	if regionErr.GetDiskFull() != nil {
 		storeIds := regionErr.GetDiskFull().GetStoreId()
@@ -700,13 +699,11 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 							zap.Uint64("session", handler.committer.sessionID),
 							zap.Uint64("txnID", handler.committer.startTS),
 							zap.Stringer("lock", lock),
-							zap.Stringer("policy", handler.committer.txn.prewriteEncounterLockPolicy),
-						)
+													)
 						logged[lock.TxnID] = struct{}{}
 					}
 					// For shared locks encountered during prewrite, same logic as exclusive locks applies
-					if (lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic) ||
-						handler.committer.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+					if lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic {
 						return nil, tikverr.NewErrWriteConflictWithArgs(
 							handler.committer.startTS,
 							lock.TxnID,
@@ -734,8 +731,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 				zap.Uint64("session", handler.committer.sessionID),
 				zap.Uint64("txnID", handler.committer.startTS),
 				zap.Stringer("lock", lock),
-				zap.Stringer("policy", handler.committer.txn.prewriteEncounterLockPolicy),
-			)
+							)
 			logged[lock.TxnID] = struct{}{}
 		}
 		// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
@@ -743,8 +739,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 		// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
 		// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 		// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-		if (lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic) ||
-			handler.committer.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+		if lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic {
 			return nil, tikverr.NewErrWriteConflictWithArgs(
 				handler.committer.startTS,
 				lock.TxnID,
