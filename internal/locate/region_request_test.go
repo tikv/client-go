@@ -1023,7 +1023,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestClusterIDInReq() {
 	s.True(port > 0)
 	rpcClient := client.NewRPCClient()
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		s.True(req.ClusterId > 0)
+		s.Greater(req.ClusterId, uint64(0))
 		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
 	}}
 	defer func() {
@@ -1036,9 +1036,12 @@ func (s *testRegionRequestToSingleStoreSuite) TestClusterIDInReq() {
 	s.Nil(err)
 	s.NotNil(region)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
-	// send a probe request to make sure the mock server is ready.
-	s.regionRequestSender.SendReq(retry.NewNoopBackoff(context.Background()), req, region.Region, time.Second)
-	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
+	// Wait for the gRPC serve loop to start accepting connections before running assertions.
+	s.Eventually(func() bool {
+		_, probeErr := rpcClient.SendRequest(context.Background(), server.Addr(), req, time.Second)
+		return probeErr == nil
+	}, 3*time.Second, 10*time.Millisecond)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
