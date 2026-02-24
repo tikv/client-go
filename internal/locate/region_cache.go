@@ -2045,12 +2045,16 @@ func (c *RegionCache) BatchLoadRegionsFromKey(bo *retry.Backoffer, startKey []by
 	return regions[len(regions)-1].EndKey(), nil
 }
 
+// AsyncInvalidateCachedRegion marks a cached region for reload on next access
+// without invalidating it, so in-flight retries can still proceed.
+// It sets needDelayedReloadReady directly, skipping the GC promotion from
+// needDelayedReloadPending for faster reload.
 func (c *RegionCache) AsyncInvalidateCachedRegion(id RegionVerID) {
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if cachedRegion == nil {
 		return
 	}
-	cachedRegion.setSyncFlags(needDelayedReloadPending)
+	cachedRegion.setSyncFlags(needDelayedReloadReady)
 }
 
 // InvalidateCachedRegion removes a cached Region.
