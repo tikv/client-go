@@ -46,6 +46,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -171,54 +172,57 @@ func TestBackgroundRunner(t *testing.T) {
 	})
 
 	t.Run("ScheduleWithTrigger", func(t *testing.T) {
-		var (
-			done     = make(chan struct{})
-			trigger  = make(chan struct{})
-			interval = 20 * time.Millisecond
-			history  = make([]int64, 0, 3)
-			start    = time.Now().UnixMilli()
-		)
-		r := newBackgroundRunner(context.Background())
-		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
-			if t.IsZero() {
-				history = append(history, -1)
-			} else {
-				history = append(history, t.UnixMilli())
-			}
-			if len(history) == 3 {
-				close(done)
-				return true
-			}
-			return false
-		}, interval, trigger)
-		trigger <- struct{}{}
-		time.Sleep(interval + interval/2)
-		trigger <- struct{}{}
-		<-done
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[2])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[1]-start)
+		synctest.Test(t, func(t *testing.T) {
+			const interval = 20 * time.Millisecond
+			trigger := make(chan struct{})
+			r := newBackgroundRunner(context.Background())
 
-		history = history[:0]
-		start = time.Now().UnixMilli()
-		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
-			if t.IsZero() {
-				history = append(history, -1)
-			} else {
-				history = append(history, t.UnixMilli())
-			}
-			return false
-		}, interval, trigger)
-		trigger <- struct{}{}
-		trigger <- struct{}{}
-		close(trigger)
-		time.Sleep(interval + interval/2)
-		r.shutdown(true)
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[1])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[2]-start)
+			var (
+				done    = make(chan struct{})
+				history = make([]time.Time, 0, 3)
+				start   = time.Now()
+			)
+
+			r.scheduleWithTrigger(func(ctx context.Context, at time.Time) bool {
+				history = append(history, at)
+				if len(history) == 3 {
+					close(done)
+					return true
+				}
+				return false
+			}, interval, trigger)
+
+			trigger <- struct{}{}
+			synctest.Wait()
+			time.Sleep(interval + interval/2)
+			synctest.Wait()
+			trigger <- struct{}{}
+			<-done
+
+			require.Len(t, history, 3)
+			require.True(t, history[0].IsZero())
+			require.Equal(t, interval, history[1].Sub(start))
+			require.True(t, history[2].IsZero())
+
+			history = history[:0]
+			start = time.Now()
+			r.scheduleWithTrigger(func(ctx context.Context, at time.Time) bool {
+				history = append(history, at)
+				return false
+			}, interval, trigger)
+
+			trigger <- struct{}{}
+			trigger <- struct{}{}
+			close(trigger)
+			time.Sleep(interval + interval/2)
+			synctest.Wait()
+			r.shutdown(true)
+
+			require.Len(t, history, 3)
+			require.True(t, history[0].IsZero())
+			require.True(t, history[1].IsZero())
+			require.Equal(t, interval, history[2].Sub(start))
+		})
 	})
 }
 
