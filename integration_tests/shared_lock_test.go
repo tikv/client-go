@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -35,10 +34,6 @@ import (
 func TestSharedLock(t *testing.T) {
 	if !*withTiKV {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
-		return
-	}
-	if config.NextGen {
-		t.Skip("skipping TestSharedLock because next-gen doesn't support shared lock yet")
 		return
 	}
 	suite.Run(t, new(testSharedLockSuite))
@@ -451,7 +446,7 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	s.Nil(err, "optimistic transaction should successfully resolve expired shared lock and commit")
 
 	// Step 5: Verify the write succeeded
-	snapshot := s.store.GetSnapshot(txn2.CommitTS())
+	snapshot := s.store.GetSnapshot(s.getTS())
 	v, err := snapshot.Get(context.Background(), key)
 	s.Nil(err)
 	s.Equal(value, v.Value)
