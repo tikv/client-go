@@ -1238,8 +1238,24 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
 		)
 	}
+	if err == nil {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-region rpc finished",
+			zap.String("action", resolveActionLabel(status)),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", lreq.CommitVersion),
+			zap.Uint64("regionID", region.GetID()),
+			zap.Int("keyCount", len(keys)),
+		)
+	}
 
 	return err
+}
+
+func resolveActionLabel(status TxnStatus) string {
+	if status.IsCommitted() {
+		return "commit"
+	}
+	return "rollback"
 }
 
 func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
@@ -1247,8 +1263,16 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
+	resolveAction := resolveActionLabel(status)
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
+			zap.String("action", resolveAction),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", status.CommitTS()),
+			zap.Bool("resolveLite", resolveLite),
+			zap.Bool("resolvedByCheckTxnStatus", true),
+		)
 		return nil
 	}
 	for {
@@ -1264,8 +1288,6 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()
-		} else {
-			logutil.BgLogger().Info("resolveLock rollback", zap.String("lock", l.String()))
 		}
 
 		if resolveLite {
@@ -1312,6 +1334,14 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if !resolveLite {
 			cleanRegions[loc.Region] = struct{}{}
 		}
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
+			zap.String("action", resolveAction),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", lreq.CommitVersion),
+			zap.Uint64("regionID", loc.Region.GetID()),
+			zap.Bool("resolveLite", resolveLite),
+			zap.Bool("resolvedByCheckTxnStatus", false),
+		)
 		return nil
 	}
 }
@@ -1325,6 +1355,12 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if bytes.Equal(l.Key, l.Primary) {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock skipped rpc (resolved by check txn status)",
+			zap.String("action", "rollback"),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Bool("regionResolve", pessimisticRegionResolve),
+			zap.Bool("resolvedByCheckTxnStatus", true),
+		)
 		return nil
 	}
 	for {
@@ -1381,6 +1417,14 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 		if pessimisticRegionResolve && pessimisticCleanRegions != nil {
 			pessimisticCleanRegions[loc.Region] = struct{}{}
 		}
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock rpc finished",
+			zap.String("action", "rollback"),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("forUpdateTS", forUpdateTS),
+			zap.Uint64("regionID", loc.Region.GetID()),
+			zap.Bool("regionResolve", pessimisticRegionResolve),
+			zap.Bool("resolvedByCheckTxnStatus", false),
+		)
 		return nil
 	}
 }
