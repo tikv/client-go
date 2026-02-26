@@ -648,6 +648,12 @@ func (actionPessimisticRollback) handleSingleBatch(
 		}
 		return c.pessimisticRollbackMutations(bo, batch.mutations)
 	}
+	logutil.Logger(bo.GetCtx()).Info("2PC secondary lock cleanup pessimistic-rollback rpc finished",
+		zap.Uint64("txnStartTS", c.startTS),
+		zap.Uint64("forUpdateTS", forUpdateTS),
+		zap.Uint64("regionID", batch.region.GetID()),
+		zap.Int("keyCount", batch.mutations.Len()),
+	)
 	return nil
 }
 
