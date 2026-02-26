@@ -2081,7 +2081,7 @@ func (s *RegionRequestSender) onRegionError(
 		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
 		}
-		logutil.Logger(bo.GetCtx()).Warn(
+		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx),
