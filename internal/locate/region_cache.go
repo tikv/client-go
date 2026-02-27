@@ -2438,8 +2438,8 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, limit: %d, err: %v",
-					limit, err)
+				return nil, errors.Errorf("failed to decode region range key, limit: %d, startKey: %q, endKey: %q, err: %v",
+					limit, redact.Key(startKey), redact.Key(endKey), err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
@@ -2533,9 +2533,14 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 				return c.batchScanRegionsFallback(bo, keyRanges, limit, opts...)
 			}
 			if apicodec.IsDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, err: %v",
-					len(keyRanges), limit, err)
+				var b strings.Builder
+				for i, kr := range keyRanges {
+					fmt.Fprintf(&b, "[%d] start: %q, end: %q; ", i, redact.Key(kr.StartKey), redact.Key(kr.EndKey))
+				}
+				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, keyRanges: %s, err: %v",
+					len(keyRanges), limit, b.String(), err)
 			}
+
 			metrics.RegionCacheCounterWithBatchScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
 				"batchScanRegion from PD failed, range num: %d, limit: %d, err: %v",
