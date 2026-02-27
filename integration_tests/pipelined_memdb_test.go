@@ -472,6 +472,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
 	originManagedTTLVal := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	originMaxPipelinedTxnTTL := atomic.LoadUint64(&transaction.MaxPipelinedTxnTTL)
+	restoreConf := restoreGlobalConfFunc()                   // Get the restore function BEFORE changing config
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 100)     // set to 100ms
 	atomic.StoreUint64(&transaction.MaxPipelinedTxnTTL, 200) // set to 200ms
 	updateGlobalConfig(func(conf *config.Config) {
@@ -480,7 +481,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
 	defer func() {
 		atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedTTLVal)
 		atomic.StoreUint64(&transaction.MaxPipelinedTxnTTL, originMaxPipelinedTxnTTL)
-		restoreGlobalConfFunc()
+		restoreConf()
 	}()
 
 	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())

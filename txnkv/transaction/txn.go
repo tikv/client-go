@@ -619,6 +619,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			var value []byte
 			var op kvrpcpb.Op
 
+			// TODO(slock): pipelined DML do not prewrite shared lock even when flags.HasLockedInShareMode() is true.
 			if !it.HasValue() {
 				if !flags.HasLocked() {
 					continue
@@ -1255,8 +1256,8 @@ func (txn *KVTxn) collectAggressiveLockingStats(lockCtx *tikv.LockCtx, keys int,
 	lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
 }
 
-func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, keys [][]byte) error {
-	if len(keys) > 1 && txn.IsInAggressiveLockingMode() {
+func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockCtx *tikv.LockCtx, keys [][]byte) error {
+	if (len(keys) > 1 || lockCtx.InShareMode) && txn.IsInAggressiveLockingMode() {
 		// Only allow fair locking if it only needs to lock one key. Considering that it's possible that a
 		// statement causes multiple calls to `LockKeys` (which means some keys may have been locked in fair
 		// locking mode), here we exit fair locking mode by calling DoneFairLocking instead of cancelling.
@@ -1297,16 +1298,24 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
 
-	err = txn.exitAggressiveLockingIfInapplicable(ctx, keysInput)
+	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
 	if err != nil {
 		return err
 	}
 
 	defer func() {
-		if txn.isInternal() {
-			metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+		if lockCtx.InShareMode {
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithSharedLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithSharedLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		} else {
-			metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			if txn.isInternal() {
+				metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+			} else {
+				metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+			}
 		}
 		if err == nil {
 			if lockCtx.PessimisticLockWaited != nil {
@@ -1329,14 +1338,26 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 	}()
-	defer func() {
-		if fn != nil {
-			fn()
-		}
-	}()
+	if fn != nil {
+		defer fn()
+	}
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
+	}
+
+	if lockCtx.InShareMode {
+		// create shared lock span in tracing.
+		if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+			span1 := span.Tracer().StartSpan("Shared Lock", opentracing.ChildOf(span.Context()))
+			defer span1.Finish()
+			ctx = opentracing.ContextWithSpan(ctx, span1)
+		}
+
+		// Shared lock in aggressive locking mode is not supported.
+		if txn.IsInAggressiveLockingMode() {
+			txn.DoneAggressiveLocking(ctx)
+		}
 	}
 
 	memBuf := txn.us.GetMemBuffer()
@@ -1344,12 +1365,19 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	memBuf.RLock()
 	for _, key := range keysInput {
 		// The value of lockedMap is only used by pessimistic transactions.
-		var valueExist, locked, checkKeyExists bool
+		var valueExist, locked, lockedInShareMode, checkKeyExists bool
 		if flags, err := memBuf.GetFlags(key); err == nil {
 			locked = flags.HasLocked()
+			lockedInShareMode = flags.HasLockedInShareMode()
 			valueExist = flags.HasLockedValueExists()
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
+
+		if lockedInShareMode && !lockCtx.InShareMode {
+			memBuf.RUnlock()
+			return errors.New("upgrading a shared lock to an exclusive lock is not supported")
+		}
+
 		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
 		isInLastAggressiveLockingStage := false
 		if txn.IsInAggressiveLockingMode() {
@@ -1427,6 +1455,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 		if txn.committer.primaryKey == nil {
+			if lockCtx.InShareMode {
+				// TODO(slock): currently a shared locked key can not be selected as primary key, that is, some keys
+				// should be locked in exclusive mode before acquiring shared locks.
+				return errors.New("pessimistic lock in share mode requires primary key to be selected")
+			}
 			assignedPrimaryKey = true
 			txn.selectPrimaryForPessimisticLock(keys)
 		}
@@ -1597,7 +1630,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			if !valExists {
 				setValExists = tikv.SetKeyLockedValueNotExists
 			}
-			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
+			setLockMode := tikv.SetKeyLockedInExclusiveMode
+			if lockCtx.InShareMode && txn.IsPessimistic() {
+				setLockMode = tikv.SetKeyLockedInShareMode
+			}
+			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setLockMode)
 		}
 	}
 	if err != nil {

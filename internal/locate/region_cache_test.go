@@ -2552,7 +2552,7 @@ func generateKeyForSimulator(id int, keyLen int) []byte {
 
 func BenchmarkInsertRegionToCache(b *testing.B) {
 	b.StopTimer()
-	cache := newTestRegionCache()
+	cache := NewTestRegionCache()
 	r := &Region{
 		meta: &metapb.Region{
 			Id:          1,
@@ -2589,7 +2589,7 @@ func BenchmarkInsertRegionToCache(b *testing.B) {
 
 func BenchmarkInsertRegionToCache2(b *testing.B) {
 	b.StopTimer()
-	cache := newTestRegionCache()
+	cache := NewTestRegionCache()
 	r := &Region{
 		meta: &metapb.Region{
 			Id:          1,

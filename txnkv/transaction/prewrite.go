@@ -437,7 +437,36 @@ func (action actionPrewrite) handleSingleBatch(
 				return c.extractKeyExistsErr(e)
 			}
 
-			// Extract lock from key error
+			// Check if this is a shared lock, which needs special handling
+			lockInfo := keyErr.GetLocked()
+			if lockInfo != nil {
+				if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+					for _, sharedLockInfo := range sharedLockInfos {
+						lock := txnlock.NewLock(sharedLockInfo)
+						if _, ok := logged[lock.TxnID]; !ok {
+							logutil.BgLogger().Info(
+								"prewrite encounters shared lock. "+
+									"More locks belonging to the same transaction may be omitted",
+								zap.Uint64("session", c.sessionID),
+								zap.Uint64("txnID", c.startTS),
+								zap.Stringer("lock", lock),
+							)
+							logged[lock.TxnID] = struct{}{}
+						}
+						if lock.TxnID > c.startTS && !c.isPessimistic {
+							return tikverr.NewErrWriteConflictWithArgs(
+								c.startTS, lock.TxnID, 0, lock.Key,
+								kvrpcpb.WriteConflict_Optimistic,
+							)
+						}
+						locks = append(locks, lock)
+					}
+					// If there are shared locks, the wrapper lock is meaningless.
+					continue
+				}
+			}
+
+			// Extract lock from key error (for non-shared locks)
 			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err1 != nil {
 				return err1
