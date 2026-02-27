@@ -2279,8 +2279,8 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 	searchPrev := false
 	opts = append(opts, opt.WithBuckets())
 	for count := 0; ; count++ {
-		// For the first try, we can try to get region from router or follower,
-		// but for retry, we only try to get region from PD leader to avoid stale region info.
+		// For the first, we can get region from router or follower,
+		// but for retry, we only get region from PD leader to avoid stale region info.
 		if count == 1 {
 			opts = append(opts, opt.WithAllowPDLeaderOnly())
 		}

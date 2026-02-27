@@ -459,7 +459,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		start := time.Now()
 		store, err = c.fetchStore(bo.GetCtx(), s.storeID, opts...)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
-		opts = nil // only allow router service handle request for the first time
+		opts = []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()} // only allow router service handle request for the first time
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
@@ -1148,7 +1148,11 @@ func (u *storeCacheUpdater) tick(ctx context.Context, now time.Time) bool {
 	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithAllowRouterServiceHandleStoreRequest())
 	if err != nil {
 		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
-		return false
+		storeList, err = u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithPDLeaderHandleStoreRequestOnly())
+		if err != nil {
+			logutil.Logger(ctx).Info("refresh full store list with PD leader handle request only failed", zap.Error(err))
+			return false
+		}
 	}
 	u.insertMissingStores(ctx, storeList)
 	u.cleanUpStaleStoreMetrics(ctx, storeList, now)
