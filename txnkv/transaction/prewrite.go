@@ -473,8 +473,8 @@ func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Erro
 	return false, err
 }
 
-// extractKeyErrs extracts locks from key errors.
 func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyError) ([]*txnlock.Lock, error) {
+	// extractKeyErrs extracts locks from key errors.
 	var locks []*txnlock.Lock
 	logged := make(map[uint64]struct{})
 	for _, keyErr := range keyErrs {
@@ -484,7 +484,42 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 			return nil, handler.committer.extractKeyExistsErr(e)
 		}
 
-		// Extract lock from key error
+		// Check if this is a shared lock, which needs special handling
+		lockInfo := keyErr.GetLocked()
+		if lockInfo != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+				for _, sharedLockInfo := range sharedLockInfos {
+					lock := txnlock.NewLock(sharedLockInfo)
+					if _, ok := logged[lock.TxnID]; !ok {
+						logutil.BgLogger().Info(
+							"prewrite encounters shared lock. "+
+								"More locks belonging to the same transaction may be omitted",
+							zap.Uint64("session", handler.committer.sessionID),
+							zap.Uint64("txnID", handler.committer.startTS),
+							zap.Stringer("lock", lock),
+							zap.Stringer("policy", handler.committer.txn.prewriteEncounterLockPolicy),
+						)
+						logged[lock.TxnID] = struct{}{}
+					}
+					// For shared locks encountered during prewrite, same logic as exclusive locks applies
+					if (lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic) ||
+						handler.committer.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+						return nil, tikverr.NewErrWriteConflictWithArgs(
+							handler.committer.startTS,
+							lock.TxnID,
+							0,
+							lock.Key,
+							kvrpcpb.WriteConflict_Optimistic,
+						)
+					}
+					locks = append(locks, lock)
+				}
+				// If there are shared locks, the wrapper lock is meaningless.
+				continue
+			}
+		}
+
+		// Extract lock from key error (for non-shared locks)
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
 			return nil, err1
