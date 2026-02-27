@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1170,13 +1169,13 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
-	i := sort.Search(searchLen, func(i int) bool {
-		return bytes.Compare(key, keys[i]) < 0
+	i, found := slices.BinarySearchFunc(keys, key, func(a, b []byte) int {
+		return bytes.Compare(a, b)
 	})
 
 	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
 	// which can happen if the bucket information is stale.
-	if i == 0 ||
+	if (!found && i == 0) ||
 		// the key isn't located in the last range.
 		(i == searchLen && len(keys[searchLen]) != 0 && bytes.Compare(key, keys[searchLen]) >= 0) {
 		return nil
