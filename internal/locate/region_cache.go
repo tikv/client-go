@@ -2278,7 +2278,12 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 	var backoffErr error
 	searchPrev := false
 	opts = append(opts, opt.WithBuckets())
-	for {
+	for count := 0; ; count++ {
+		// For the first try, we can try to get region from router or follower,
+		// but for retry, we only try to get region from PD leader to avoid stale region info.
+		if count == 1 {
+			opts = append(opts, opt.WithAllowPDLeaderOnly())
+		}
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
