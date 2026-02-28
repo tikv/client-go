@@ -459,7 +459,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		start := time.Now()
 		store, err = c.fetchStore(bo.GetCtx(), s.storeID, opts...)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
-		opts = []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()} // only allow router service handle request for the first time
+		opts = []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()} // after first attempt, retry via PD leader only
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {

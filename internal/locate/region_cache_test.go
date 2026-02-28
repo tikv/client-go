@@ -342,7 +342,10 @@ func (s *testRegionCacheSuite) getAddr(key []byte, replicaRead kv.ReplicaReadTyp
 }
 
 func (s *testRegionCacheSuite) TestStoreLabels() {
-	s.Nil(failpoint.Enable("tikvclient/mustLeader", `return`))
+	s.NoError(failpoint.Enable("tikvclient/mustLeader", `return`))
+	s.T().Cleanup(func() {
+		s.NoError(failpoint.Disable("tikvclient/mustLeader"))
+	})
 	testcases := []struct {
 		storeID uint64
 	}{
@@ -368,7 +371,6 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 		s.Equal(len(stores), 1)
 		s.Equal(stores[0].GetLabels(), labels)
 	}
-	s.Nil(failpoint.Disable("tikvclient/mustLeader"))
 }
 
 func (s *testRegionCacheSuite) TestSimple() {
@@ -2113,11 +2115,13 @@ func (s *testRegionCacheSuite) TestLoadRegionsWithLeader() {
 		s.cluster.Split(regions[i], regions[i+1], []byte{'b' + byte(i)}, peers[i+1], peers[i+1][0])
 	}
 	// retry load region should redirect to leader and succeed instead of returning stale region error.
-	s.Nil(failpoint.Enable("tikvclient/mustLeader", `return`))
-	region, err := s.cache.loadRegion(s.bo, []byte("a"), false)
+	s.NoError(failpoint.Enable("tikvclient/mustLeader", `return`))
+	s.T().Cleanup(func() {
+		s.NoError(failpoint.Disable("tikvclient/mustLeader"))
+	})
+	region, err := s.cache.loadRegion(s.bo, []byte("a"), false, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
 	s.Nil(err)
 	s.Equal(region.GetID(), regions[0])
-	s.Nil(failpoint.Disable("tikvclient/mustLeader"))
 }
 
 func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
