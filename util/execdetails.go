@@ -311,7 +311,7 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 	ld.ResolveLock.ResolveLockTime += lockKey.ResolveLock.ResolveLockTime
 	ld.BackoffTime += lockKey.BackoffTime
 	ld.LockRPCTime += lockKey.LockRPCTime
-	ld.LockRPCCount += ld.LockRPCCount
+	ld.LockRPCCount += lockKey.LockRPCCount
 	ld.Mu.BackoffTypes = append(ld.Mu.BackoffTypes, lockKey.Mu.BackoffTypes...)
 	ld.RetryCount++
 	if ld.Mu.SlowestReqTotalTime < lockKey.Mu.SlowestReqTotalTime {
