@@ -235,6 +235,15 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 
 func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	enforceCircuitBreakerFor("GetRegion", ctx)
+	if _, err := util.EvalFailpoint("mustLeader"); err == nil {
+		op := &opt.GetRegionOp{}
+		for _, opt := range opts {
+			opt(op)
+		}
+		if op.AllowFollowerHandle || op.AllowRouterServiceHandle {
+			return nil, status.Errorf(codes.Unavailable, "mock GetRegion: not leader")
+		}
+	}
 	region, peer, buckets, downPeers := c.cluster.GetRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -308,6 +317,15 @@ func (c *pdClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.Get
 		return nil, ctx.Err()
 	default:
 	}
+	if _, err := util.EvalFailpoint("mustLeader"); err == nil {
+		op := &opt.GetStoreOp{}
+		for _, opt := range opts {
+			opt(op)
+		}
+		if op.AllowRouterServiceHandle {
+			return nil, status.Errorf(codes.Unavailable, "mock GetStore: not leader")
+		}
+	}
 	store := c.cluster.GetStore(storeID)
 	// It's same as PD's implementation.
 	if store == nil {
@@ -320,6 +338,15 @@ func (c *pdClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.Get
 }
 
 func (c *pdClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
+	if _, err := util.EvalFailpoint("mustLeader"); err == nil {
+		op := &opt.GetStoreOp{}
+		for _, opt := range opts {
+			opt(op)
+		}
+		if op.AllowRouterServiceHandle {
+			return nil, status.Errorf(codes.Unavailable, "mock GetAllStores: not leader")
+		}
+	}
 	return c.cluster.GetAllStores(), nil
 }
 
