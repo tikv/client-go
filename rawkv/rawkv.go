@@ -693,6 +693,44 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
 }
 
+func (c *Client) CompareAndDelete(ctx context.Context, key, previousValue []byte, options ...RawOption) ([]byte, bool, error) {
+	if !c.atomic {
+		return nil, false, errors.New("using CompareAndDelete without enable atomic mode")
+	}
+
+	opts := c.getRawKVOptions(options...)
+	reqArgs := kvrpcpb.RawCASRequest{
+		Key:    key,
+		Cf:     c.getColumnFamily(opts),
+		Delete: true,
+	}
+	if previousValue == nil {
+		reqArgs.PreviousNotExist = true
+	} else {
+		reqArgs.PreviousValue = previousValue
+	}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawCompareAndSwap, &reqArgs)
+	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+	resp, _, err := c.sendReq(ctx, key, req, false)
+	if err != nil {
+		return nil, false, err
+	}
+	if resp.Resp == nil {
+		return nil, false, errors.WithStack(tikverr.ErrBodyMissing)
+	}
+
+	cmdResp := resp.Resp.(*kvrpcpb.RawCASResponse)
+	if cmdResp.GetError() != "" {
+		return nil, false, errors.New(cmdResp.GetError())
+	}
+
+	if cmdResp.PreviousNotExist {
+		return nil, cmdResp.Succeed, nil
+	}
+	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
+}
+
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})

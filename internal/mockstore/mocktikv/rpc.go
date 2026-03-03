@@ -537,6 +537,7 @@ func (h kvHandler) HandleKvRawCompareAndSwap(req *kvrpcpb.RawCASRequest) *kvrpcp
 		req.GetKey(),
 		req.GetPreviousValue(),
 		req.GetValue(),
+		req.GetDelete(),
 	)
 	if err != nil {
 		return &kvrpcpb.RawCASResponse{
