@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -340,6 +341,21 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	defer func() {
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
+		var writeRPCCount float64
+		if req != nil && req.StoreTp == tikvrpc.TiKV && !req.IsDebugReq() {
+			reqInfo := resourcecontrol.MakeRequestInfo(req)
+			if reqInfo != nil && reqInfo.IsWrite() && !reqInfo.Bypass() {
+				writeRPCCount = 1
+			}
+		}
+		if resp != nil {
+			switch resp.Resp.(type) {
+			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
+				// Stream responses are handled in Recv().
+			default:
+				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
+			}
+		}
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
@@ -427,6 +443,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.Ctx = ctx
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
