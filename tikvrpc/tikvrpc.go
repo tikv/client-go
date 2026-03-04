@@ -47,6 +47,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -820,6 +821,7 @@ type CopStreamResponse struct {
 	*coprocessor.Response // The first result of Recv()
 	Timeout               time.Duration
 	Lease                 // Shared by this object and a background goroutine.
+	Ctx                   context.Context
 }
 
 // BatchCopStreamResponse comprises the BatchCoprocessorClient , the first result and timeout detector.
@@ -1315,6 +1317,10 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	ret, err := resp.Tikv_CoprocessorStreamClient.Recv()
 
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
+	if ret != nil {
+		resp.Response = ret
+		config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
+	}
 	return ret, errors.WithStack(err)
 }
 
@@ -1336,6 +1342,9 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	ret, err := resp.Tikv_BatchCoprocessorClient.Recv()
 
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
+	if ret != nil {
+		resp.BatchResponse = ret
+	}
 	return ret, errors.WithStack(err)
 }
 
