@@ -100,6 +100,11 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 			zap.Uint64("txnStartTS", c.startTS))
 		return err
 	}
+	logutil.Logger(bo.GetCtx()).Info("2PC secondary lock cleanup batch-rollback rpc finished",
+		zap.Uint64("txnStartTS", c.startTS),
+		zap.Uint64("regionID", batch.region.GetID()),
+		zap.Int("keyCount", batch.mutations.Len()),
+	)
 	return nil
 }
 
