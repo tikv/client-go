@@ -58,7 +58,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -343,8 +342,10 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		connPool.updateRPCMetrics(req, resp, elapsed)
 		var writeRPCCount float64
 		if req != nil && req.StoreTp == tikvrpc.TiKV && !req.IsDebugReq() {
-			reqInfo := resourcecontrol.MakeRequestInfo(req)
-			if reqInfo != nil && reqInfo.IsWrite() && !reqInfo.Bypass() {
+			// Count completed write RPCs by request type directly.
+			// Don't gate on resource control bypass, because bypassed internal writes should still be included
+			// in RU v2 aggregation.
+			if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
 				writeRPCCount = 1
 			}
 		}

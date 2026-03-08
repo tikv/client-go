@@ -55,3 +55,26 @@ func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
 
 	require.Equal(t, int64(157258), ruDetails.TiKVRUV2())
 }
+
+func TestUpdateTiKVRUV2FromExecDetailsV2MergesWeightsWithDefaults(t *testing.T) {
+	original := GetGlobalConfig()
+	t.Cleanup(func() {
+		if original != nil {
+			StoreGlobalConfig(original)
+		}
+	})
+
+	defaultWeights := DefaultRUV2TiKVConfig()
+	cfg := DefaultConfig()
+	cfg.TiKVClient.RUV2 = RUV2TiKVConfig{
+		// Only override a single field; the rest should fall back to defaults.
+		TiKVKVEngineCacheMiss: defaultWeights.TiKVKVEngineCacheMiss * 2,
+	}
+	StoreGlobalConfig(&cfg)
+
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	UpdateTiKVRUV2FromExecDetailsV2(ctx, nil, 1)
+	require.Equal(t, int64(defaultWeights.ResourceManagerWriteCntTiKV*defaultWeights.RUScale), ruDetails.TiKVRUV2())
+}
