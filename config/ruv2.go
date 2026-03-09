@@ -32,13 +32,9 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 		return
 	}
 
-	defaultWeights := DefaultRUV2TiKVConfig()
-	weights := defaultWeights
+	weights := DefaultRUV2TiKVConfig()
 	if cfg := GetGlobalConfig(); cfg != nil {
-		weights = mergeRUV2TiKVConfig(defaultWeights, cfg.TiKVClient.RUV2)
-	}
-	if weights.RUScale == 0 {
-		weights.RUScale = defaultWeights.RUScale
+		weights = cfg.TiKVClient.RUV2
 	}
 
 	deltaFloat := writeRPCCount * weights.ResourceManagerWriteCntTiKV
@@ -66,38 +62,4 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 		return
 	}
 	ruDetails.AddTiKVRUV2(deltaFloat * weights.RUScale)
-}
-
-func mergeRUV2TiKVConfig(base, override RUV2TiKVConfig) RUV2TiKVConfig {
-	// RUV2TiKVConfig uses non-pointer float64 fields, so we can't distinguish "unset" from "explicitly set to 0"
-	// when decoding from config. Here we treat 0 as "unset" and keep the base (default) value.
-	merged := base
-	if override.RUScale != 0 {
-		merged.RUScale = override.RUScale
-	}
-	if override.TiKVKVEngineCacheMiss != 0 {
-		merged.TiKVKVEngineCacheMiss = override.TiKVKVEngineCacheMiss
-	}
-	if override.ResourceManagerWriteCntTiKV != 0 {
-		merged.ResourceManagerWriteCntTiKV = override.ResourceManagerWriteCntTiKV
-	}
-	if override.ExecutorInputs != 0 {
-		merged.ExecutorInputs = override.ExecutorInputs
-	}
-	if override.TiKVCoprocessorExecutorIterations != 0 {
-		merged.TiKVCoprocessorExecutorIterations = override.TiKVCoprocessorExecutorIterations
-	}
-	if override.TiKVCoprocessorResponseBytes != 0 {
-		merged.TiKVCoprocessorResponseBytes = override.TiKVCoprocessorResponseBytes
-	}
-	if override.TiKVRaftstoreStoreWriteTriggerWB != 0 {
-		merged.TiKVRaftstoreStoreWriteTriggerWB = override.TiKVRaftstoreStoreWriteTriggerWB
-	}
-	if override.TiKVStorageProcessedKeysBatchGet != 0 {
-		merged.TiKVStorageProcessedKeysBatchGet = override.TiKVStorageProcessedKeysBatchGet
-	}
-	if override.TiKVStorageProcessedKeysGet != 0 {
-		merged.TiKVStorageProcessedKeysGet = override.TiKVStorageProcessedKeysGet
-	}
-	return merged
 }
