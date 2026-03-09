@@ -26,9 +26,7 @@ import (
 func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
 	original := GetGlobalConfig()
 	t.Cleanup(func() {
-		if original != nil {
-			StoreGlobalConfig(original)
-		}
+		StoreGlobalConfig(original)
 	})
 
 	cfg := DefaultConfig()
