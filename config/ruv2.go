@@ -32,10 +32,7 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 		return
 	}
 
-	weights := DefaultRUV2TiKVConfig()
-	if cfg := GetGlobalConfig(); cfg != nil {
-		weights = cfg.TiKVClient.RUV2
-	}
+	weights := GetGlobalConfig().TiKVClient.RUV2
 
 	deltaFloat := writeRPCCount * weights.ResourceManagerWriteCntTiKV
 	if details != nil && details.RuV2 != nil {
