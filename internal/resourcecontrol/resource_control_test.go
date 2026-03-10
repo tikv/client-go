@@ -3,9 +3,11 @@ package resourcecontrol
 import (
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
@@ -45,4 +47,39 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(3), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(0), info.StoreID())
+}
+
+func TestResponseInfoReadBytes(t *testing.T) {
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					TotalVersionsSize:     100,
+					ProcessedVersionsSize: 80,
+				},
+			},
+		},
+	}
+	info := MakeResponseInfo(resp)
+	if config.NextGen {
+		assert.Equal(t, uint64(100), info.ReadBytes())
+	} else {
+		assert.Equal(t, uint64(80), info.ReadBytes())
+	}
+
+	if config.NextGen {
+		// Compatibility: when processed > total (older TiKV), use processed.
+		respCompat := &tikvrpc.Response{
+			Resp: &coprocessor.Response{
+				ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+					ScanDetailV2: &kvrpcpb.ScanDetailV2{
+						TotalVersionsSize:     80,
+						ProcessedVersionsSize: 100,
+					},
+				},
+			},
+		}
+		infoCompat := MakeResponseInfo(respCompat)
+		assert.Equal(t, uint64(100), infoCompat.ReadBytes())
+	}
 }
