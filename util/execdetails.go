@@ -816,8 +816,6 @@ type RUDetails struct {
 	tikvRUV2 *uatomic.Float64
 	// tidbRUV2 stores TiDB RU v2 value in scaled units.
 	tidbRUV2 *uatomic.Float64
-	// totalRUV2 stores total RU v2 value in scaled units.
-	totalRUV2 *uatomic.Float64
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -828,7 +826,6 @@ func NewRUDetails() *RUDetails {
 		ruWaitDuration: uatomic.NewDuration(0),
 		tikvRUV2:       uatomic.NewFloat64(0),
 		tidbRUV2:       uatomic.NewFloat64(0),
-		totalRUV2:      uatomic.NewFloat64(0),
 	}
 }
 
@@ -841,7 +838,6 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 		ruWaitDuration: uatomic.NewDuration(waitDur),
 		tikvRUV2:       uatomic.NewFloat64(0),
 		tidbRUV2:       uatomic.NewFloat64(0),
-		totalRUV2:      uatomic.NewFloat64(0),
 	}
 }
 
@@ -853,7 +849,6 @@ func (rd *RUDetails) Clone() *RUDetails {
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
 		tidbRUV2:       uatomic.NewFloat64(rd.tidbRUV2.Load()),
-		totalRUV2:      uatomic.NewFloat64(rd.totalRUV2.Load()),
 	}
 }
 
@@ -864,7 +859,6 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
 	rd.tidbRUV2.Add(other.tidbRUV2.Load())
-	rd.totalRUV2.Add(other.totalRUV2.Load())
 }
 
 // String implements fmt.Stringer interface.
@@ -924,18 +918,10 @@ func (rd *RUDetails) AddTiDBRUV2(delta float64) {
 
 // TotalRUV2 returns the total RU v2 value (scaled integer) accumulated in the client.
 func (rd *RUDetails) TotalRUV2() int64 {
-	if rd == nil || rd.totalRUV2 == nil {
+	if rd == nil {
 		return 0
 	}
-	return int64(rd.totalRUV2.Load())
-}
-
-// AddTotalRUV2 adds a delta (scaled) to the accumulated total RU v2 value.
-func (rd *RUDetails) AddTotalRUV2(delta float64) {
-	if rd == nil || rd.totalRUV2 == nil || delta == 0 {
-		return
-	}
-	rd.totalRUV2.Add(delta)
+	return rd.TiKVRUV2() + rd.TiDBRUV2()
 }
 
 // Update updates the RU runtime stats with the given consumption info.
