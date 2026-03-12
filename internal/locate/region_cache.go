@@ -2161,6 +2161,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 
 		// Keep the buckets information if needed.
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
+			metrics.TiKVStaleBucketFromPDCounter.Inc()
 			store.buckets = oldRegionStore.buckets
 		}
 	}
