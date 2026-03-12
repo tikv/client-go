@@ -140,6 +140,9 @@ type RUV2TiKVConfig struct {
 }
 
 // DefaultRUV2TiKVConfig returns the default RU v2 TiKV-side configuration.
+// These coefficients were fitted from test workloads to map TiKV-side ExecDetailsV2.RuV2 counters
+// back to scaled RU values as stably as possible while staying close to the legacy RU v1 accounting.
+// Keep RUScale and the per-counter weights in sync with that fitting procedure when updating them.
 func DefaultRUV2TiKVConfig() RUV2TiKVConfig {
 	return RUV2TiKVConfig{
 		RUScale: 5697.054498,
