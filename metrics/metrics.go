@@ -122,6 +122,7 @@ var (
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 	TiKVBucketClampedCounter                       prometheus.Counter
+	TIKVStaleBucketFromPDCounter                   prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 	TiKVTxnWriteConflictCounter                    prometheus.Counter
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
@@ -897,6 +898,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of stale region from PD",
 			ConstLabels: constLabels,
 		})
+	TIKVStaleBucketFromPDCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_bucket_from_pd",
+			Help:        "Counter of stale bucket from PD",
+			ConstLabels: constLabels,
+		})
 	TiKVBucketClampedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -1075,6 +1084,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadRequestBytes)
 	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
+	prometheus.MustRegister(TIKVStaleBucketFromPDCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

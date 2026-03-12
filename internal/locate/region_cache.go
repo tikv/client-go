@@ -2959,13 +2959,6 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 					zap.Uint64("latestBucketsVer", latestBucketsVer), zap.Error(err))
 				return
 			}
-			if pdBuckets := new.getStore().buckets; pdBuckets != nil && pdBuckets.GetVersion() < bucketsVer {
-				logutil.Logger(bo.GetCtx()).Warn("buckets version in cache is newer than PD",
-					zap.String("region", regionID.String()),
-					zap.Uint64("old-bucketsVer", bucketsVer),
-					zap.Uint64("pd-bucketsVer", pdBuckets.GetVersion()),
-					zap.Uint64("latestBucketsVer", latestBucketsVer))
-			}
 			c.mu.Lock()
 			c.insertRegionToCache(new, true, true)
 			c.mu.Unlock()
