@@ -959,8 +959,8 @@ github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl
 github.com/boombuler/barcode v1.0.1/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/bufferflies/tidb v0.0.0-20260312105416-be8652ec7c4d h1:DOQTabNPOkrKG5v8e6AaH234EpKY9pAqpDpEr/cWVOM=
 github.com/bufferflies/tidb v0.0.0-20260312105416-be8652ec7c4d/go.mod h1:yMVFeJcsXYQl3MSDz4RTpbtsCA6uWG8cGD62hc0DnSM=
-github.com/bufferflies/tidb/pkg/parser v0.0.0-20260121125603-078992d1d596 h1:USULy7CWYKZr4PU3gwgMlCfv3N7+8Y50MAZuIKTwUpc=
-github.com/bufferflies/tidb/pkg/parser v0.0.0-20260121125603-078992d1d596/go.mod h1:oHE+ub2QaDERd+UNHe4z2BhFV2jZrm7VNOe6atR9AF4=
+github.com/bufferflies/tidb/pkg/parser v0.0.0-20260312105416-be8652ec7c4d h1:0Aw7alBBU90Wm04VTTRYlS7gZ8IivEz1xfTm7BrpNhg=
+github.com/bufferflies/tidb/pkg/parser v0.0.0-20260312105416-be8652ec7c4d/go.mod h1:oHE+ub2QaDERd+UNHe4z2BhFV2jZrm7VNOe6atR9AF4=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5 h1:BjkPE3785EwPhhyuFkbINB+2a1xATwk8SNDWnJiD41g=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5/go.mod h1:jtAfVaU/2cu1+wdSRPWE2c1N2qeAA3K4RH9pYgqwets=
 github.com/carlmjohnson/flagext v0.21.0 h1:/c4uK3ie786Z7caXLcIMvePNSSiH3bQVGDvmGLMme60=
