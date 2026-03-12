@@ -1862,7 +1862,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 
 	cachedRegion = s.getRegion([]byte("a"))
 	buckets = cachedRegion.getStore().buckets
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), buckets.GetVersion()-1)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, buckets.GetVersion()-1)
 	// don't update bucket if the new one's version is stale.
 	waitUpdateBuckets(buckets, []byte("a"))
 
@@ -1871,7 +1871,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	// we should replace the version of `cacheRegion` because of stale.
 	s.cluster.PutRegion(r.GetId(), newMeta.RegionEpoch.ConfVer, newMeta.RegionEpoch.Version, []uint64{s.store1, s.store2}, []uint64{s.peer1, s.peer2}, s.peer1)
 	s.cluster.SplitRegionBuckets(cachedRegion.GetID(), defaultBuckets.Keys, defaultBuckets.Version)
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), defaultBuckets.GetVersion())
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, defaultBuckets.GetVersion())
 	waitUpdateBuckets(defaultBuckets, []byte("a"))
 
 	// update buckets if the new one's version is greater than old one's.
@@ -1882,7 +1882,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), nilToEmtpyBytes(r.GetEndKey())},
 	}
 	s.cluster.SplitRegionBuckets(newBuckets.RegionId, newBuckets.Keys, newBuckets.Version)
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), newBuckets.GetVersion())
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, newBuckets.GetVersion())
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
 
@@ -1915,7 +1915,7 @@ func (s *testRegionCacheSuite) TestLocateBucket() {
 	bucketKeys = [][]byte{[]byte("a"), []byte("b")}
 	bucketVersion := uint64(time.Now().Nanosecond())
 	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, bucketVersion)
-	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), bucketVersion)
+	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), 0, bucketVersion)
 	// wait for region update
 	time.Sleep(300 * time.Millisecond)
 	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
@@ -3448,15 +3448,18 @@ func (s *testRegionCacheSuite) TestUpdateBucketsConcurrently() {
 	}
 
 	// update buckets twice concurrently
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
+	// don't update if the request bucket version is not greater than the current bucket version
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1, bucketsVer+1)
 	s.Equal(uint64(0), atomic.LoadUint64(&count))
 	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 0 }, 3*time.Second, 100*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	s.Equal(uint64(1), atomic.LoadUint64(&count))
 
 	// update buckets again after the previous update is done
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
 	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 1 }, 3*time.Second, 100*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	s.Equal(uint64(2), atomic.LoadUint64(&count))
