@@ -81,6 +81,7 @@ const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
 	DCLabelKey           = locate.DCLabelKey
 	safeTSUpdateInterval = time.Second * 2
+	tsoMaxIndexConfigKey = "tso-max-index"
 )
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
@@ -119,6 +120,11 @@ type KVStore struct {
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
+
+	// disableAsyncCommitAnd1PC indicates whether to disable async commit and 1PC optimization.
+	// Async commit and 1PC may calculate commit TS locally.
+	// When PD allocates discontinuous TSO values, these protocols must be disabled.
+	disableAsyncCommitAnd1PC bool
 
 	mock bool
 
@@ -315,12 +321,77 @@ func NewKVStore(
 
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
+	if err = store.checkPDConfig(); err != nil {
+		return nil, err
+	}
 
 	store.wg.Add(2)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
 
 	return store, nil
+}
+
+func (s *KVStore) checkPDConfig() error {
+	httpCli := s.pdHttpClient
+	if httpCli == nil {
+		discovery := s.pdClient.GetServiceDiscovery()
+		if discovery == nil {
+			// This only happens in the test environment, and we can skip the check in this case.
+			return nil
+		}
+
+		httpCli = pdhttp.NewClientWithServiceDiscovery(
+			"check-pd-config",
+			discovery,
+		)
+		defer httpCli.Close()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	cfg, err := httpCli.GetConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err = s.checkTSOMaxIndexConfig(cfg); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkTSOMaxIndexConfig checks whether tso-max-index is greater than 1,
+// if it is, async commit and 1PC will be disabled to avoid data inconsistency.
+// For example, PD may set `tso-max-index` to `2` and `tso-unique-index` to 0 to
+// guarantee the commit timestamp allocated by PD is always even,
+// to distinguish from the timestamp allocated in another cluster in active-active case.
+// If 1pc or async-commit in this case, it may use maxReadTS + 1 to calculate the commit timestamp,
+// which may be an odd number and breaks the assumption.
+func (s *KVStore) checkTSOMaxIndexConfig(cfg map[string]any) error {
+	val, found := cfg[tsoMaxIndexConfigKey]
+	if !found {
+		// If not found, `tso-max-index` is regarded as the default value `1`.
+		// We can use 1pc and async-commit because the TSO allocation is continuous.
+		return nil
+	}
+
+	tsoMaxIndex, err := strconv.ParseInt(fmt.Sprintf("%v", val), 10, 64)
+	if err != nil {
+		return errors.Wrapf(err, "invalid config '%s', value '%v'", tsoMaxIndexConfigKey, val)
+	}
+
+	if tsoMaxIndex > 1 {
+		// Disable 1pc and async-commit when `tso-max-index` > 1 because the TSO allocation is not continuous.
+		s.disableAsyncCommitAnd1PC = true
+		logutil.BgLogger().Info(
+			"KVStore should disable 1pc and async commit because tso-max-index > 1",
+			zap.Int64(tsoMaxIndexConfigKey, tsoMaxIndex),
+		)
+	}
+	return nil
 }
 
 // NewPDClient returns an unwrapped pd client.
@@ -486,6 +557,11 @@ func (s *KVStore) CurrentAllTSOKeyspaceGroupMinTs() (uint64, error) {
 		return 0, err
 	}
 	return startTS, nil
+}
+
+// IsAsyncCommitAnd1PCSupported returns whether this store allows async commit and 1PC.
+func (s *KVStore) IsAsyncCommitAnd1PCSupported() bool {
+	return !s.disableAsyncCommitAnd1PC
 }
 
 // GetTimestampWithRetry returns latest timestamp.

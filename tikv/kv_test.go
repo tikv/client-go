@@ -139,13 +139,29 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 type mockPDHTTPClient struct {
 	pdhttp.Client
 	mockGetMinResolvedTSByStoresIDs *atomic.Pointer[func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error)]
+	mockGetConfig                   func(ctx context.Context) (map[string]any, error)
 }
 
 func (c *mockPDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uint64) (uint64, map[uint64]uint64, error) {
-	if f := c.mockGetMinResolvedTSByStoresIDs.Load(); f != nil {
-		return (*f)(ctx, storeIDs)
+	if c.mockGetMinResolvedTSByStoresIDs != nil {
+		if f := c.mockGetMinResolvedTSByStoresIDs.Load(); f != nil {
+			return (*f)(ctx, storeIDs)
+		}
 	}
 	return c.Client.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
+}
+
+func (c *mockPDHTTPClient) GetConfig(ctx context.Context) (map[string]any, error) {
+	if c.mockGetConfig != nil {
+		return c.mockGetConfig(ctx)
+	}
+	return map[string]any{}, nil
+}
+
+func (c *mockPDHTTPClient) Close() {
+	if c.Client != nil {
+		c.Client.Close()
+	}
 }
 
 func (s *testKVSuite) TestMinSafeTsFromStores() {
@@ -279,4 +295,100 @@ func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
 	// this is a leak test, TestMain will check goroutine leak
 	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
 	require.Error(s.T(), err)
+}
+
+func (s *testKVSuite) TestInitAsyncCommitAnd1PCSupportedFromPDConfig() {
+	testCases := []struct {
+		name     string
+		pdConfig map[string]any
+		support  bool
+	}{
+		{
+			name:    "empty config",
+			support: true,
+		},
+		{
+			name:     "tso-max-index=uint64(0)",
+			pdConfig: map[string]any{"tso-max-index": uint64(0)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=int64(0)",
+			pdConfig: map[string]any{"tso-max-index": int64(0)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=float64(0)",
+			pdConfig: map[string]any{"tso-max-index": float64(0)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=string(0)",
+			pdConfig: map[string]any{"tso-max-index": "0"},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=uint64(1)",
+			pdConfig: map[string]any{"tso-max-index": uint64(1)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=int64(1)",
+			pdConfig: map[string]any{"tso-max-index": int64(1)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=float64(1)",
+			pdConfig: map[string]any{"tso-max-index": float64(1)},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=string(1)",
+			pdConfig: map[string]any{"tso-max-index": "1"},
+			support:  true,
+		},
+		{
+			name:     "tso-max-index=uint64(2)",
+			pdConfig: map[string]any{"tso-max-index": uint64(2)},
+			support:  false,
+		},
+		{
+			name:     "tso-max-index=int64(2)",
+			pdConfig: map[string]any{"tso-max-index": int64(2)},
+			support:  false,
+		},
+		{
+			name:     "tso-max-index=float64(2)",
+			pdConfig: map[string]any{"tso-max-index": float64(2)},
+			support:  false,
+		},
+		{
+			name:     "tso-max-index=string(2)",
+			pdConfig: map[string]any{"tso-max-index": "2"},
+			support:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			store, err := NewKVStore(
+				"TestInitAsyncCommitAnd1PCSupportedFromPDConfig-"+tc.name,
+				s.store.pdClient,
+				NewMockSafePointKV(),
+				&mocktikv.RPCClient{},
+				func(store *KVStore) {
+					store.pdHttpClient = &mockPDHTTPClient{
+						mockGetConfig: func(ctx context.Context) (map[string]any, error) {
+							return tc.pdConfig, nil
+						},
+					}
+				},
+			)
+			s.NoError(err)
+			defer func() {
+				s.NoError(store.Close())
+			}()
+			s.Equal(tc.support, store.IsAsyncCommitAnd1PCSupported())
+		})
+	}
 }

@@ -117,6 +117,7 @@ type kvstore interface {
 	// TxnLatches returns txnLatches.
 	TxnLatches() *latch.LatchesScheduler
 	GetClusterID() uint64
+	IsAsyncCommitAnd1PCSupported() bool
 	// IsClose checks whether the store is closed.
 	IsClose() bool
 	// Go run the function in a separate goroutine.
@@ -1504,6 +1505,10 @@ func sendTxnHeartBeat(
 
 // checkAsyncCommit checks if async commit protocol is available for current transaction commit, true is returned if possible.
 func (c *twoPhaseCommitter) checkAsyncCommit() bool {
+	if !c.store.IsAsyncCommitAnd1PCSupported() {
+		return false
+	}
+
 	// Disable async commit in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
@@ -1535,6 +1540,10 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 
 // checkOnePC checks if 1PC protocol is available for current transaction.
 func (c *twoPhaseCommitter) checkOnePC() bool {
+	if !c.store.IsAsyncCommitAnd1PCSupported() {
+		return false
+	}
+
 	// Disable 1PC in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
