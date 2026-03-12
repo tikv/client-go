@@ -333,20 +333,28 @@ func NewKVStore(
 }
 
 func (s *KVStore) checkPDConfig() error {
-	httpCli := s.pdHttpClient
-	if httpCli == nil {
-		discovery := s.pdClient.GetServiceDiscovery()
-		if discovery == nil {
-			// This only happens in the test environment, and we can skip the check in this case.
-			return nil
-		}
-
-		httpCli = pdhttp.NewClientWithServiceDiscovery(
-			"check-pd-config",
-			discovery,
-		)
-		defer httpCli.Close()
+	discovery := s.pdClient.GetServiceDiscovery()
+	if discovery == nil || len(discovery.GetServiceURLs()) == 0 {
+		// This only happens in the test environment, and we can skip the check in this case.
+		return nil
 	}
+
+	tlsConfig, err := config.GetGlobalConfig().Security.ToTLSConfig()
+	if err != nil {
+		return err
+	}
+
+	opts := make([]pdhttp.ClientOption, 0, 1)
+	if tlsConfig != nil {
+		opts = append(opts, pdhttp.WithTLSConfig(tlsConfig))
+	}
+
+	httpCli := pdhttp.NewClientWithServiceDiscovery(
+		"check-pd-config",
+		discovery,
+		opts...,
+	)
+	defer httpCli.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -388,6 +396,7 @@ func (s *KVStore) checkTSOMaxIndexConfig(cfg map[string]any) error {
 		s.disableAsyncCommitAnd1PC = true
 		logutil.BgLogger().Info(
 			"KVStore should disable 1pc and async commit because tso-max-index > 1",
+			zap.String("storeUUID", s.uuid),
 			zap.Int64(tsoMaxIndexConfigKey, tsoMaxIndex),
 		)
 	}

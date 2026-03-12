@@ -176,7 +176,7 @@ func TestStoreSupportAsyncCommitAnd1PC(t *testing.T) {
 	txn.SetEnableAsyncCommit(true)
 	assert.False(t, txn.enableAsyncCommit)
 	txn.SetEnable1PC(true)
-	assert.False(t, txn.enableAsyncCommit)
+	assert.False(t, txn.enable1PC)
 	assert.NoError(t, txn.Set([]byte("k"), []byte("v")))
 	// CheckAsyncCommit / CheckOnePC should return false
 	committer, err = TxnProbe{KVTxn: txn}.NewCommitter(1)
