@@ -333,28 +333,33 @@ func NewKVStore(
 }
 
 func (s *KVStore) checkPDConfig() error {
-	discovery := s.pdClient.GetServiceDiscovery()
-	if discovery == nil || len(discovery.GetServiceURLs()) == 0 {
-		// This only happens in the test environment, and we can skip the check in this case.
-		return nil
-	}
+	var httpCli pdhttp.Client
+	if intest.InTest && strings.HasPrefix(s.uuid, "testCheckPDConfig") {
+		httpCli = s.pdHttpClient
+	} else {
+		discovery := s.pdClient.GetServiceDiscovery()
+		if discovery == nil || len(discovery.GetServiceURLs()) == 0 {
+			// This only happens in the test environment, and we can skip the check in this case.
+			return nil
+		}
 
-	tlsConfig, err := config.GetGlobalConfig().Security.ToTLSConfig()
-	if err != nil {
-		return err
-	}
+		tlsConfig, err := config.GetGlobalConfig().Security.ToTLSConfig()
+		if err != nil {
+			return err
+		}
 
-	opts := make([]pdhttp.ClientOption, 0, 1)
-	if tlsConfig != nil {
-		opts = append(opts, pdhttp.WithTLSConfig(tlsConfig))
-	}
+		opts := make([]pdhttp.ClientOption, 0, 1)
+		if tlsConfig != nil {
+			opts = append(opts, pdhttp.WithTLSConfig(tlsConfig))
+		}
 
-	httpCli := pdhttp.NewClientWithServiceDiscovery(
-		"check-pd-config",
-		discovery,
-		opts...,
-	)
-	defer httpCli.Close()
+		httpCli = pdhttp.NewClientWithServiceDiscovery(
+			"check-pd-config",
+			discovery,
+			opts...,
+		)
+		defer httpCli.Close()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

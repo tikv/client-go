@@ -372,7 +372,7 @@ func (s *testKVSuite) TestInitAsyncCommitAnd1PCSupportedFromPDConfig() {
 	for _, tc := range testCases {
 		s.Run(tc.name, func() {
 			store, err := NewKVStore(
-				"TestInitAsyncCommitAnd1PCSupportedFromPDConfig-"+tc.name,
+				"testCheckPDConfig-"+tc.name,
 				s.store.pdClient,
 				NewMockSafePointKV(),
 				&mocktikv.RPCClient{},
