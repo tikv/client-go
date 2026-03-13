@@ -192,6 +192,7 @@ type KVTxn struct {
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
+	asyncCommitAnd1PCSupported := store.IsAsyncCommitAnd1PCSupported()
 	newTiKVTxn := &KVTxn{
 		snapshot:                  snapshot,
 		store:                     store,
@@ -200,8 +201,8 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		valid:                     true,
 		vars:                      tikv.DefaultVars,
 		scope:                     options.TxnScope,
-		enableAsyncCommit:         cfg.EnableAsyncCommit,
-		enable1PC:                 cfg.Enable1PC,
+		enableAsyncCommit:         cfg.EnableAsyncCommit && asyncCommitAnd1PCSupported,
+		enable1PC:                 cfg.Enable1PC && asyncCommitAnd1PCSupported,
 		diskFullOpt:               kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		RequestSource:             snapshot.RequestSource,
 		commitWaitUntilTSOTimeout: time.Second,
@@ -439,13 +440,13 @@ func (txn *KVTxn) spawnWithStorePool(f func()) error {
 
 // SetEnableAsyncCommit indicates if the transaction will try to use async commit.
 func (txn *KVTxn) SetEnableAsyncCommit(b bool) {
-	txn.enableAsyncCommit = b
+	txn.enableAsyncCommit = b && txn.store.IsAsyncCommitAnd1PCSupported()
 }
 
 // SetEnable1PC indicates that the transaction will try to use 1 phase commit(which should be faster).
 // 1PC does not work if the keys to update in the current txn are in multiple regions.
 func (txn *KVTxn) SetEnable1PC(b bool) {
-	txn.enable1PC = b
+	txn.enable1PC = b && txn.store.IsAsyncCommitAnd1PCSupported()
 }
 
 // SetCausalConsistency indicates if the transaction does not need to

@@ -38,7 +38,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
+
+type mockKVStore struct {
+	kvstore
+	isAsyncCommitAnd1PCSupported bool
+}
+
+func (s *mockKVStore) IsAsyncCommitAnd1PCSupported() bool {
+	return s.isAsyncCommitAnd1PCSupported
+}
 
 func TestMinCommitTsManager(t *testing.T) {
 	t.Run(
@@ -121,4 +133,54 @@ func TestMinCommitTsManager(t *testing.T) {
 			assert.Equal(t, manager.get(), uint64(1999))
 		},
 	)
+}
+
+func TestStoreSupportAsyncCommitAnd1PC(t *testing.T) {
+	conf := *config.GetGlobalConfig()
+	oldConf := conf
+	defer config.StoreGlobalConfig(&oldConf)
+	conf.EnableAsyncCommit = true
+	conf.Enable1PC = true
+	config.StoreGlobalConfig(&conf)
+
+	newTiKVTxn := func(isAsyncCommitAnd1PCSupported bool) *KVTxn {
+		txn, err := NewTiKVTxn(
+			&mockKVStore{isAsyncCommitAnd1PCSupported: isAsyncCommitAnd1PCSupported},
+			&txnsnapshot.KVSnapshot{},
+			123,
+			&TxnOptions{
+				TxnScope: oracle.GlobalTxnScope,
+			},
+		)
+		assert.NoError(t, err)
+		return txn
+	}
+
+	// If `IsAsyncCommitAnd1PCSupported` returns true,
+	// async commit and 1PC should be enabled on the transaction and committer.
+	txn := newTiKVTxn(true)
+	assert.True(t, txn.enableAsyncCommit)
+	assert.True(t, txn.enable1PC)
+	assert.NoError(t, txn.Set([]byte("k"), []byte("v")))
+	committer, err := TxnProbe{KVTxn: txn}.NewCommitter(1)
+	assert.NoError(t, err)
+	assert.True(t, committer.CheckAsyncCommit())
+	assert.True(t, committer.CheckOnePC())
+
+	// If `IsAsyncCommitAnd1PCSupported` returns false,
+	// async commit and 1PC should be disabled on the transaction and committer.
+	txn = newTiKVTxn(false)
+	assert.False(t, txn.enableAsyncCommit)
+	assert.False(t, txn.enable1PC)
+	// SetEnableAsyncCommit /  SetEnable1PC should not enable async commit or 1PC if the store does not support them.
+	txn.SetEnableAsyncCommit(true)
+	assert.False(t, txn.enableAsyncCommit)
+	txn.SetEnable1PC(true)
+	assert.False(t, txn.enable1PC)
+	assert.NoError(t, txn.Set([]byte("k"), []byte("v")))
+	// CheckAsyncCommit / CheckOnePC should return false
+	committer, err = TxnProbe{KVTxn: txn}.NewCommitter(1)
+	assert.NoError(t, err)
+	assert.False(t, committer.CheckAsyncCommit())
+	assert.False(t, committer.CheckOnePC())
 }
