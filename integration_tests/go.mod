@@ -178,7 +178,7 @@ require (
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	// todo: remove this replace after tidb updated the dependency
-	github.com/pingcap/tidb => github.com/bufferflies/tidb v0.0.0-20260312105416-be8652ec7c4d
-	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser v0.0.0-20260312105416-be8652ec7c4d
+	github.com/pingcap/tidb => github.com/bufferflies/tidb d33e51e43464fcdeba1da76c369bb39fd67a550b
+	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser d33e51e43464fcdeba1da76c369bb39fd67a550b
 	github.com/tikv/client-go/v2 => ../
 )
