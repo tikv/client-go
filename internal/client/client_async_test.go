@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 )
 
@@ -145,6 +146,68 @@ func TestSendRequestAsyncAttachContext(t *testing.T) {
 	cli.SendRequestAsync(ctx, addr, req, cb)
 	rl.Exec(ctx)
 	require.True(t, called)
+}
+
+func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
+	ctx := context.Background()
+	original := config.GetGlobalConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalConfig(original)
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
+	config.StoreGlobalConfig(&cfg)
+	weights := cfg.TiKVClient.RUV2
+
+	srv, port := mockserver.StartMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, srv.IsRunning())
+	addr := srv.Addr()
+
+	cli := NewRPCClient()
+	defer func() {
+		cli.Close()
+		srv.Stop()
+	}()
+
+	handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
+		ids := req.GetRequestIds()
+		require.Len(t, ids, 1)
+		prewriteResp := &kvrpcpb.PrewriteResponse{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				RuV2: &kvrpcpb.RUV2{
+					KvEngineCacheMiss: 1,
+				},
+			},
+		}
+		return &tikvpb.BatchCommandsResponse{
+			RequestIds: ids,
+			Responses: []*tikvpb.BatchCommandsResponse_Response{{
+				Cmd: &tikvpb.BatchCommandsResponse_Response_Prewrite{Prewrite: prewriteResp},
+			}},
+		}, nil
+	}
+	srv.OnBatchCommandsRequest.Store(&handle)
+
+	ruDetails := util.NewRUDetails()
+	sendCtx := context.WithValue(ctx, util.RUDetailsCtxKey, ruDetails)
+	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+
+	rl := async.NewRunLoop()
+	called := false
+	cb := async.NewCallback(rl, func(resp *tikvrpc.Response, err error) {
+		called = true
+		require.NoError(t, err)
+		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+	})
+
+	cli.SendRequestAsync(sendCtx, addr, req, cb)
+	rl.Exec(ctx)
+	require.True(t, called)
+
+	expected := int64((weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale)
+	require.Equal(t, expected, ruDetails.TiKVRUV2())
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {
