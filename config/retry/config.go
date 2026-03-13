@@ -39,6 +39,7 @@ import (
 	"math"
 	"math/rand"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,10 +53,11 @@ import (
 
 // Config is the configuration of the Backoff function.
 type Config struct {
-	name   string
-	metric *prometheus.Observer
-	fnCfg  *BackoffFnCfg
-	err    error
+	name             string
+	metric           *prometheus.Observer
+	fnCfg            *BackoffFnCfg
+	retryRateLimiter *RetryRateLimiter
+	err              error
 }
 
 // backoffFn is the backoff function which compute the sleep time and do sleep.
@@ -96,6 +98,58 @@ func NewConfig(name string, metric *prometheus.Observer, backoffFnCfg *BackoffFn
 	}
 }
 
+// RetryRateLimiter is used to limit the number of retries
+type RetryRateLimiter struct {
+	// tokenCount represents number of available tokens for retry
+	tokenCount int32
+	// successForRetryCount represents how many success requests are need to allow a single retry
+	successForRetryCount int
+	// cap limits the number of retry tokens which can be accumulated over time
+	cap int32
+}
+
+// NewRetryRateLimiter creates a new RetryRateLimiter
+// cap: the maximum number of retry tokens can be accumulated over time. Start with full bucket.
+// successForRetryCount: how many success requests are needed to allow a single retry. E.g. if you want to allow a single retry per 10 calls, set it to 10.
+func NewRetryRateLimiter(cap int32, successForRetryCount int) *RetryRateLimiter {
+	return &RetryRateLimiter{
+		cap,
+		successForRetryCount,
+		cap,
+	}
+}
+
+// addRetryToken adds a token to the rate limiter bucket according to configured retry to success ratio and the cap
+func (r *RetryRateLimiter) addRetryToken() {
+	if rand.Intn(r.successForRetryCount) == 0 {
+		if atomic.LoadInt32(&r.tokenCount) < r.cap {
+			// it is ok to add more than the cap, because the cap is the soft limit
+			atomic.AddInt32(&r.tokenCount, 1)
+		}
+	}
+}
+
+// takeRetryToken returns true if there is a token to retry, false otherwise
+func (r *RetryRateLimiter) takeRetryToken() bool {
+	if atomic.LoadInt32(&r.tokenCount) > 0 {
+		// it is ok to go below 0, because consumed token will still match added one at the end
+		atomic.AddInt32(&r.tokenCount, -1)
+		return true
+	}
+	return false
+}
+
+// NewConfigWithRetryLimit creates a new Config for the Backoff operation with a retry limit.
+func NewConfigWithRetryLimit(name string, metric *prometheus.Observer, backoffFnCfg *BackoffFnCfg, retryRateLimiter *RetryRateLimiter, err error) *Config {
+	return &Config{
+		name:             name,
+		metric:           metric,
+		fnCfg:            backoffFnCfg,
+		retryRateLimiter: retryRateLimiter,
+		err:              err,
+	}
+}
+
 // Base returns the base time of the backoff function.
 func (c *Config) Base() int {
 	return c.fnCfg.base
@@ -119,10 +173,11 @@ const txnLockFastName = "txnLockFast"
 // Backoff Config variables.
 var (
 	// TODO: distinguish tikv and tiflash in metrics
-	BoTiKVRPC    = NewConfig("tikvRPC", &metrics.BackoffHistogramRPC, NewBackoffFnCfg(100, 2000, EqualJitter), tikverr.ErrTiKVServerTimeout)
-	BoTiFlashRPC = NewConfig("tiflashRPC", &metrics.BackoffHistogramRPC, NewBackoffFnCfg(100, 2000, EqualJitter), tikverr.ErrTiFlashServerTimeout)
-	BoTxnLock    = NewConfig("txnLock", &metrics.BackoffHistogramLock, NewBackoffFnCfg(100, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
-	BoPDRPC      = NewConfig("pdRPC", &metrics.BackoffHistogramPD, NewBackoffFnCfg(500, 3000, EqualJitter), tikverr.NewErrPDServerTimeout(""))
+	BoTiKVRPC          = NewConfig("tikvRPC", &metrics.BackoffHistogramRPC, NewBackoffFnCfg(100, 2000, EqualJitter), tikverr.ErrTiKVServerTimeout)
+	BoTiFlashRPC       = NewConfig("tiflashRPC", &metrics.BackoffHistogramRPC, NewBackoffFnCfg(100, 2000, EqualJitter), tikverr.ErrTiFlashServerTimeout)
+	BoTxnLock          = NewConfig("txnLock", &metrics.BackoffHistogramLock, NewBackoffFnCfg(100, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
+	BoPDRPC            = NewConfig("pdRPC", &metrics.BackoffHistogramPD, NewBackoffFnCfg(500, 3000, EqualJitter), tikverr.NewErrPDServerTimeout(""))
+	BoPDRegionMetadata = NewConfigWithRetryLimit("pdRegionMetadata", &metrics.BackoffHistogramPD, NewBackoffFnCfg(500, 3000, EqualJitter), NewRetryRateLimiter(100, 1), tikverr.NewErrPDServerTimeout(""))
 	// change base time to 2ms, because it may recover soon.
 	BoRegionMiss               = NewConfig("regionMiss", &metrics.BackoffHistogramRegionMiss, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrRegionUnavailable)
 	BoRegionScheduling         = NewConfig("regionScheduling", &metrics.BackoffHistogramRegionScheduling, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrRegionUnavailable)
