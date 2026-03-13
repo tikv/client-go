@@ -14,8 +14,8 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
-	github.com/tikv/client-go/v2 v2.0.8-0.20251231033305-5b1a1c1ea4ac
-	github.com/tikv/pd/client v0.0.0-20260226073533-5885ceca6b4f
+	github.com/tikv/client-go/v2 v2.0.8-0.20260225065730-dfa54d86781e
+	github.com/tikv/pd/client v0.0.0-20260228084044-4f5039d43753
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.75.1
 )
@@ -43,10 +43,10 @@ require (
 	github.com/aws/aws-sdk-go v1.55.7 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.38.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.0 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.29.17 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.17.70 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.32 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.84 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.31.2 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.18.6 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.4 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.0 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.4 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.4 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3 // indirect
@@ -56,9 +56,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.87.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.25.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.30.3 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.34.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.28.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.33.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.38.0 // indirect
 	github.com/aws/smithy-go v1.22.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -73,8 +73,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da // indirect
 	github.com/docker/go-units v0.5.0 // indirect
-	github.com/dolthub/maphash v0.1.0 // indirect
-	github.com/dolthub/swiss v0.2.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.4 // indirect
@@ -119,7 +117,7 @@ require (
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250604120526-b159f56cd452 // indirect
-	github.com/pingcap/tipb v0.0.0-20251230094608-1374320b4bd8 // indirect
+	github.com/pingcap/tipb v0.0.0-20260210113932-1447c9d7e9fe // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
@@ -132,7 +130,6 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.6 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
-	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -156,16 +153,16 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/oauth2 v0.33.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/term v0.39.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/term v0.40.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	golang.org/x/tools v0.40.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	google.golang.org/api v0.170.0 // indirect
 	google.golang.org/genproto v0.0.0-20240401170217-c3f982113cda // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
@@ -181,7 +178,7 @@ require (
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	// todo: remove this replace after tidb updated the dependency
-	github.com/pingcap/tidb => github.com/bufferflies/tidb v0.0.0-20260121125603-078992d1d596
-	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser v0.0.0-20260121125603-078992d1d596
+	github.com/pingcap/tidb => github.com/bufferflies/tidb d33e51e43464fcdeba1da76c369bb39fd67a550b
+	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser d33e51e43464fcdeba1da76c369bb39fd67a550b
 	github.com/tikv/client-go/v2 => ../
 )
