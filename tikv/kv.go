@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -316,14 +317,16 @@ func NewKVStore(
 			return nil, errors.WithStack(err)
 		}
 	}
+
+	if err = store.checkPDConfig(); err != nil {
+		return nil, err
+	}
+
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
-	if err = store.checkPDConfig(); err != nil {
-		return nil, err
-	}
 
 	store.wg.Add(2)
 	go store.runSafePointChecker()
@@ -332,10 +335,25 @@ func NewKVStore(
 	return store, nil
 }
 
+var mockedPDConfigToCheck map[string]any
+
+// MockPDConfigToCheck is used in test to mock the PD config returned by PD HTTP API,
+// which will be checked by `checkPDConfig` function.
+func MockPDConfigToCheck(config map[string]any) (func() error, error) {
+	if err := failpoint.Enable("tikvclient/mockPDConfigToCheck", "return(true)"); err != nil {
+		return nil, err
+	}
+	mockedPDConfigToCheck = config
+	return func() error {
+		mockedPDConfigToCheck = nil
+		return failpoint.Disable("tikvclient/mockPDConfigToCheck")
+	}, nil
+}
+
 func (s *KVStore) checkPDConfig() error {
-	var httpCli pdhttp.Client
-	if intest.InTest && strings.HasPrefix(s.uuid, "testCheckPDConfig") {
-		httpCli = s.pdHttpClient
+	var cfg map[string]any
+	if _, err := util.EvalFailpoint("mockPDConfigToCheck"); err == nil {
+		cfg = mockedPDConfigToCheck
 	} else {
 		discovery := s.pdClient.GetServiceDiscovery()
 		if discovery == nil || len(discovery.GetServiceURLs()) == 0 {
@@ -353,26 +371,25 @@ func (s *KVStore) checkPDConfig() error {
 			opts = append(opts, pdhttp.WithTLSConfig(tlsConfig))
 		}
 
-		httpCli = pdhttp.NewClientWithServiceDiscovery(
+		httpCli := pdhttp.NewClientWithServiceDiscovery(
 			"check-pd-config",
 			discovery,
 			opts...,
 		)
 		defer httpCli.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cfg, err = httpCli.GetConfig(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	cfg, err := httpCli.GetConfig(ctx)
-	if err != nil {
+	if err := s.checkTSOMaxIndexConfig(cfg); err != nil {
 		return err
 	}
-
-	if err = s.checkTSOMaxIndexConfig(cfg); err != nil {
-		return err
-	}
-
 	return nil
 }
 

@@ -139,7 +139,6 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 type mockPDHTTPClient struct {
 	pdhttp.Client
 	mockGetMinResolvedTSByStoresIDs *atomic.Pointer[func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error)]
-	mockGetConfig                   func(ctx context.Context) (map[string]any, error)
 }
 
 func (c *mockPDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uint64) (uint64, map[uint64]uint64, error) {
@@ -152,9 +151,6 @@ func (c *mockPDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, stor
 }
 
 func (c *mockPDHTTPClient) GetConfig(ctx context.Context) (map[string]any, error) {
-	if c.mockGetConfig != nil {
-		return c.mockGetConfig(ctx)
-	}
 	return map[string]any{}, nil
 }
 
@@ -371,18 +367,17 @@ func (s *testKVSuite) TestInitAsyncCommitAnd1PCSupportedFromPDConfig() {
 
 	for _, tc := range testCases {
 		s.Run(tc.name, func() {
+			restore, err := MockPDConfigToCheck(tc.pdConfig)
+			s.NoError(err)
+			defer func() {
+				s.NoError(restore())
+			}()
+
 			store, err := NewKVStore(
 				"testCheckPDConfig-"+tc.name,
 				s.store.pdClient,
 				NewMockSafePointKV(),
 				&mocktikv.RPCClient{},
-				func(store *KVStore) {
-					store.pdHttpClient = &mockPDHTTPClient{
-						mockGetConfig: func(ctx context.Context) (map[string]any, error) {
-							return tc.pdConfig, nil
-						},
-					}
-				},
 			)
 			s.NoError(err)
 			defer func() {
