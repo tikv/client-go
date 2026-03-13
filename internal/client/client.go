@@ -340,15 +340,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	defer func() {
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
-		var writeRPCCount float64
-		if req != nil && req.StoreTp == tikvrpc.TiKV && !req.IsDebugReq() {
-			// Count completed write RPCs by request type directly.
-			// Don't gate on resource control bypass, because bypassed internal writes should still be included
-			// in RU v2 aggregation.
-			if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
-				writeRPCCount = 1
-			}
-		}
+		writeRPCCount := completedTiKVWriteRPCCount(req)
 		if resp != nil {
 			switch resp.Resp.(type) {
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
@@ -406,6 +398,16 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
+}
+
+func completedTiKVWriteRPCCount(req *tikvrpc.Request) float64 {
+	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
+		return 0
+	}
+	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
+		return 1
+	}
+	return 0
 }
 
 // SendRequest sends a Request to server and receives Response.
