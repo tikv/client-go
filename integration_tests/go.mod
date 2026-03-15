@@ -1,6 +1,6 @@
 module integration_tests
 
-go 1.25.6
+go 1.25.8
 
 require (
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
@@ -14,7 +14,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
-	github.com/tikv/client-go/v2 v2.0.8-0.20260225065730-dfa54d86781e
+	github.com/tikv/client-go/v2 v2.0.8-0.20260303050247-d80e4888d527
 	github.com/tikv/pd/client v0.0.0-20260228084044-4f5039d43753
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.75.1
@@ -178,7 +178,7 @@ require (
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	// todo: remove this replace after tidb updated the dependency
-	github.com/pingcap/tidb => github.com/bufferflies/tidb d33e51e43464fcdeba1da76c369bb39fd67a550b
-	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser d33e51e43464fcdeba1da76c369bb39fd67a550b
+	github.com/pingcap/tidb => github.com/bufferflies/tidb v0.0.0-20260313023008-d33e51e43464
+	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser v0.0.0-20260313023008-d33e51e43464
 	github.com/tikv/client-go/v2 => ../
 )

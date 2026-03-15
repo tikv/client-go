@@ -957,10 +957,10 @@ github.com/blacktear23/go-proxyprotocol v1.0.6 h1:eTt6UMpEnq59NjON49b3Cay8Dm0sCs
 github.com/blacktear23/go-proxyprotocol v1.0.6/go.mod h1:FSCbgnRZrQXazBLL5snfBbrcFSMtcmUDhSRb9OfFA1o=
 github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/boombuler/barcode v1.0.1/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
-github.com/bufferflies/tidb v0.0.0-20260312105416-be8652ec7c4d h1:DOQTabNPOkrKG5v8e6AaH234EpKY9pAqpDpEr/cWVOM=
-github.com/bufferflies/tidb v0.0.0-20260312105416-be8652ec7c4d/go.mod h1:yMVFeJcsXYQl3MSDz4RTpbtsCA6uWG8cGD62hc0DnSM=
-github.com/bufferflies/tidb/pkg/parser v0.0.0-20260312105416-be8652ec7c4d h1:0Aw7alBBU90Wm04VTTRYlS7gZ8IivEz1xfTm7BrpNhg=
-github.com/bufferflies/tidb/pkg/parser v0.0.0-20260312105416-be8652ec7c4d/go.mod h1:oHE+ub2QaDERd+UNHe4z2BhFV2jZrm7VNOe6atR9AF4=
+github.com/bufferflies/tidb v0.0.0-20260313023008-d33e51e43464 h1:Wfyd/44g+zuoNRneioUcyCG0K0amRPU7L+OketxGkhU=
+github.com/bufferflies/tidb v0.0.0-20260313023008-d33e51e43464/go.mod h1:dD9wlRivL6Gu0N7wHUl0ZPTGhmOGLLO7A1rVcdQIgWE=
+github.com/bufferflies/tidb/pkg/parser v0.0.0-20260313023008-d33e51e43464 h1:+rzDiH4wEO3obS38v99bDUpd/zIw9VUiEEyvVXEd+KA=
+github.com/bufferflies/tidb/pkg/parser v0.0.0-20260313023008-d33e51e43464/go.mod h1:K5X1FVP5k4EvzAlnUUAwAxV58thzPpl7bU5g6mg48Cg=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5 h1:BjkPE3785EwPhhyuFkbINB+2a1xATwk8SNDWnJiD41g=
 github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5/go.mod h1:jtAfVaU/2cu1+wdSRPWE2c1N2qeAA3K4RH9pYgqwets=
 github.com/carlmjohnson/flagext v0.21.0 h1:/c4uK3ie786Z7caXLcIMvePNSSiH3bQVGDvmGLMme60=
