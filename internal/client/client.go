@@ -340,6 +340,15 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	defer func() {
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
+		writeRPCCount := completedTiKVWriteRPCCount(req)
+		if resp != nil {
+			switch resp.Resp.(type) {
+			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
+				// Stream responses are handled in Recv().
+			default:
+				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
+			}
+		}
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
@@ -391,6 +400,16 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
+func completedTiKVWriteRPCCount(req *tikvrpc.Request) float64 {
+	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
+		return 0
+	}
+	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
+		return 1
+	}
+	return 0
+}
+
 // SendRequest sends a Request to server and receives Response.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// In unit test, the option or codec may be nil. Here should skip the encode/decode process.
@@ -427,6 +446,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.Ctx = ctx
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
