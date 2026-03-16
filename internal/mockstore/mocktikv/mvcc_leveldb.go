@@ -1982,9 +1982,13 @@ func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newVal
 	}
 
 	oldValue, err = db.Get(key, nil)
-	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
-		tikverr.Log(err)
-		return nil, false, errors.WithStack(err)
+	if err != nil {
+		if !errors.Is(err, leveldb.ErrNotFound) {
+			tikverr.Log(err)
+			return nil, false, errors.WithStack(err)
+		}
+
+		oldValue = nil
 	}
 
 	if !bytes.Equal(oldValue, expectedValue) {

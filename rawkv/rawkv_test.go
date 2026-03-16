@@ -774,7 +774,7 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 		SetColumnFamily(cf))
 	s.Nil(err)
 	s.True(swapped)
-	s.True(bytes.Equal([]byte(nil), returnValue))
+	s.Nil(returnValue)
 
 	// test CompareAndDelete fails when previousValue is non-nil (we expect the key to exist)
 	// but the key does not exist in the store
@@ -786,7 +786,7 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 		SetColumnFamily(cf))
 	s.Nil(err)
 	s.False(swapped)
-	s.True(bytes.Equal([]byte(nil), returnValue))
+	s.Nil(returnValue)
 }
 
 func (s *testRawkvSuite) TestRawChecksum() {
