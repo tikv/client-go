@@ -234,6 +234,12 @@ func (s *apiTestSuite) mustCASBytes(prefix, key string, old, new []byte) (bool, 
 	return success, oldValue
 }
 
+func (s *apiTestSuite) mustCADBytes(prefix, key string, old []byte) (bool, []byte) {
+	oldValue, success, err := s.clientForCas.CompareAndDelete(context.Background(), []byte(withPrefix(prefix, key)), old)
+	s.Nil(err)
+	return success, oldValue
+}
+
 // `old == ""` means "not exist"
 func (s *apiTestSuite) mustCAS(prefix, key, old, new string) (bool, string) {
 	var oldValue []byte
@@ -241,6 +247,16 @@ func (s *apiTestSuite) mustCAS(prefix, key, old, new string) (bool, string) {
 		oldValue = []byte(old)
 	}
 	success, oldValue := s.mustCASBytes(prefix, key, oldValue, []byte(new))
+	return success, string(oldValue)
+}
+
+// `old == ""` means "not exist"
+func (s *apiTestSuite) mustCAD(prefix, key, old string) (bool, string) {
+	var oldValue []byte
+	if old != "" {
+		oldValue = []byte(old)
+	}
+	success, oldValue := s.mustCADBytes(prefix, key, oldValue)
 	return success, string(oldValue)
 }
 
@@ -379,6 +395,50 @@ func (s *apiTestSuite) TestCAS() {
 	s.Equal("world", v)
 }
 
+func (s *apiTestSuite) TestCAD() {
+	prefix := "test_cad"
+	s.cleanKeyPrefix(prefix)
+
+	// Put key first
+	s.mustPut(prefix, "key", "hello world")
+
+	// Delete it via CAD
+	success, old := s.mustCAD(prefix, "key", "hello world")
+	s.True(success)
+	s.Equal("hello world", old)
+	s.mustNotExist(prefix, "key")
+
+	// Attempt to CAD a non-existent key. The API should succeed and
+	// return a nil old value, indicating the key does not exist.
+	success, oldBytes := s.mustCADBytes(prefix, "key", nil)
+	s.True(success)
+	s.Nil(oldBytes)
+
+	// Put key again
+	s.mustPut(prefix, "key", "hello world")
+
+	// Attempt a CAD with the wrong old value, it should fail
+	success, old = s.mustCAD(prefix, "key", "xxx")
+	s.False(success)
+	s.Equal("hello world", old)
+
+	// Attempt to CAD with a nil old value (i.e. expecting the key to not exist)
+	// It should fail and return the existing value
+	success, oldBytes = s.mustCADBytes(prefix, "key", nil)
+	s.False(success)
+	s.Equal([]byte("hello world"), oldBytes)
+
+	// Put an empty value
+	err := s.client.Put(context.Background(), []byte(withPrefix(prefix, "key")), []byte{})
+	s.Nil(err)
+
+	// Delete it via CAD
+	success, oldBytes = s.mustCADBytes(prefix, "key", []byte{})
+	s.True(success)
+	s.Equal([]byte{}, oldBytes)
+	s.mustNotExist(prefix, "key")
+}
+
 func (s *apiTestSuite) TestTTL() {
 	prefix := "test_ttl"
 
@@ -514,6 +574,32 @@ func (s *apiTestSuite) TestEmptyValue() {
 	ok, oldVal = s.mustCASBytes(prefix, "key", []byte(""), []byte("val"))
 	s.True(ok)
 	s.Equal([]byte{}, oldVal)
+
+	// put
+	s.mustPut(prefix, "key", "")
+	verifyEmptyValue()
+
+	// compare_and_delete, "" -> nil
+	ok, oldVal = s.mustCADBytes(prefix, "key", []byte(""))
+	s.True(ok)
+	s.Equal([]byte{}, oldVal)
+	verifyNotExist()
+
+	// compare_and_delete, nil -> nil
+	ok, oldVal = s.mustCADBytes(prefix, "key", nil)
+	s.True(ok)
+	s.Nil(oldVal)
+	verifyNotExist()
+
+	// check via scan
+	keys, values := s.mustScanBytes(prefix, "key", "keyz", 10)
+	s.Nil(keys)
+	s.Nil(values)
+
+	// check via reverse scan
+	keys, values = s.mustReverseScanBytes(prefix, "keyz", "key", 10)
+	s.Nil(keys)
+	s.Nil(values)
 }
 
 func (s *apiTestSuite) TearDownTest() {

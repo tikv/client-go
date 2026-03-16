@@ -693,6 +693,20 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
 }
 
+// CompareAndDelete performs an atomic compare-and-delete operation for the given key when SetAtomicForCAS(true).
+// If the value retrieved is equal to previousValue, the key is deleted.
+// It returns the previous value and whether the key was successfully deleted.
+// If previousValue is nil (indicating the key is expected to not exist) and the key does not exist,
+// the operation succeeds and returns nil as the previous value.
+// If previousValue is nil (indicating the key is expected to not exist) and the key exists, the
+// operation fails and returns the existing value.
+//
+// If SetAtomicForCAS(false), it will return an error because
+// CAS operations require the client to operate in atomic mode.
+//
+// NOTE: This feature is experimental. It depends on the single-row transaction mechanism of TiKV, which conflicts
+// with normal write operations in rawkv mode. If multiple clients exist, it is up to the clients to sync the atomic mode flag.
+// If some clients write in atomic mode but others don't, the linearizability of TiKV will be violated.
 func (c *Client) CompareAndDelete(ctx context.Context, key, previousValue []byte, options ...RawOption) ([]byte, bool, error) {
 	if !c.atomic {
 		return nil, false, errors.New("using CompareAndDelete without enable atomic mode")
