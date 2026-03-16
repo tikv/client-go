@@ -99,7 +99,7 @@ func (s *testCommitterSuite) SetupTest() {
 	pdCli := tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	spkv := tikv.NewMockSafePointKV()
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client,
-		// To make sure some exists tests with async-commit or 1pc commit pass
+		// To make sure some existing tests with async-commit or 1pc commit pass
 		tikv.WithDisableActiveActiveCommitSupportForTest(),
 	)
 	store.EnableTxnLocalLatches(8096)

@@ -127,7 +127,7 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 		pdClient,
 		spKV,
 		tikv.NewRPCClient(opt),
-		// To make sure some exists tests with async-commit or 1pc commit pass
+		// To make sure some existing tests with async-commit or 1pc commit pass
 		tikv.WithDisableActiveActiveCommitSupportForTest(),
 	)
 	re.Nil(err)

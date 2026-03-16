@@ -111,7 +111,7 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 	// Make sure the uuid is unique.
 	uid := uuid.New().String()
 	spkv := NewMockSafePointKV()
-	// To make sure some exists tests with async-commit or 1pc commit pass
+	// To make sure some existing tests with async-commit or 1pc commit pass
 	opt = disableActiveActiveCommitSupport(opt...)
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
@@ -153,7 +153,7 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 
 	keyspaceIdStr := strconv.FormatUint(uint64(keyspaceMeta.Id), 10)
 	spkv := NewMockSafePointKV(WithPrefix(keyspaceIdStr))
-	// To make sure some exists tests with async-commit or 1pc commit pass
+	// To make sure some existing tests with async-commit or 1pc commit pass
 	opt = disableActiveActiveCommitSupport(opt...)
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
