@@ -417,12 +417,12 @@ func (s *apiTestSuite) TestCAD() {
 	// Put key again
 	s.mustPut(prefix, "key", "hello world")
 
-	// Attempt a CAD with the wrong old value, it should fail
+	// Attempt a CAD with an incorrect previous value, it should fail
 	success, old = s.mustCAD(prefix, "key", "xxx")
 	s.False(success)
 	s.Equal("hello world", old)
 
-	// Attempt to CAD with a nil old value (i.e. expecting the key to not exist)
+	// Attempt to CAD with a nil old value (i.e. expect the key to not exist)
 	// It should fail and return the existing value
 	success, oldBytes = s.mustCADBytes(prefix, "key", nil)
 	s.False(success)

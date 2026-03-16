@@ -725,7 +725,7 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
 	defer failpoint.Disable("tikvclient/injectLiveness")
 
-	// test CompareAndDelete for false atomic
+	// test CompareAndDelete fails when SetAtomicForCAS(false)
 	_, _, err = client.CompareAndDelete(
 		context.Background(),
 		key,
@@ -737,9 +737,21 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 	s.Nil(err)
 	s.Equal(string(v), string(value))
 
-	// test CompareAndDelete for swap successfully
+	// test CompareAndDelete fails when previousValue is nil (we expect the key not to exist)
+	// but the key exists in the store
 	client.SetAtomicForCAS(true)
 	returnValue, swapped, err := client.CompareAndDelete(
+		context.Background(),
+		key,
+		nil,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.False(swapped)
+	s.True(bytes.Equal(value, returnValue))
+
+	// test CompareAndDelete succeeds when previousValue==currentValue
+	client.SetAtomicForCAS(true)
+	returnValue, swapped, err = client.CompareAndDelete(
 		context.Background(),
 		key,
 		value,
@@ -752,7 +764,8 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 	s.Nil(err)
 	s.Equal(v, []byte(nil))
 
-	// test CompareAndDelete for swap successfully (previousValue is nil)
+	// test CompareAndDelete succeeds when previousValue is nil (we expect the key to not exist)
+	// and the key does not exist in the store
 	client.SetAtomicForCAS(true)
 	returnValue, swapped, err = client.CompareAndDelete(
 		context.Background(),
@@ -763,7 +776,8 @@ func (s *testRawkvSuite) TestCompareAndDelete() {
 	s.True(swapped)
 	s.True(bytes.Equal([]byte(nil), returnValue))
 
-	// test CompareAndDelete for swap failed
+	// test CompareAndDelete fails when previousValue is non-nil (we expect the key to exist)
+	// but the key does not exist in the store
 	client.SetAtomicForCAS(true)
 	returnValue, swapped, err = client.CompareAndDelete(
 		context.Background(),
