@@ -2161,6 +2161,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 
 		// Keep the buckets information if needed.
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
+			metrics.TiKVStaleBucketFromPDCounter.Inc()
 			store.buckets = oldRegionStore.buckets
 		}
 	}
@@ -2932,7 +2933,7 @@ func (c *RegionCache) InvalidateTiFlashComputeStores() {
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
 // the latestBucketsVer is newer than the cached one.
-func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsVer uint64) {
+func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, requestBucketsVer uint64, latestBucketsVer uint64) {
 	r := c.GetCachedRegionWithRLock(regionID)
 	if r == nil {
 		return
@@ -2942,6 +2943,10 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 	var bucketsVer uint64
 	if buckets != nil {
 		bucketsVer = buckets.GetVersion()
+	}
+	// If the buckets version in cache is already newer than the requested version, there is no need to update.
+	if requestBucketsVer != 0 && requestBucketsVer < bucketsVer {
+		return
 	}
 	if bucketsVer < latestBucketsVer {
 		_, inflight := c.inflightUpdateBuckets.LoadOrStore(regionID.id, struct{}{})
