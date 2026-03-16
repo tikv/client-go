@@ -697,7 +697,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 // If the value retrieved is equal to previousValue, the key is deleted.
 // It returns the previous value and whether the key was successfully deleted.
 //
-//	previousValue  | key exists    | result
+//	previousValue   | key exists    | result
 //	----------------|---------------|----------------------------------
 //	nil             | no            | success, returns nil
 //	nil             | yes           | failure, returns existing value
