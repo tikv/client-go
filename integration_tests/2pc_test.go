@@ -98,7 +98,10 @@ func (s *testCommitterSuite) SetupTest() {
 	s.cluster = cluster
 	pdCli := tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	spkv := tikv.NewMockSafePointKV()
-	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
+	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client,
+		// To make sure some exists tests with async-commit or 1pc commit pass
+		tikv.WithDisableActiveActiveCommitSupportForTest(),
+	)
 	store.EnableTxnLocalLatches(8096)
 	s.Require().Nil(err)
 	s.store = tikv.StoreProbe{KVStore: store}
