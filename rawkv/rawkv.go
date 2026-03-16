@@ -696,10 +696,14 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 // CompareAndDelete performs an atomic compare-and-delete operation for the given key when SetAtomicForCAS(true).
 // If the value retrieved is equal to previousValue, the key is deleted.
 // It returns the previous value and whether the key was successfully deleted.
-// If previousValue is nil (indicating the key is expected to not exist) and the key does not exist,
-// the operation succeeds and returns nil as the previous value.
-// If previousValue is nil (indicating the key is expected to not exist) and the key exists, the
-// operation fails and returns the existing value.
+//
+//	previousValue  | key exists    | result
+//	----------------|---------------|----------------------------------
+//	nil             | no            | success, returns nil
+//	nil             | yes           | failure, returns existing value
+//	[]byte{...}     | no            | failure, returns nil
+//	[]byte{...}     | yes, matches  | success, returns previous value
+//	[]byte{...}     | yes, mismatch | failure, returns existing value
 //
 // If SetAtomicForCAS(false), it will return an error because
 // CAS operations require the client to operate in atomic mode.
