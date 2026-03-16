@@ -234,14 +234,6 @@ func WithPDHTTPClient(
 	}
 }
 
-// WithDisableActiveActiveCommitSupportForTest is used to disable active-active commit support for test.
-// It should only be used in the test env.
-func WithDisableActiveActiveCommitSupportForTest() Option {
-	return func(store *KVStore) {
-		store.disableActiveActiveCommitSupport = true
-	}
-}
-
 // loadOption load KVStore option into KVStore.
 func loadOption(store *KVStore, opt ...Option) {
 	for _, f := range opt {

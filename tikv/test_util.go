@@ -164,3 +164,11 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 	tikvStore.mock = true
 	return tikvStore, err
 }
+
+// WithDisableActiveActiveCommitSupportForTest is used to disable active-active commit support for test.
+// It should only be used in the test env.
+func WithDisableActiveActiveCommitSupportForTest() Option {
+	return func(store *KVStore) {
+		store.disableActiveActiveCommitSupport = true
+	}
+}
