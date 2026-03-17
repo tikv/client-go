@@ -31,14 +31,14 @@ import (
 
 type replicaSelector struct {
 	baseReplicaSelector
-	replicaReadType            kv.ReplicaReadType
-	isStaleRead                bool
-	isReadOnlyReq              bool
-	option                     storeSelectorOp
-	target                     *replica
-	proxy                      *replica
-	attempts                   int
-	regionInvalidatedForRetry  bool // set when region is hard-invalidated but this selector should still retry on leader
+	replicaReadType           kv.ReplicaReadType
+	isStaleRead               bool
+	isReadOnlyReq             bool
+	option                    storeSelectorOp
+	target                    *replica
+	proxy                     *replica
+	attempts                  int
+	regionInvalidatedForRetry bool // set when region is hard-invalidated but this selector should still retry on leader
 }
 
 func newReplicaSelector(
