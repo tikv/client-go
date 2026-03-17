@@ -130,15 +130,16 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	start := time.Now()
 	// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
+	//nolint:staticcheck
 	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }
 
 // GetStore implements pd.Client#GetStore.
-func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	start := time.Now()
-	s, err := m.Client.GetStore(ctx, storeID)
+	s, err := m.Client.GetStore(ctx, storeID, opts...)
 	recordPDWaitTime(ctx, start)
 	return s, err
 }

@@ -138,10 +138,37 @@ type ReqDetailInfo struct {
 	ExecDetails  TiKVExecDetails
 }
 
+// CommitTSLagDetails contain the detail when the commit timestamp
+// from PD lags the expected ts set by `SetCommitWaitUntilTSO`.
+type CommitTSLagDetails struct {
+	// WaitTime indicates the total wait time for the lagged PD TSO exceeds `WaitUntilTS`.
+	WaitTime time.Duration
+	// BackoffCnt indicates the backoff count to wait the lagged PD TSO exceeds `WaitUntilTS`.
+	BackoffCnt int
+	// FirstLagTS indicates the first fetched TSO that lags behind `WaitUntilTS`.
+	FirstLagTS uint64
+	// WaitUntilTS indicates the min timestamp of the commit ts, the txn should wait PD TSO to exceeds this value.
+	WaitUntilTS uint64
+}
+
+// Merge merges CommitTSLagDetails with another one
+func (d *CommitTSLagDetails) Merge(other *CommitTSLagDetails) {
+	if other == nil || other.FirstLagTS <= 0 {
+		// other.FirstLagTS <= 0 indicates no lag happen, do not need to merge the new details.
+		return
+	}
+	d.WaitTime += other.WaitTime
+	d.BackoffCnt += other.BackoffCnt
+	// For sample, we use the last lag timestamps after merge
+	d.FirstLagTS = other.FirstLagTS
+	d.WaitUntilTS = other.WaitUntilTS
+}
+
 // CommitDetails contains commit detail information.
 type CommitDetails struct {
 	GetCommitTsTime        time.Duration
 	GetLatestTsTime        time.Duration
+	LagDetails             CommitTSLagDetails
 	PrewriteTime           time.Duration
 	WaitPrewriteBinlogTime time.Duration
 	CommitTime             time.Duration
@@ -170,6 +197,7 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.GetCommitTsTime += other.GetCommitTsTime
 	cd.GetLatestTsTime += other.GetLatestTsTime
 	cd.PrewriteTime += other.PrewriteTime
+	cd.LagDetails.Merge(&other.LagDetails)
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime
 	cd.LocalLatchTime += other.LocalLatchTime
@@ -230,6 +258,7 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 	commit := &CommitDetails{
 		GetCommitTsTime:        cd.GetCommitTsTime,
 		GetLatestTsTime:        cd.GetLatestTsTime,
+		LagDetails:             cd.LagDetails,
 		PrewriteTime:           cd.PrewriteTime,
 		WaitPrewriteBinlogTime: cd.WaitPrewriteBinlogTime,
 		CommitTime:             cd.CommitTime,
@@ -282,7 +311,7 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 	ld.ResolveLock.ResolveLockTime += lockKey.ResolveLock.ResolveLockTime
 	ld.BackoffTime += lockKey.BackoffTime
 	ld.LockRPCTime += lockKey.LockRPCTime
-	ld.LockRPCCount += ld.LockRPCCount
+	ld.LockRPCCount += lockKey.LockRPCCount
 	ld.Mu.BackoffTypes = append(ld.Mu.BackoffTypes, lockKey.Mu.BackoffTypes...)
 	ld.RetryCount++
 	if ld.Mu.SlowestReqTotalTime < lockKey.Mu.SlowestReqTotalTime {
@@ -783,6 +812,10 @@ type RUDetails struct {
 	readRU         *uatomic.Float64
 	writeRU        *uatomic.Float64
 	ruWaitDuration *uatomic.Duration
+	// tikvRUV2 stores TiKV RU v2 value in scaled units.
+	tikvRUV2 *uatomic.Float64
+	// tidbRUV2 stores TiDB RU v2 value in scaled units.
+	tidbRUV2 *uatomic.Float64
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -791,6 +824,8 @@ func NewRUDetails() *RUDetails {
 		readRU:         uatomic.NewFloat64(0),
 		writeRU:        uatomic.NewFloat64(0),
 		ruWaitDuration: uatomic.NewDuration(0),
+		tikvRUV2:       uatomic.NewFloat64(0),
+		tidbRUV2:       uatomic.NewFloat64(0),
 	}
 }
 
@@ -801,6 +836,8 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 		readRU:         uatomic.NewFloat64(rru),
 		writeRU:        uatomic.NewFloat64(wru),
 		ruWaitDuration: uatomic.NewDuration(waitDur),
+		tikvRUV2:       uatomic.NewFloat64(0),
+		tidbRUV2:       uatomic.NewFloat64(0),
 	}
 }
 
@@ -810,6 +847,8 @@ func (rd *RUDetails) Clone() *RUDetails {
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
+		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
+		tidbRUV2:       uatomic.NewFloat64(rd.tidbRUV2.Load()),
 	}
 }
 
@@ -818,11 +857,19 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.readRU.Add(other.readRU.Load())
 	rd.writeRU.Add(other.writeRU.Load())
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
+	rd.tikvRUV2.Add(other.tikvRUV2.Load())
+	rd.tidbRUV2.Add(other.tidbRUV2.Load())
 }
 
 // String implements fmt.Stringer interface.
 func (rd *RUDetails) String() string {
-	return fmt.Sprintf("RRU:%f, WRU:%f, WaitDuration:%v", rd.readRU.Load(), rd.writeRU.Load(), rd.ruWaitDuration.Load())
+	return fmt.Sprintf(
+		"RRU:%f, WRU:%f, WaitDuration:%v, TiKVRUV2:%d",
+		rd.readRU.Load(),
+		rd.writeRU.Load(),
+		rd.ruWaitDuration.Load(),
+		rd.TiKVRUV2(),
+	)
 }
 
 // RRU returns the read RU.
@@ -838,6 +885,43 @@ func (rd *RUDetails) WRU() float64 {
 // RUWaitDuration returns the time duration waiting for available RU.
 func (rd *RUDetails) RUWaitDuration() time.Duration {
 	return rd.ruWaitDuration.Load()
+}
+
+// TiKVRUV2 returns the TiKV RU v2 value (scaled integer) accumulated in the client.
+func (rd *RUDetails) TiKVRUV2() int64 {
+	return int64(rd.tikvRUV2.Load())
+}
+
+// AddTiKVRUV2 adds a delta (scaled) to the accumulated TiKV RU v2 value.
+func (rd *RUDetails) AddTiKVRUV2(delta float64) {
+	if rd == nil || delta == 0 {
+		return
+	}
+	rd.tikvRUV2.Add(delta)
+}
+
+// TiDBRUV2 returns the TiDB RU v2 value (scaled integer) accumulated in the client.
+func (rd *RUDetails) TiDBRUV2() int64 {
+	if rd == nil || rd.tidbRUV2 == nil {
+		return 0
+	}
+	return int64(rd.tidbRUV2.Load())
+}
+
+// AddTiDBRUV2 adds a delta (scaled) to the accumulated TiDB RU v2 value.
+func (rd *RUDetails) AddTiDBRUV2(delta float64) {
+	if rd == nil || rd.tidbRUV2 == nil || delta == 0 {
+		return
+	}
+	rd.tidbRUV2.Add(delta)
+}
+
+// TotalRUV2 returns the total RU v2 value (scaled integer) accumulated in the client.
+func (rd *RUDetails) TotalRUV2() int64 {
+	if rd == nil {
+		return 0
+	}
+	return rd.TiKVRUV2() + rd.TiDBRUV2()
 }
 
 // Update updates the RU runtime stats with the given consumption info.

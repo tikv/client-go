@@ -104,7 +104,7 @@ func (s StoreProbe) SaveSafePointToSafePointKV(v uint64) error {
 }
 
 func (s StoreProbe) LoadTxnSafePoint(ctx context.Context) (uint64, error) {
-	return s.KVStore.loadTxnSafePoint(ctx)
+	return s.loadTxnSafePoint(ctx)
 }
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
@@ -167,11 +167,11 @@ func (s StoreProbe) GetGCStatesClient() pdgc.GCStatesClient {
 }
 
 func (s StoreProbe) ReplaceGCStatesClient(c pdgc.GCStatesClient) {
-	s.KVStore.gcStatesClient = c
+	s.gcStatesClient = c
 }
 
 func (s StoreProbe) GetCompatibleTxnSafePointLoaderUnderlyingEtcdClient() *clientv3.Client {
-	return s.KVStore.compatibleTxnSafePointLoader.etcdCli.Load()
+	return s.compatibleTxnSafePointLoader.etcdCli.Load()
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
@@ -190,7 +190,7 @@ func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.L
 	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)
 	// make use of forcing resolving lock
 	lock.TTL = 0
-	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
+	_, err := l.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
 	return err
 }
 

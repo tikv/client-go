@@ -563,6 +563,12 @@ func (h kvHandler) handleKvRawBatchDelete(req *kvrpcpb.RawBatchDeleteRequest) *k
 }
 
 func (h kvHandler) handleKvRawDeleteRange(req *kvrpcpb.RawDeleteRangeRequest) *kvrpcpb.RawDeleteRangeResponse {
+	if !h.checkRawKeyInRegion(req.StartKey) {
+		panic("RawDeleteRange: start key not in region")
+	}
+	if !h.checkRawEndKeyInRegion(req.EndKey) {
+		panic("RawDeleteRange: end key not in region")
+	}
 	rawKV, ok := h.mvccStore.(RawKV)
 	if !ok {
 		return &kvrpcpb.RawDeleteRangeResponse{
@@ -787,7 +793,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.PrewriteResponse{
 							RegionError: &errorpb.Error{
@@ -838,7 +844,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.CommitResponse{
 							RegionError: &errorpb.Error{

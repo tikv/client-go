@@ -693,7 +693,7 @@ func (an *artNode) growNode16(n16 *node16, a *artAllocator) {
 	newAddr, n48 := a.allocNode48()
 	n48.copyMeta(&n16.nodeBase)
 
-	for i := uint8(0); i < n16.nodeBase.nodeNum; i++ {
+	for i := uint8(0); i < n16.nodeNum; i++ {
 		ch := n16.keys[i]
 		n48.keys[ch] = i
 		n48.present[ch>>n48s] |= 1 << (ch % n48m)

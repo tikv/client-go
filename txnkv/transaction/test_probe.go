@@ -136,8 +136,14 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKey
 	return keys
 }
 
-func (txn TxnProbe) GetCommitWaitUntilTSOTimeout() time.Duration {
-	return txn.KVTxn.commitWaitUntilTSOTimeout
+// GetAggressiveLockingPrimary returns the primary assigned in the current aggressive locking stage, if any.
+func (txn TxnProbe) GetAggressiveLockingPrimary() []byte {
+	return txn.aggressiveLockingContext.primaryKey
+}
+
+// GetAggressiveLockingLastPrimary returns the primary assigned in the previous aggressive locking attempt, if any.
+func (txn TxnProbe) GetAggressiveLockingLastPrimary() []byte {
+	return txn.aggressiveLockingContext.lastPrimaryKey
 }
 
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
@@ -339,19 +345,19 @@ func (c CommitterProbe) GetOnePCCommitTS() uint64 {
 
 // IsTTLUninitialized returns if the TTL manager is uninitialized.
 func (c CommitterProbe) IsTTLUninitialized() bool {
-	state := atomic.LoadUint32((*uint32)(&c.ttlManager.state))
+	state := atomic.LoadUint32((*uint32)(&c.state))
 	return state == uint32(stateUninitialized)
 }
 
 // IsTTLRunning returns if the TTL manager is running state.
 func (c CommitterProbe) IsTTLRunning() bool {
-	state := atomic.LoadUint32((*uint32)(&c.ttlManager.state))
+	state := atomic.LoadUint32((*uint32)(&c.state))
 	return state == uint32(stateRunning)
 }
 
 // CloseTTLManager closes the TTL manager.
 func (c CommitterProbe) CloseTTLManager() {
-	c.ttlManager.close()
+	c.close()
 }
 
 // GetUndeterminedErr returns the encountered undetermined error (if any).

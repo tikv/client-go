@@ -143,7 +143,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Suppose all connections are re-establishing.
-	for _, client := range conn.batchConn.batchCommandsClients {
+	for _, client := range conn.batchCommandsClients {
 		client.lockForRecreate()
 	}
 
@@ -679,11 +679,11 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		server.Stop()
 	}()
 
-	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	conn, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
@@ -694,6 +694,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be failed since server is down.
 	for i := 0; i < 10; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
@@ -716,9 +717,9 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		grpcConn := conn.Get()
 		require.NotNil(t, grpcConn)
 		var cli *batchCommandsClient
-		for i := range conn.batchConn.batchCommandsClients {
+		for i := range conn.batchCommandsClients {
 			if conn.batchConn.batchCommandsClients[i].tryLockForSend() {
-				cli = conn.batchConn.batchCommandsClients[i]
+				cli = conn.batchCommandsClients[i]
 				break
 			}
 		}
@@ -737,6 +738,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
@@ -975,7 +977,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	}
 	wg.Wait()
 
-	for _, cli := range conn.batchConn.batchCommandsClients {
+	for _, cli := range conn.batchCommandsClients {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
@@ -1045,10 +1047,12 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second, 0)
 	require.NoError(t, err)
 
-	for _, c := range conn.batchConn.batchCommandsClients {
+	for _, c := range conn.batchCommandsClients {
 		// mock all client a in recreate.
 		c.lockForRecreate()
 	}
+
+	req = &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	start := time.Now()
 	timeout := time.Second
 	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, timeout, 0)
