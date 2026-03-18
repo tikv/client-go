@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master, tidb-8.5 ]
+    branches: [ master, tidb-8.5, "feature/*" ]
   pull_request:
-    branches: [ master, tidb-8.5 ]
+    branches: [ master, tidb-8.5, "feature/*" ]
 
 jobs:
 
