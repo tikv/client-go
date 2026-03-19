@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -410,4 +411,24 @@ func TestTimeDetailMergeNil(t *testing.T) {
 	}
 	a.Merge(nil)
 	assert.Equal(t, 10*time.Millisecond, a.ProcessTime)
+}
+
+func TestRUDetailsUpdateTiFlash(t *testing.T) {
+	rd := NewRUDetails()
+	rd.Update(&rmpb.Consumption{
+		RRU: 1.5,
+		WRU: 2.5,
+	}, 3*time.Millisecond)
+	rd.UpdateTiFlash(&rmpb.Consumption{
+		RRU: 3.0,
+		WRU: 4.0,
+	})
+
+	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
+	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
+	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
+	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
+
+	cloned := rd.Clone()
+	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
 }

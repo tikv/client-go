@@ -206,8 +206,8 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 	rl.Exec(ctx)
 	require.True(t, called)
 
-	expected := int64((weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale)
-	require.Equal(t, expected, ruDetails.TiKVRUV2())
+	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
+	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {

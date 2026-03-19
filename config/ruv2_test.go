@@ -51,5 +51,5 @@ func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
 		},
 	}, 31)
 
-	require.Equal(t, int64(157258), ruDetails.TiKVRUV2())
+	require.InDelta(t, 157258.29118786956, ruDetails.TiKVRUV2(), 1e-9)
 }
