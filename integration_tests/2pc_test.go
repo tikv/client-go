@@ -1598,6 +1598,67 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingKeepAliveAfterMultiLockKeysOperation() {
+	test := func(isRetried bool, isPrimaryChanged bool) {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+		s.True(txn.GetCommitter().IsNil())
+
+		txn.StartAggressiveLocking()
+		lockCtx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
+
+		if isRetried {
+			// Test in the condition that the aggressive locking stage is retried, so that the transaction used
+			// to set primary previously.
+			lastPrimary := []byte("k0")
+			if !isPrimaryChanged {
+				lastPrimary = []byte("k1")
+			}
+			err := txn.LockKeys(context.Background(), lockCtx, lastPrimary)
+			s.NoError(err)
+			s.Equal(lastPrimary, txn.GetCommitter().GetPrimaryKey())
+			s.Equal(lastPrimary, txn.GetAggressiveLockingPrimary())
+			txn.RetryAggressiveLocking(context.Background())
+			s.Equal(lastPrimary, txn.GetAggressiveLockingLastPrimary())
+		}
+
+		err := txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+		s.NoError(err)
+		s.True(txn.IsInAggressiveLockingMode())
+		s.True(txn.IsInAggressiveLockingStage([]byte("k1")))
+		s.True(txn.GetCommitter().IsTTLRunning())
+		s.Equal([]byte("k1"), txn.GetCommitter().GetPrimaryKey())
+		err = txn.LockKeys(context.Background(), lockCtx, []byte("k2"))
+		s.NoError(err)
+		s.True(txn.IsInAggressiveLockingMode())
+		s.True(txn.IsInAggressiveLockingStage([]byte("k1")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k2")))
+		s.True(txn.GetCommitter().IsTTLRunning())
+		s.Equal([]byte("k1"), txn.GetCommitter().GetPrimaryKey())
+
+		txn.DoneAggressiveLocking(context.Background())
+		s.True(txn.GetCommitter().IsTTLRunning())
+
+		// Check the keys are still locked
+		txn2 := s.begin()
+		txn2.SetPessimistic(true)
+		lockCtx2 := kv.NewLockCtx(txn2.StartTS(), 100, time.Now())
+		err = txn2.LockKeys(context.Background(), lockCtx2, []byte("k1"))
+		s.Error(err)
+		s.ErrorIs(err, tikverr.ErrLockWaitTimeout)
+
+		err = txn2.LockKeys(context.Background(), lockCtx2, []byte("k2"))
+		s.Error(err)
+		s.ErrorIs(err, tikverr.ErrLockWaitTimeout)
+
+		s.NoError(txn2.Rollback())
+		s.NoError(txn.Rollback())
+	}
+	test(false, false)
+	test(true, false)
+	test(true, true)
+}
+
 type aggressiveLockingExitPhase int
 
 const (

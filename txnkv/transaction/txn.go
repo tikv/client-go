@@ -1484,7 +1484,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			metrics.AggressiveLockedKeysDerived.Add(float64(filteredAggressiveLockedKeysCount))
 			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
 
-			txn.resetTTLManagerForAggressiveLockingMode(len(keys) != 0)
+			txn.resetTTLManagerForAggressiveLockingMode(len(keys) != 0, assignedPrimaryKey)
 
 			if len(keys) == 0 {
 				if lockCtx.Stats != nil {
@@ -1660,24 +1660,30 @@ func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 }
 
 // resetTTLManagerForAggressiveLockingMode is used in a fair locking procedure to reset the ttlManager when necessary.
-// This function is only used during the LockKeys invocation, and the parameter hasNewLockToAcquire indicates whether
-// there are any key needs to be locked in the current LockKeys call, after filtering out those that has already been
-// locked before the most recent RetryAggressiveLocking.
+// This function is only used during the LockKeys invocation. The parameter hasNewLockToAcquire indicates whether
+// there are any key needs to be locked in the current LockKeys call, after filtering out those that have already been
+// locked before the most recent RetryAggressiveLocking. The parameter assignedPrimary is whether the primary is
+// just assigned in the current LockKeys invocation where this function is called.
 // Also note that this function is not the only path that fair locking resets the ttlManager. DoneAggressiveLocking may
 // also stop the ttlManager if no key is locked after exiting.
-func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bool) {
+func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bool, assignedPrimary bool) {
 	if !txn.IsInAggressiveLockingMode() {
 		// Not supposed to be called in a non fair locking context
 		return
 	}
 	// * When there's no new lock to acquire, assume the primary key is not changed in this case. Keep the ttlManager
-	// running.
+	//   running.
+	// * When the current LockKeys invocation didn't trigger assigning primary, it's sure that we shouldn't reset
+	//   the ttlManager this time.
 	// * When there is key to write:
 	//   * If the primary key is not changed, also keep the ttlManager running. Then, when sending the
 	//     acquirePessimisticLock requests, it will call ttlManager.run() again, but it's reentrant and will do nothing
 	//     as the ttlManager is already running.
 	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
-	if hasNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
+	//     Note that primaryKey != lastPrimaryKey is true when LockKeys is called the second time in the same
+	//     aggressive locking stage, in which case the ttlManager should not be reset. This case is excluded by checking
+	//     assignedPrimary.
+	if hasNewLockToAcquire && assignedPrimary && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
 		txn.committer.reset()
 	}
 }

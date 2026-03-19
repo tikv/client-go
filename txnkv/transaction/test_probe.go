@@ -141,6 +141,16 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKey
 	return keys
 }
 
+// GetAggressiveLockingPrimary returns the primary assigned in the current aggressive locking stage, if any.
+func (txn TxnProbe) GetAggressiveLockingPrimary() []byte {
+	return txn.aggressiveLockingContext.primaryKey
+}
+
+// GetAggressiveLockingLastPrimary returns the primary assigned in the previous aggressive locking attempt, if any.
+func (txn TxnProbe) GetAggressiveLockingLastPrimary() []byte {
+	return txn.aggressiveLockingContext.lastPrimaryKey
+}
+
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
