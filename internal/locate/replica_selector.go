@@ -31,13 +31,14 @@ import (
 
 type replicaSelector struct {
 	baseReplicaSelector
-	replicaReadType kv.ReplicaReadType
-	isStaleRead     bool
-	isReadOnlyReq   bool
-	option          storeSelectorOp
-	target          *replica
-	proxy           *replica
-	attempts        int
+	replicaReadType           kv.ReplicaReadType
+	isStaleRead               bool
+	isReadOnlyReq             bool
+	option                    storeSelectorOp
+	target                    *replica
+	proxy                     *replica
+	attempts                  int
+	regionInvalidatedForRetry bool // set when region is hard-invalidated but this selector should still retry on leader
 }
 
 func newReplicaSelector(
@@ -98,7 +99,13 @@ func buildTiKVReplicas(region *Region) []*replica {
 }
 
 func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
-	if !s.region.isValid() {
+	if s.regionInvalidatedForRetry {
+		// Allow one more attempt on this selector even though the region is
+		// invalidated.  This is set by onRegionNotFound so that the current
+		// request can retry on the leader while concurrent requests are
+		// stopped by the hard invalidation.
+		s.regionInvalidatedForRetry = false
+	} else if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
 	}
@@ -523,11 +530,15 @@ func (s *replicaSelector) onRegionNotFound(
 	leaderIdx := s.region.getStore().workTiKVIdx
 	leader := s.replicas[leaderIdx]
 	if !leader.isExhausted(1, 0) {
-		// if the request is not sent to leader, we can retry it with leader and invalidate the region cache asynchronously. It helps in the scenario
-		// where region is split by the leader but not yet created in replica due to replica down.
+		// if the request is not sent to leader, we can retry it with leader and invalidate the region cache
+		// immediately. It helps in the scenario where region is split by the leader but not yet created
+		// in replica due to replica down.
+		// Hard-invalidate the region so that concurrent requests stop using the stale region,
+		// but allow this selector to retry on the leader via regionInvalidatedForRetry.
 		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		s.replicaReadType = kv.ReplicaReadLeader
-		s.regionCache.AsyncInvalidateCachedRegion(ctx.Region)
+		s.regionInvalidatedForRetry = true
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return true, nil
 	}
 	s.regionCache.InvalidateCachedRegion(ctx.Region)
