@@ -116,7 +116,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20250604120526-b159f56cd452 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260317213042-b1525070ca3e // indirect
 	github.com/pingcap/tipb v0.0.0-20260210113932-1447c9d7e9fe // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
