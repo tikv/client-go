@@ -8,7 +8,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260309153435-8478a5610086
-	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
+	github.com/pingcap/tidb v0.0.0-20260320131726-051184927f34
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
@@ -177,8 +177,5 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	// todo: remove this replace after tidb updated the dependency
-	github.com/pingcap/tidb => github.com/pingcap/tidb v0.0.0-20260320131726-051184927f34
-	github.com/pingcap/tidb/pkg/parser => github.com/pingcap/tidb/pkg/parser v0.0.0-20260320131726-051184927f34
 	github.com/tikv/client-go/v2 => ../
 )
