@@ -122,6 +122,11 @@ type KVStore struct {
 
 	mock bool
 
+	// disableActiveActiveCommitSupport indicates whether to disable active-active commit support.
+	// The default value is false, which disables the async-commit and 1PC to ensure the commit timestamp should
+	// always follow the constraint by PD settings `tso-unique-index`.
+	disableActiveActiveCommitSupport bool
+
 	kv        SafePointKV
 	safePoint uint64
 	spTime    time.Time
@@ -880,6 +885,13 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	}
 
 	return false
+}
+
+// IsActiveActiveCommitSupportDisabled indicates whether to disable active-active commit support.
+// The default value is false, which disables the async-commit and 1PC to ensure the commit timestamp should
+// always follow the constraint by PD settings `tso-unique-index`.
+func (s *KVStore) IsActiveActiveCommitSupportDisabled() bool {
+	return s.disableActiveActiveCommitSupport
 }
 
 func isValidSafeTS(ts uint64) bool {

@@ -42,12 +42,16 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestStore(t *testing.T) {
@@ -191,4 +195,51 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	val, err := txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
 	s.Equal(val.Value, []byte("value"))
+}
+
+func TestEnableActiveActiveCommitByDefault(t *testing.T) {
+	re := require.New(t)
+
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	re.NoError(err)
+	testutils.BootstrapWithSingleStore(cluster)
+
+	pdCli := tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
+	spkv := tikv.NewMockSafePointKV()
+	store, err := tikv.NewKVStore("default-active-active-commit-store", pdCli, spkv, client)
+	re.NoError(err)
+	defer func() {
+		re.NoError(store.Close())
+	}()
+
+	re.False(store.IsActiveActiveCommitSupportDisabled())
+
+	txn, err := store.Begin()
+	re.NoError(err)
+	re.NoError(txn.Set([]byte("aa"), []byte("v1")))
+	re.NoError(txn.Set([]byte("ab"), []byte("v2")))
+	txn.SetEnableAsyncCommit(true)
+	txn.SetEnable1PC(true)
+
+	txnProbe := transaction.TxnProbe{KVTxn: txn}
+	committer, err := txnProbe.NewCommitter(1)
+	re.NoError(err)
+	re.False(committer.CheckAsyncCommit())
+	re.False(committer.CheckOnePC())
+
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	re.NoError(txn.Commit(ctx))
+	re.False(txnProbe.IsAsyncCommit())
+	re.False(txnProbe.GetCommitter().IsOnePC())
+	re.Zero(txnProbe.GetCommitter().GetOnePCCommitTS())
+
+	verifyTxn, err := store.Begin()
+	re.NoError(err)
+	value, err := verifyTxn.Get(context.Background(), []byte("aa"))
+	re.NoError(err)
+	re.Equal([]byte("v1"), value.Value)
+	value, err = verifyTxn.Get(context.Background(), []byte("ab"))
+	re.NoError(err)
+	re.Equal([]byte("v2"), value.Value)
+	re.NoError(verifyTxn.Rollback())
 }

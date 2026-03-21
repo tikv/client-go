@@ -333,6 +333,11 @@ func (c CommitterProbe) CheckAsyncCommit() bool {
 	return c.checkAsyncCommit()
 }
 
+// CheckOnePC returns if 1pc commit is available.
+func (c CommitterProbe) CheckOnePC() bool {
+	return c.checkOnePC()
+}
+
 // GetOnePCCommitTS returns the commit ts of one pc.
 func (c CommitterProbe) GetOnePCCommitTS() uint64 {
 	return c.onePCCommitTS

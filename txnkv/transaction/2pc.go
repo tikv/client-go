@@ -121,6 +121,10 @@ type kvstore interface {
 	IsClose() bool
 	// Go run the function in a separate goroutine.
 	Go(f func()) error
+	// IsActiveActiveCommitSupportDisabled indicates whether to disable active-active commit support.
+	// The default value is false, which disables the async-commit and 1PC to ensure the commit timestamp should
+	// always follow the constraint by PD settings `tso-unique-index`.
+	IsActiveActiveCommitSupportDisabled() bool
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -1504,6 +1508,10 @@ func sendTxnHeartBeat(
 
 // checkAsyncCommit checks if async commit protocol is available for current transaction commit, true is returned if possible.
 func (c *twoPhaseCommitter) checkAsyncCommit() bool {
+	if !c.store.IsActiveActiveCommitSupportDisabled() {
+		return false
+	}
+
 	// Disable async commit in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
@@ -1535,6 +1543,10 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 
 // checkOnePC checks if 1PC protocol is available for current transaction.
 func (c *twoPhaseCommitter) checkOnePC() bool {
+	if !c.store.IsActiveActiveCommitSupportDisabled() {
+		return false
+	}
+
 	// Disable 1PC in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false

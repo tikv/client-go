@@ -84,6 +84,13 @@ func (c *CodecClient) SendRequestAsync(ctx context.Context, addr string, req *ti
 	c.Client.SendRequestAsync(ctx, addr, req, cb)
 }
 
+func disableActiveActiveCommitSupport(opt ...Option) []Option {
+	newOpts := make([]Option, 0, len(opt)+1)
+	newOpts = append(newOpts, WithDisableActiveActiveCommitSupportForTest())
+	newOpts = append(newOpts, opt...)
+	return newOpts
+}
+
 // NewTestTiKVStore creates a test store with Option
 func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Client) Client, pdClientHijack func(pd.Client) pd.Client, txnLocalLatches uint, opt ...Option) (*KVStore, error) {
 	codec := apicodec.NewCodecV1(apicodec.ModeTxn)
@@ -104,6 +111,8 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 	// Make sure the uuid is unique.
 	uid := uuid.New().String()
 	spkv := NewMockSafePointKV()
+	// To make sure some existing tests with async-commit or 1pc commit pass
+	opt = disableActiveActiveCommitSupport(opt...)
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
 	if txnLocalLatches > 0 {
@@ -144,6 +153,8 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 
 	keyspaceIdStr := strconv.FormatUint(uint64(keyspaceMeta.Id), 10)
 	spkv := NewMockSafePointKV(WithPrefix(keyspaceIdStr))
+	// To make sure some existing tests with async-commit or 1pc commit pass
+	opt = disableActiveActiveCommitSupport(opt...)
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
 	if txnLocalLatches > 0 {
@@ -152,4 +163,12 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 
 	tikvStore.mock = true
 	return tikvStore, err
+}
+
+// WithDisableActiveActiveCommitSupportForTest is used to disable active-active commit support for test.
+// It should only be used in the test env.
+func WithDisableActiveActiveCommitSupportForTest() Option {
+	return func(store *KVStore) {
+		store.disableActiveActiveCommitSupport = true
+	}
 }
