@@ -5,16 +5,16 @@ go 1.25.8
 require (
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/ninedraft/israce v0.0.3
-	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
+	github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260309153435-8478a5610086
-	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
+	github.com/pingcap/tidb v1.1.0-beta.0.20260317213042-b1525070ca3e
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.14.4
-	github.com/tikv/client-go/v2 v2.0.8-0.20260303050247-d80e4888d527
+	github.com/tikv/client-go/v2 v2.0.8-0.20260316081220-602cdf086c43
 	github.com/tikv/pd/client v0.0.0-20260228084044-4f5039d43753
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.75.1
@@ -116,7 +116,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20250604120526-b159f56cd452 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260317213042-b1525070ca3e // indirect
 	github.com/pingcap/tipb v0.0.0-20260210113932-1447c9d7e9fe // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -177,8 +177,5 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	// todo: remove this replace after tidb updated the dependency
-	github.com/pingcap/tidb => github.com/bufferflies/tidb v0.0.0-20260313023008-d33e51e43464
-	github.com/pingcap/tidb/pkg/parser => github.com/bufferflies/tidb/pkg/parser v0.0.0-20260313023008-d33e51e43464
 	github.com/tikv/client-go/v2 => ../
 )
