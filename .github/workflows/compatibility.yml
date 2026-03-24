@@ -25,6 +25,7 @@ jobs:
       uses: actions/checkout@v2
       with:
         repository: pingcap/tidb
+        ref: release-8.5-20260225-v8.5.2
         path: tidb
 
     - name: Check build
