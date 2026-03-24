@@ -2,9 +2,9 @@ name: Compatibility Test
 
 on:
   push:
-    branches: [ master, release-7.5-20260225 ]
+    branches: [ master ]
   pull_request:
-    branches: [ master, release-7.5-20260225 ]
+    branches: [ master ]
 
 jobs:
 
