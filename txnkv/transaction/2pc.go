@@ -1686,10 +1686,12 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
 			logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
 				zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
-		} else {
+		} else if !c.isPessimistic {
 			logutil.Logger(ctx).Info("2PC secondary lock cleanup finished",
-				zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
-				zap.Bool("isOnePC", c.isOnePC()))
+				zap.Uint64("txnStartTS", c.startTS), zap.Bool("isOnePC", c.isOnePC()))
+		} else {
+			logutil.Logger(ctx).Debug("2PC pessimistic lock rollback finished",
+				zap.Uint64("txnStartTS", c.startTS))
 		}
 	})
 }
