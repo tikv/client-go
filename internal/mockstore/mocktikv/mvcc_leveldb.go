@@ -303,10 +303,23 @@ func (dec *skipDecoder) Decode(iter *Iterator) (bool, error) {
 // Get implements the MVCCStore interface.
 // key cannot be nil or []byte{}
 func (mvcc *MVCCLevelDB) Get(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
+	pair := mvcc.GetKVPair(key, startTS, isoLevel, resolvedLocks)
+	return pair.Value, pair.Err
+}
+
+func (mvcc *MVCCLevelDB) GetKVPair(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (p Pair) {
 	mvcc.mu.RLock()
 	defer mvcc.mu.RUnlock()
+	val, err := mvcc.getValue(key, startTS, isoLevel, resolvedLocks)
+	if err != nil {
+		p.Err = err
+		return
+	}
 
-	return mvcc.getValue(key, startTS, isoLevel, resolvedLocks)
+	p.Key = key
+	p.Value = val.value
+	p.CommitTS = val.commitTS
+	return p
 }
 
 func (mvcc *MVCCLevelDB) getDB(cf string) *leveldb.DB {
@@ -330,7 +343,7 @@ func (mvcc *MVCCLevelDB) createDB(cf string) (*leveldb.DB, error) {
 	return d, nil
 }
 
-func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
+func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (mvccValue, error) {
 	startKey := mvccEncode(key, lockVer)
 	iter := newIterator(mvcc.getDB(""), &util.Range{
 		Start: startKey,
@@ -340,38 +353,38 @@ func (mvcc *MVCCLevelDB) getValue(key []byte, startTS uint64, isoLevel kvrpcpb.I
 	return getValue(iter, key, startTS, isoLevel, resolvedLocks)
 }
 
-func getValue(iter *Iterator, key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {
+func getValue(iter *Iterator, key []byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) (mvccValue, error) {
 	dec1 := lockDecoder{expectKey: key}
 	ok, err := dec1.Decode(iter)
 	if ok && isoLevel == kvrpcpb.IsolationLevel_SI {
 		startTS, err = dec1.lock.check(startTS, key, resolvedLocks)
 	}
 	if err != nil {
-		return nil, err
+		return mvccValue{}, err
 	}
 	dec2 := valueDecoder{expectKey: key}
 	for iter.Valid() {
 		ok, err := dec2.Decode(iter)
 		if err != nil {
-			return nil, err
+			return mvccValue{}, err
 		}
 		if !ok {
 			break
 		}
 
-		value := &dec2.value
+		value := dec2.value
 		if value.valueType == typeRollback || value.valueType == typeLock {
 			continue
 		}
 		// Read the first committed value that can be seen at startTS.
 		if value.commitTS <= startTS {
 			if value.valueType == typeDelete {
-				return nil, nil
+				return mvccValue{}, nil
 			}
-			return value.value, nil
+			return value, nil
 		}
 	}
-	return nil, nil
+	return mvccValue{}, nil
 }
 
 // BatchGet implements the MVCCStore interface.
@@ -382,13 +395,14 @@ func (mvcc *MVCCLevelDB) BatchGet(ks [][]byte, startTS uint64, isoLevel kvrpcpb.
 	pairs := make([]Pair, 0, len(ks))
 	for _, k := range ks {
 		v, err := mvcc.getValue(k, startTS, isoLevel, resolvedLocks)
-		if v == nil && err == nil {
+		if v.value == nil && err == nil {
 			continue
 		}
 		pairs = append(pairs, Pair{
-			Key:   k,
-			Value: v,
-			Err:   err,
+			Key:      k,
+			Value:    v.value,
+			CommitTS: v.commitTS,
+			Err:      err,
 		})
 	}
 	return pairs
@@ -416,10 +430,10 @@ func (mvcc *MVCCLevelDB) Scan(startKey, endKey []byte, limit int, startTS uint64
 				Err: err,
 			})
 		}
-		if value != nil {
+		if value.value != nil {
 			pairs = append(pairs, Pair{
 				Key:   currKey,
-				Value: value,
+				Value: value.value,
 			})
 		}
 
@@ -831,7 +845,7 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 				anyError = true
 				continue
 			}
-			if v != nil {
+			if v.value != nil {
 				err = &ErrKeyAlreadyExist{
 					Key: m.Key,
 				}
@@ -927,7 +941,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 			}
 		}
 
-		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
+		switch dec.value.valueType {
+		case typePut, typeLock:
 			if needCheckShouldNotExistForPessimisticLock {
 				if writeConflictErr != nil {
 					return nil, writeConflictErr
@@ -946,7 +961,7 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 					ExistingCommitTS: dec.value.commitTS,
 				}
 			}
-		} else if dec.value.valueType == typeDelete {
+		case typeDelete:
 			if lockOnlyIfExists && writeConflictErr != nil {
 				// If lockOnlyIfExists is enabled and the key doesn't exist, force locking shouldn't take effect.
 				return nil, writeConflictErr
@@ -1135,11 +1150,12 @@ func commitKey(db *leveldb.DB, batch *leveldb.Batch, key []byte, startTS, commit
 
 func commitLock(batch *leveldb.Batch, lock mvccLock, key []byte, startTS, commitTS uint64) error {
 	var valueType mvccValueType
-	if lock.op == kvrpcpb.Op_Put {
+	switch lock.op {
+	case kvrpcpb.Op_Put:
 		valueType = typePut
-	} else if lock.op == kvrpcpb.Op_Lock {
+	case kvrpcpb.Op_Lock:
 		valueType = typeLock
-	} else {
+	default:
 		valueType = typeDelete
 	}
 	value := mvccValue{

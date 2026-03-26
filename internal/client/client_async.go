@@ -35,6 +35,7 @@ import (
 // SendRequestAsync sends a request to the target address asynchronously.
 func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	var err error
+	writeRPCCount := completedTiKVWriteRPCCount(req)
 
 	if atomic.CompareAndSwapUint32(&c.idleNotify, 1, 0) {
 		go c.recycleIdleConnArray()
@@ -82,6 +83,11 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		return
 	}
 
+	if err := encodeRequestCmd(batchReq); err != nil {
+		cb.Invoke(nil, err)
+		return
+	}
+
 	var (
 		entry = &batchCommandsEntry{
 			ctx:           ctx,
@@ -115,6 +121,9 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 
 		// rpc metrics
 		connPool.updateRPCMetrics(req, resp, elapsed)
+		if resp != nil {
+			config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
+		}
 
 		// tracing
 		if spanRPC != nil {

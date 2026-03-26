@@ -336,15 +336,9 @@ func NewKVStore(
 		}
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
-	var opts []locate.RegionCacheOpt
-	if config.NextGen {
-		opts = append(opts, locate.RegionCacheNoHealthTick)
-	} else {
-		opts = append(opts, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
-			return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
-		}))
-	}
-	regionCache := locate.NewRegionCache(pdClient, opts...)
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+	}))
 	codec := pdClient.(*CodecPDClient).GetCodec()
 	etcdAddrs, etcdTlsCfg := spkv.extractConnectionInfo()
 	store := &KVStore{
@@ -364,6 +358,7 @@ func NewKVStore(
 	defer func() {
 		if retErr != nil {
 			regionCache.Close()
+			cancel()
 		}
 	}()
 
@@ -510,20 +505,25 @@ func (s *KVStore) Close() error {
 	s.wg.Wait()
 
 	s.oracle.Close()
-	s.pdClient.Close()
-	if s.pdHttpClient != nil {
-		s.pdHttpClient.Close()
+	if s.txnLatches != nil {
+		s.txnLatches.Close()
 	}
 	s.lockResolver.Close()
+	// Close region cache before closing clients it depends on. Otherwise, its background tasks might still try
+	// to access PD/TiKV and encounter "grpc: the client connection is closing".
+	s.regionCache.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
 		return err
 	}
 
-	if s.txnLatches != nil {
-		s.txnLatches.Close()
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
 	}
-	s.regionCache.Close()
+	if _, err := util.EvalFailpoint("checkRegionCacheClosedBeforePDClose"); err == nil && !s.regionCache.IsBackgroundRunnerClosed() {
+		panic("region cache is not closed before closing pd client")
+	}
+	s.pdClient.Close()
 
 	if err := s.kv.Close(); err != nil {
 		return err

@@ -24,10 +24,11 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/require"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/util"
 )
 
-func emptyBufferBatchGetter(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func emptyBufferBatchGetter(ctx context.Context, keys [][]byte) (map[string]kv.ValueEntry, error) {
 	return nil, nil
 }
 
@@ -201,7 +202,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	}
 	value, err := memdb.Get(context.Background(), []byte("key"))
 	require.Nil(t, err)
-	require.Equal(t, value, []byte("value"))
+	require.Equal(t, value, kv.NewValueEntry([]byte("value"), 0))
 	flushed, err := memdb.Flush(false)
 	require.True(t, flushed)
 	require.Nil(t, err)
@@ -213,7 +214,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	// But we still can get the value by PipelinedMemDB.Get.
 	value, err = memdb.Get(context.Background(), []byte("key"))
 	require.Nil(t, err)
-	require.Equal(t, value, []byte("value"))
+	require.Equal(t, value, kv.NewValueEntry([]byte("value"), 0))
 
 	// finish the first flush
 	blockCh <- struct{}{}
@@ -361,13 +362,13 @@ func TestMemBufferBatchGetCache(t *testing.T) {
 	flushDone := make(chan struct{})
 	var remoteMutex sync.RWMutex
 	remoteBuffer := make(map[string][]byte, 16)
-	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
+	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string]kv.ValueEntry, error) {
 		remoteMutex.RLock()
 		defer remoteMutex.RUnlock()
-		m := make(map[string][]byte, len(keys))
+		m := make(map[string]kv.ValueEntry, len(keys))
 		for _, k := range keys {
 			if val, ok := remoteBuffer[string(k)]; ok {
-				m[string(k)] = val
+				m[string(k)] = kv.NewValueEntry(val, 0)
 			}
 		}
 		return m, nil
@@ -420,7 +421,7 @@ func TestMemBufferBatchGetCache(t *testing.T) {
 	// cache: [k1 -> v11, k2 -> v21]
 	m, err := pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2")})
 	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{"k1": []byte("v11"), "k2": []byte("v21")})
+	require.Equal(t, m, map[string]kv.ValueEntry{"k1": kv.NewValueEntry([]byte("v11"), 0), "k2": kv.NewValueEntry([]byte("v21"), 0)})
 	v, err = mustGetFromCache([]byte("k1"))
 	require.Nil(t, err)
 	require.Equal(t, v, []byte("v11"))
@@ -445,7 +446,7 @@ func TestMemBufferBatchGetCache(t *testing.T) {
 	// cache: [k1 -> [], k2 -> v22, k3 -> [], k4 -> not exist]
 	m, err = pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
 	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{"k1": {}, "k2": []byte("v22"), "k3": {}})
+	require.Equal(t, m, map[string]kv.ValueEntry{"k1": kv.NewValueEntry([]byte{}, 0), "k2": kv.NewValueEntry([]byte("v22"), 0), "k3": kv.NewValueEntry([]byte{}, 0)})
 	v, err = mustGetFromCache([]byte("k1"))
 	require.Nil(t, err)
 	require.Len(t, v, 0)

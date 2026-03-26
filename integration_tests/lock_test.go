@@ -158,7 +158,7 @@ func (s *testLockSuite) TestScanLockResolveWithGet() {
 	for ch := byte('a'); ch <= byte('z'); ch++ {
 		v, err := txn.Get(context.TODO(), []byte{ch})
 		s.Nil(err)
-		s.Equal(v, []byte{ch})
+		s.Equal(v.Value, []byte{ch})
 	}
 }
 
@@ -210,7 +210,7 @@ func (s *testLockSuite) TestScanLockResolveWithBatchGet() {
 	s.Equal(len(m), int('z'-'a'+1))
 	for ch := byte('a'); ch <= byte('z'); ch++ {
 		k := []byte{ch}
-		s.Equal(m[string(k)], k)
+		s.Equal(m[string(k)].Value, k)
 	}
 }
 
@@ -557,10 +557,10 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	// transaction 2 is committed
 	v, err := txn.Get(context.Background(), []byte("k3"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v3")))
+	s.True(bytes.Equal(v.Value, []byte("v3")))
 	v, err = txn.Get(context.Background(), []byte("k4"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v4")))
+	s.True(bytes.Equal(v.Value, []byte("v4")))
 }
 
 func (s *testLockSuite) TestNewLockZeroTTL() {
@@ -1227,7 +1227,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		snapshot := s.store.GetSnapshot(txn2.CommitTS())
 		v, err := snapshot.Get(context.Background(), k1)
 		s.NoError(err)
-		s.Equal(v2, v)
+		s.Equal(v2, v.Value)
 
 		snapshot = s.store.GetSnapshot(txn2.CommitTS() - 1)
 		_, err = snapshot.Get(context.Background(), k1)
@@ -1272,15 +1272,15 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		snapshot = s.store.GetSnapshot(txn.CommitTS())
 		v, err = snapshot.Get(context.Background(), k2)
 		s.NoError(err)
-		s.Equal(v1, v)
+		s.Equal(v1, v.Value)
 		v, err = snapshot.Get(context.Background(), k3)
 		s.NoError(err)
-		s.Equal(v1, v)
+		s.Equal(v1, v.Value)
 
 		snapshot = s.store.GetSnapshot(txn.CommitTS() - 1)
 		v, err = snapshot.Get(context.Background(), k2)
 		s.NoError(err)
-		s.Equal(v2, v)
+		s.Equal(v2, v.Value)
 		_, err = snapshot.Get(context.Background(), k3)
 		s.Equal(tikverr.ErrNotExist, err)
 	}
@@ -1372,12 +1372,12 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	snapshot := s.store.GetSnapshot(readTS)
 	v, err := snapshot.Get(ctx, k3)
 	s.NoError(err)
-	s.Equal([]byte("v3-1"), v)
+	s.Equal([]byte("v3-1"), v.Value)
 	_, err = snapshot.Get(ctx, k2)
 	s.Equal(tikverr.ErrNotExist, err)
 	v, err = snapshot.Get(ctx, k1)
 	s.NoError(err)
-	s.Equal([]byte("v1-1"), v)
+	s.Equal([]byte("v1-1"), v.Value)
 }
 
 func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
@@ -1468,10 +1468,10 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.Equal(tikverr.ErrNotExist, err)
 	v, err := snapshot.Get(ctx, k2)
 	s.NoError(err)
-	s.Equal(v2, v)
+	s.Equal(v2, v.Value)
 	v, err = snapshot.Get(ctx, k3)
 	s.NoError(err)
-	s.Equal(v3, v)
+	s.Equal(v3, v.Value)
 }
 
 func (s *testLockWithTiKVSuite) makeLock(startTS uint64, forUpdateTS uint64, key []byte, primary []byte) *txnlock.Lock {

@@ -55,17 +55,20 @@ const (
 
 // explicit source types.
 const (
-	ExplicitTypeEmpty      = ""
+	ExplicitTypeEmpty = ""
+	// NOTE: Lightning is replaced by Import, keep `ExplicitTypeLightning` only
+	// for backward compatibility.
 	ExplicitTypeLightning  = "lightning"
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
 	ExplicitTypeBackground = "background"
 	ExplicitTypeDDL        = "ddl"
 	ExplicitTypeStats      = "stats"
+	ExplicitTypeImport     = "import"
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL, ExplicitTypeStats}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL, ExplicitTypeStats, ExplicitTypeImport}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -131,10 +134,8 @@ func BuildRequestSource(internal bool, source, explicitSource string) string {
 
 // IsRequestSourceInternal checks whether the input request source type is internal type.
 func IsRequestSourceInternal(reqSrc *RequestSource) bool {
-	isInternal := false
-	if reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource()) {
-		isInternal = true
-	}
+	isInternal := reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource())
+
 	return isInternal
 }
 
