@@ -62,15 +62,17 @@ const reqTypeAnalyze = 104
 var bypassResourceSourceList = []string{
 	/* DDL */
 	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/ddl/job_worker.go#L503
-	"add_index",
+	util.InternalTxnAddIndex,
 	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/ddl/backfilling_operators.go#L1230
-	"merge_temp_index",
+	util.InternalTxnMergeTempIndex,
 	/* BR */
 	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L214
 	util.InternalTxnBR,
 	/* Import Into */
 	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L224
 	util.InternalImportInto,
+	/* Workload Learning */
+	util.InternalTxnWorkloadLearning,
 }
 
 func shouldBypass(req *tikvrpc.Request) bool {

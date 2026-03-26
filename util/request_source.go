@@ -45,6 +45,12 @@ const (
 	InternalTxnBR = "br"
 	// InternalImportInto is the type of IMPORT INTO usage
 	InternalImportInto = "ImportInto"
+	// InternalTxnAddIndex is the type of DDL add index backfill.
+	InternalTxnAddIndex = "add_index"
+	// InternalTxnMergeTempIndex is the type of DDL temp index merging.
+	InternalTxnMergeTempIndex = "merge_temp_index"
+	// InternalTxnWorkloadLearning is the type of workload-based cost learning.
+	InternalTxnWorkloadLearning = "WorkloadLearning"
 )
 
 // explicit source types.
