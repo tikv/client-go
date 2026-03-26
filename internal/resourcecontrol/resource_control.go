@@ -72,6 +72,7 @@ var bypassResourceSourceList = []string{
 	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L224
 	util.InternalImportInto,
 	/* Workload Learning */
+	// ref: https://github.com/pingcap/tidb/blob/e691904f3c60113f8031a48c3e4c5940e24b8104/pkg/kv/option.go#L201
 	util.InternalTxnWorkloadLearning,
 }
 
