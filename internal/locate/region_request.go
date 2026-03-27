@@ -617,7 +617,7 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 		logutil.BgLogger().Info(
 			"mark store's regions need be refill",
 			zap.Uint64("id", store.storeID),
-			zap.String("addr", store.addr),
+			zap.String("addr", store.GetAddr()),
 			zap.Error(cause),
 		)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
@@ -632,6 +632,8 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 // If switch to new leader successfully, returns the AccessIndex of the new leader in the replicas.
 func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 	if leader == nil {
+		logutil.BgLogger().Warn("cannot update leader because leader peer is nil",
+			zap.Uint64("regionID", s.region.GetID()))
 		return -1
 	}
 	for i, replica := range s.replicas {
@@ -641,6 +643,9 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 			// a request. So, before the new leader is elected, we should not send requests
 			// to the unreachable old leader to avoid unnecessary timeout.
 			if replica.store.getLivenessState() != reachable {
+				logutil.BgLogger().Warn("leader store is not reachable, skip updating leader",
+					zap.Uint64("regionID", s.region.GetID()),
+					zap.Uint64("leaderStoreID", leader.GetStoreId()))
 				return -1
 			}
 			replica.onUpdateLeader()
@@ -657,6 +662,9 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 		}
 	}
 	// Invalidate the region since the new leader is not in the cached version.
+	logutil.BgLogger().Warn("invalidate region because leader is not in cached version",
+		zap.Uint64("regionID", s.region.GetID()),
+		zap.Uint64("leaderStoreID", leader.GetStoreId()))
 	s.region.invalidate(StoreNotFound)
 	return -1
 }
@@ -1244,7 +1252,7 @@ func (s *RegionRequestSender) getStoreToken(st *Store, limit int64) error {
 		st.tokenCount.Add(1)
 		return nil
 	}
-	metrics.TiKVStoreLimitErrorCounter.WithLabelValues(st.addr, strconv.FormatUint(st.storeID, 10)).Inc()
+	metrics.TiKVStoreLimitErrorCounter.WithLabelValues(st.GetAddr(), strconv.FormatUint(st.storeID, 10)).Inc()
 	return errors.WithStack(&tikverr.ErrTokenLimit{StoreID: st.storeID})
 }
 
@@ -1318,7 +1326,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return err
 	}
 
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+	if ctx.Store != nil && ctx.Store.StoreType() == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
 	} else if ctx.Meta != nil {
 		if s.replicaSelector != nil {
@@ -1332,7 +1340,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	// When a store is not available, the leader of related region should be elected quickly.
 	// TODO: the number of retry time should be limited:since region may be unavailable
 	// when some unrecoverable disaster happened.
-	if ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
+	if ctx.Store != nil && ctx.Store.StoreType().IsTiFlashRelatedType() {
 		err = bo.Backoff(
 			retry.BoTiFlashRPC,
 			errors.Errorf("send tiflash request error: %v, ctx: %v, try next peer later", err, ctx),
@@ -1480,6 +1488,9 @@ func (s *RegionRequestSender) onRegionError(
 			// the Raft group is in an election, but it's possible that the peer is
 			// isolated and removed from the Raft group. So it's necessary to reload
 			// the region from PD.
+			logutil.Logger(bo.GetCtx()).Warn("NotLeader error with no leader, invalidating region",
+				zap.Uint64("regionID", ctx.Region.GetID()),
+				zap.String("store", ctx.Store.GetAddr()))
 			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
 			if err = bo.Backoff(
 				retry.BoRegionScheduling,
@@ -1561,8 +1572,12 @@ func (s *RegionRequestSender) onRegionError(
 	// This peer is removed from the region. Invalidate the region since it's too stale.
 	// if the region error is from follower, can we mark the peer unavailable and reload region asynchronously?
 	if regionErr.GetRegionNotFound() != nil {
-		s.regionCache.InvalidateCachedRegion(ctx.Region)
-		return false, nil
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onRegionNotFound(bo, ctx, req)
+		} else {
+			s.regionCache.InvalidateCachedRegion(ctx.Region)
+			return false, nil
+		}
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {
@@ -1610,7 +1625,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx),
 		)
-		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
+		if ctx != nil && ctx.Store != nil && ctx.Store.StoreType().IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		} else {
 			err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))

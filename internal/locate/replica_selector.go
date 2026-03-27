@@ -23,21 +23,24 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 )
 
 type replicaSelector struct {
 	baseReplicaSelector
-	replicaReadType kv.ReplicaReadType
-	isStaleRead     bool
-	isReadOnlyReq   bool
-	option          storeSelectorOp
-	target          *replica
-	proxy           *replica
-	attempts        int
+	replicaReadType           kv.ReplicaReadType
+	isStaleRead               bool
+	isReadOnlyReq             bool
+	option                    storeSelectorOp
+	target                    *replica
+	proxy                     *replica
+	attempts                  int
+	regionInvalidatedForRetry bool // set when region is hard-invalidated but this selector should still retry on leader
 }
 
 func newReplicaSelector(
@@ -98,7 +101,13 @@ func buildTiKVReplicas(region *Region) []*replica {
 }
 
 func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
-	if !s.region.isValid() {
+	if s.regionInvalidatedForRetry {
+		// Allow one more attempt on this selector even though the region is
+		// invalidated.  This is set by onRegionNotFound so that the current
+		// request can retry on the leader while concurrent requests are
+		// stopped by the hard invalidation.
+		s.regionInvalidatedForRetry = false
+	} else if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
 	}
@@ -182,22 +191,26 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	}
 	s.target = strategy.next(s)
 	if s.target != nil {
-		if s.isStaleRead && s.attempts == 1 {
-			// stale-read request first access.
-			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
-				// If the target replica's labels is not match and not leader, use replica read.
-				// This is for compatible with old version.
-				req.StaleRead = false
-				req.ReplicaRead = true
-			} else {
-				// use stale read.
+		if s.isStaleRead {
+			isStaleRead := true
+			if s.attempts != 1 || (!s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID()) {
+				// retry or target replica's labels does not match and not leader
+				if strategy.canSendReplicaRead(s) {
+					// use replica read.
+					isStaleRead = false
+				}
+			}
+			if isStaleRead {
 				req.StaleRead = true
 				req.ReplicaRead = false
+			} else {
+				req.StaleRead = false
+				req.ReplicaRead = true
 			}
 		} else {
-			// always use replica.
+			// use replica read only if the target is not leader.
 			req.StaleRead = false
-			req.ReplicaRead = s.isReadOnlyReq
+			req.ReplicaRead = s.isReadOnlyReq && s.target.peer.Id != s.region.GetLeaderPeerID()
 		}
 		// Monitor the flows destination if selector is under `ReplicaReadPreferLeader` mode.
 		if s.option.preferLeader {
@@ -298,6 +311,16 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	}
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 	return nil
+}
+
+func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelector) bool {
+	replicas := selector.replicas
+	replica := replicas[s.leaderIdx]
+	if replica.attempts == 0 || replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
+		// don't do the replica read if leader is not exhausted or leader has timeout or server busy error.
+		return false
+	}
+	return true
 }
 
 func hasDeadlineExceededError(replicas []*replica) bool {
@@ -473,6 +496,9 @@ func (s *replicaSelector) onNotLeader(
 	leader := notLeader.GetLeader()
 	if leader == nil {
 		// The region may be during transferring leader.
+		logutil.BgLogger().Warn("NotLeader error with no leader, region may be transferring leader",
+			zap.Uint64("regionID", s.region.GetID()),
+			zap.String("store", ctx.Store.GetAddr()))
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
 		return err == nil, err
 	}
@@ -491,7 +517,7 @@ func (s *replicaSelector) onFlashbackInProgress(req *tikvrpc.Request) bool {
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
 		s.replicaReadType = kv.ReplicaReadLeader
-		req.ReplicaReadType = kv.ReplicaReadLeader
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		return true
 	}
 	return false
@@ -501,6 +527,28 @@ func (s *replicaSelector) onDataIsNotReady() {
 	if s.target != nil {
 		s.target.addFlag(dataIsNotReadyFlag)
 	}
+}
+
+func (s *replicaSelector) onRegionNotFound(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (shouldRetry bool, err error) {
+	leaderIdx := s.region.getStore().workTiKVIdx
+	leader := s.replicas[leaderIdx]
+	if !leader.isExhausted(1, 0) {
+		// if the request is not sent to leader, we can retry it with leader and invalidate the region cache
+		// immediately. It helps in the scenario where region is split by the leader but not yet created
+		// in replica due to replica down.
+		// Hard-invalidate the region so that concurrent requests stop using the stale region,
+		// but allow this selector to retry on the leader via regionInvalidatedForRetry.
+		req.ReplicaRead = false
+		req.ReplicaReadType = kv.ReplicaReadLeader
+		s.replicaReadType = kv.ReplicaReadLeader
+		s.regionInvalidatedForRetry = true
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		return true, nil
+	}
+	s.regionCache.InvalidateCachedRegion(ctx.Region)
+	return false, nil
 }
 
 func (s *replicaSelector) onServerIsBusy(
@@ -529,6 +577,9 @@ func (s *replicaSelector) onServerIsBusy(
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
 	if s.canFastRetry() {
 		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
+		if s.target != nil {
+			s.target.addFlag(serverIsBusyFlag)
+		}
 		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)

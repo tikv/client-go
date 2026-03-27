@@ -290,9 +290,9 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderSuccessReadType: SuccessStaleRead,
 			followerRegionValid:   false,
 			followerAsyncReload:   util.Some(false),
-			// may async reload region and access it from leader.
-			followerSuccessReplica:  []string{},
-			followerSuccessReadType: ReadFail,
+			// region is hard-invalidated but the current request succeeds via leader retry.
+			followerSuccessReplica:  []string{"z1"},
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                evictLeader,
@@ -333,7 +333,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.None[bool](),
 			followerSuccessReplica:  []string{"z2"},
@@ -368,7 +368,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(false),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(false),
 			followerSuccessReplica:  []string{"z2"},
@@ -393,11 +393,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(false),
 			leaderSuccessReplica:    []string{"z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(false),
 			followerSuccessReplica:  []string{"z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                      leaderServerIsBusy,
@@ -406,11 +406,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(false),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(false),
 			followerSuccessReplica:  []string{"z2", "z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                      leaderServerIsBusy,
@@ -419,11 +419,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(false),
 			leaderSuccessReplica:    []string{"z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(false),
 			followerSuccessReplica:  []string{"z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                      leaderDown,
@@ -528,7 +528,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			return
 		}
 
-		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending))
+		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending|needDelayedReloadReady))
 	}()
 
 	bo := retry.NewBackoffer(ctx, -1)
