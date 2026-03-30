@@ -66,6 +66,8 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 			ruDetails.Update(consumption, waitDuration)
 		}
 		recordResourceControlMetrics(resourceGroupName, req.GetRequestSource(), consumption)
+	} else if reqInfo != nil && reqInfo.Bypass() {
+		metrics.TiKVResourceControlBypassedCounter.WithLabelValues(resourceGroupName, req.GetRequestSource()).Inc()
 	}
 
 	if ctxInterceptor := interceptor.GetRPCInterceptorFromCtx(ctx); ctxInterceptor == nil {
@@ -139,6 +141,8 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			}
 			return resp, err
 		})
+	} else if reqInfo != nil && reqInfo.Bypass() {
+		metrics.TiKVResourceControlBypassedCounter.WithLabelValues(resourceGroupName, req.GetRequestSource()).Inc()
 	}
 
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
@@ -189,7 +193,7 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	}
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	if reqInfo.Bypass() {
-		return "", nil, nil
+		return resourceGroupName, nil, reqInfo
 	}
 	return resourceGroupName, resourceControlInterceptor, reqInfo
 }

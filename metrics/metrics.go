@@ -131,6 +131,7 @@ var (
 	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
 	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 	TiKVResourceControlRUCounter                   *prometheus.CounterVec
+	TiKVResourceControlBypassedCounter             *prometheus.CounterVec
 )
 
 // Label constants.
@@ -990,6 +991,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResourceGroup, LblSource, LblType})
 
+	TiKVResourceControlBypassedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   "resource_control",
+			Name:        "bypassed_request_total",
+			Help:        "Counter of requests that bypassed resource control.",
+			ConstLabels: constLabels,
+		}, []string{LblResourceGroup, LblSource})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -1097,6 +1107,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
 	prometheus.MustRegister(TiKVResourceControlRUCounter)
+	prometheus.MustRegister(TiKVResourceControlBypassedCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
