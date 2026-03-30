@@ -158,7 +158,7 @@ func (c *mockCoprocessorStreamClient) Recv() (*coprocessor.Response, error) {
 	return c.resp, c.err
 }
 
-func TestCopStreamResponseRecvBypassRUV2(t *testing.T) {
+func TestCopStreamResponseRecvBypass(t *testing.T) {
 	original := config.GetGlobalConfig()
 	t.Cleanup(func() {
 		config.StoreGlobalConfig(original)
@@ -194,7 +194,7 @@ func TestCopStreamResponseRecvBypassRUV2(t *testing.T) {
 		resp := &CopStreamResponse{
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
-			BypassRUV2:                   true,
+			Bypass:                       true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)

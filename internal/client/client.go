@@ -451,7 +451,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
-	copStream.BypassRUV2 = resourcecontrol.MakeRequestInfo(req).Bypass()
+	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
