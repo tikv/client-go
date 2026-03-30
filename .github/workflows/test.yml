@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.25.8.8
 
       - name: Test
         run: go test --tags=intest ./...
@@ -28,7 +28,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.25.8.8
 
       - name: Test with race
         run: go test -race --tags=intest ./...
@@ -42,7 +42,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.25
+          go-version: 1.25.8
 
       - name: Go generate and check diff
         run: |
