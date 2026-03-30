@@ -338,7 +338,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
-	bypassRUV2 := resourcecontrol.MakeRequestInfo(req).Bypass()
+	bypass := resourcecontrol.MakeRequestInfo(req).Bypass()
 	defer func() {
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
@@ -348,7 +348,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				if !bypassRUV2 {
+				if !bypass {
 					config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
 				}
 			}
