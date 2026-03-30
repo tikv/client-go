@@ -208,6 +208,24 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 
 	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
 	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
+
+	bypassDetails := util.NewRUDetails()
+	bypassCtx := context.WithValue(ctx, util.RUDetailsCtxKey, bypassDetails)
+	bypassReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+	bypassReq.RequestSource = "xxx_internal_others"
+
+	rl = async.NewRunLoop()
+	called = false
+	cb = async.NewCallback(rl, func(resp *tikvrpc.Response, err error) {
+		called = true
+		require.NoError(t, err)
+		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+	})
+
+	cli.SendRequestAsync(bypassCtx, addr, bypassReq, cb)
+	rl.Exec(ctx)
+	require.True(t, called)
+	require.Zero(t, bypassDetails.TiKVRUV2())
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {
