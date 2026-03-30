@@ -130,6 +130,7 @@ var (
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
 	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
 	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
+	TiKVResourceControlRUCounter                   *prometheus.CounterVec
 )
 
 // Label constants.
@@ -157,6 +158,7 @@ const (
 	LblGeneral         = "general"
 	LblDirection       = "direction"
 	LblReason          = "reason"
+	LblResourceGroup   = "resource_group"
 )
 
 var storeMetricVecList atomic.Pointer[[]MetricVec]
@@ -979,6 +981,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
+	TiKVResourceControlRUCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   "resource_control",
+			Name:        "ru_total",
+			Help:        "Counter of resource units consumed by requests going through resource control.",
+			ConstLabels: constLabels,
+		}, []string{LblResourceGroup, LblSource, LblType})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -1085,6 +1096,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
+	prometheus.MustRegister(TiKVResourceControlRUCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
