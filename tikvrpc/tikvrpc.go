@@ -822,6 +822,7 @@ type CopStreamResponse struct {
 	Timeout               time.Duration
 	Lease                 // Shared by this object and a background goroutine.
 	Ctx                   context.Context
+	BypassRUV2            bool
 }
 
 // BatchCopStreamResponse comprises the BatchCoprocessorClient , the first result and timeout detector.
@@ -1319,7 +1320,9 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.Response = ret
-		config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
+		if !resp.BypassRUV2 {
+			config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
+		}
 	}
 	return ret, errors.WithStack(err)
 }
