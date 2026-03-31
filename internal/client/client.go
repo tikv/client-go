@@ -339,9 +339,10 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 	start := time.Now()
 	bypass := resourcecontrol.MakeRequestInfo(req).Bypass()
+	storeMetrics := connPool.getStoreMetrics(req.Context.GetPeer().GetStoreId())
 	defer func() {
 		elapsed := time.Since(start)
-		connPool.updateRPCMetrics(req, resp, elapsed)
+		storeMetrics.updateRPCMetrics(req, resp, elapsed)
 		writeRPCCount := completedTiKVWriteRPCCount(req)
 		if resp != nil {
 			switch resp.Resp.(type) {
@@ -367,7 +368,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if config.GetGlobalConfig().TiKVClient.MaxBatchSize > 0 && enableBatch {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			defer trace.StartRegion(ctx, req.Type.String()).End()
-			return wrapErrConn(sendBatchRequest(ctx, addr, req.ForwardedHost, connPool.batchConn, batchReq, timeout, pri))
+			return wrapErrConn(sendBatchRequest(ctx, addr, req.ForwardedHost, connPool.batchConn, storeMetrics.batchReqStage, batchReq, timeout, pri))
 		}
 	}
 
@@ -775,6 +776,29 @@ type storeMetrics struct {
 	rpcSrcLatSum      sync.Map
 	rpcNetLatExternal prometheus.Observer
 	rpcNetLatInternal prometheus.Observer
+	batchReqStage     *batchRequestStageMetrics
+}
+
+type batchRequestStageMetrics struct {
+	batchWaitOK       prometheus.Observer
+	batchWaitTimeout  prometheus.Observer
+	batchWaitCanceled prometheus.Observer
+	batchWaitFailed   prometheus.Observer
+	batchWaitClosed   prometheus.Observer
+
+	sendWaitOK       prometheus.Observer
+	sendWaitTimeout  prometheus.Observer
+	sendWaitCanceled prometheus.Observer
+	sendWaitFailed   prometheus.Observer
+	sendWaitClosed   prometheus.Observer
+
+	recvWaitOK       prometheus.Observer
+	recvWaitTimeout  prometheus.Observer
+	recvWaitCanceled prometheus.Observer
+	recvWaitFailed   prometheus.Observer
+	recvWaitClosed   prometheus.Observer
+
+	doneOK prometheus.Observer
 }
 
 func newStoreMetrics(storeID uint64) *storeMetrics {
@@ -784,8 +808,78 @@ func newStoreMetrics(storeID uint64) *storeMetrics {
 		rpcLatHist:        deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: store})),
 		rpcNetLatExternal: metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(store, "false"),
 		rpcNetLatInternal: metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(store, "true"),
+		batchReqStage: &batchRequestStageMetrics{
+			batchWaitOK:       metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageBatchWait), string(batchRequestOutcomeOK)),
+			batchWaitTimeout:  metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageBatchWait), string(batchRequestOutcomeTimeout)),
+			batchWaitCanceled: metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageBatchWait), string(batchRequestOutcomeCanceled)),
+			batchWaitFailed:   metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageBatchWait), string(batchRequestOutcomeFailed)),
+			batchWaitClosed:   metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageBatchWait), string(batchRequestOutcomeClosed)),
+			sendWaitOK:        metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageSendWait), string(batchRequestOutcomeOK)),
+			sendWaitTimeout:   metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageSendWait), string(batchRequestOutcomeTimeout)),
+			sendWaitCanceled:  metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageSendWait), string(batchRequestOutcomeCanceled)),
+			sendWaitFailed:    metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageSendWait), string(batchRequestOutcomeFailed)),
+			sendWaitClosed:    metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageSendWait), string(batchRequestOutcomeClosed)),
+			recvWaitOK:        metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageRecvWait), string(batchRequestOutcomeOK)),
+			recvWaitTimeout:   metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageRecvWait), string(batchRequestOutcomeTimeout)),
+			recvWaitCanceled:  metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageRecvWait), string(batchRequestOutcomeCanceled)),
+			recvWaitFailed:    metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageRecvWait), string(batchRequestOutcomeFailed)),
+			recvWaitClosed:    metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageRecvWait), string(batchRequestOutcomeClosed)),
+			doneOK:            metrics.TiKVBatchRequestStageDuration.WithLabelValues(store, string(batchRequestStageDone), string(batchRequestOutcomeOK)),
+		},
 	}
 	return m
+}
+
+func (m *batchRequestStageMetrics) observe(stage batchRequestStage, outcome batchRequestOutcome, duration time.Duration) {
+	var observer prometheus.Observer
+	switch stage {
+	case batchRequestStageBatchWait:
+		switch outcome {
+		case batchRequestOutcomeOK:
+			observer = m.batchWaitOK
+		case batchRequestOutcomeTimeout:
+			observer = m.batchWaitTimeout
+		case batchRequestOutcomeCanceled:
+			observer = m.batchWaitCanceled
+		case batchRequestOutcomeFailed:
+			observer = m.batchWaitFailed
+		case batchRequestOutcomeClosed:
+			observer = m.batchWaitClosed
+		}
+	case batchRequestStageSendWait:
+		switch outcome {
+		case batchRequestOutcomeOK:
+			observer = m.sendWaitOK
+		case batchRequestOutcomeTimeout:
+			observer = m.sendWaitTimeout
+		case batchRequestOutcomeCanceled:
+			observer = m.sendWaitCanceled
+		case batchRequestOutcomeFailed:
+			observer = m.sendWaitFailed
+		case batchRequestOutcomeClosed:
+			observer = m.sendWaitClosed
+		}
+	case batchRequestStageRecvWait:
+		switch outcome {
+		case batchRequestOutcomeOK:
+			observer = m.recvWaitOK
+		case batchRequestOutcomeTimeout:
+			observer = m.recvWaitTimeout
+		case batchRequestOutcomeCanceled:
+			observer = m.recvWaitCanceled
+		case batchRequestOutcomeFailed:
+			observer = m.recvWaitFailed
+		case batchRequestOutcomeClosed:
+			observer = m.recvWaitClosed
+		}
+	case batchRequestStageDone:
+		if outcome == batchRequestOutcomeOK {
+			observer = m.doneOK
+		}
+	}
+	if observer != nil {
+		observer.Observe(duration.Seconds())
+	}
 }
 
 func (m *storeMetrics) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {

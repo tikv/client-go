@@ -306,7 +306,7 @@ func (a *batchConn) getClientAndSend() {
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
 		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
-		atomic.StoreInt64(&e.sendLat, int64(reqSendTime.Sub(e.start)))
+		recordBatchRequestStage(&e.batchedNS, e.start, reqSendTime)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}

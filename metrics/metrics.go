@@ -79,7 +79,7 @@ var (
 	TiKVBatchWaitOverLoad                          prometheus.Counter
 	TiKVBatchPendingRequests                       *prometheus.HistogramVec
 	TiKVBatchRequests                              *prometheus.HistogramVec
-	TiKVBatchRequestDuration                       *prometheus.SummaryVec
+	TiKVBatchRequestStageDuration                  *prometheus.SummaryVec
 	TiKVBatchClientUnavailable                     prometheus.Histogram
 	TiKVBatchClientWaitEstablish                   prometheus.Histogram
 	TiKVBatchClientRecycle                         prometheus.Histogram
@@ -163,6 +163,7 @@ const (
 	LblGeneral         = "general"
 	LblDirection       = "direction"
 	LblReason          = "reason"
+	LblStage           = "stage"
 )
 
 var storeMetricVecList atomic.Pointer[[]MetricVec]
@@ -514,14 +515,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblTarget})
 
-	TiKVBatchRequestDuration = prometheus.NewSummaryVec(
+	TiKVBatchRequestStageDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "batch_request_duration_seconds",
-			Help:        "batch request duration breakdown by steps",
+			Name:        "batch_request_stage_duration_seconds",
+			Help:        "batch request stage duration breakdown by store and outcome",
 			ConstLabels: constLabels,
-		}, []string{"step"})
+		}, []string{LblStore, LblStage, LblResult})
+	storeMetrics = append(storeMetrics, TiKVBatchRequestStageDuration)
 
 	TiKVBatchClientUnavailable = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -1077,7 +1079,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
 	prometheus.MustRegister(TiKVBatchPendingRequests)
 	prometheus.MustRegister(TiKVBatchRequests)
-	prometheus.MustRegister(TiKVBatchRequestDuration)
+	prometheus.MustRegister(TiKVBatchRequestStageDuration)
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
 	prometheus.MustRegister(TiKVBatchClientRecycle)
