@@ -48,6 +48,7 @@ func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
 			RaftstoreStoreWriteTriggerWbBytes: 71,
 			StorageProcessedKeysBatchGet:      73,
 			StorageProcessedKeysGet:           79,
+			WriteRpcCount:                     31,
 		},
 	}, 31)
 

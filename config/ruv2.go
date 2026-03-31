@@ -22,9 +22,8 @@ import (
 )
 
 // UpdateTiKVRUV2FromExecDetailsV2 calculates and accumulates TiKV RU v2 from ExecDetailsV2.RuV2 into RUDetails in ctx.
-// writeRPCCount is the number of completed write RPCs to TiKV.
-func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecDetailsV2, writeRPCCount float64) {
-	if ctx == nil || (details == nil && writeRPCCount == 0) {
+func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecDetailsV2, fallbackWriteRPCCount float64) {
+	if ctx == nil || (details == nil && fallbackWriteRPCCount == 0) {
 		return
 	}
 	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
@@ -34,9 +33,10 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 
 	weights := GetGlobalConfig().TiKVClient.RUV2
 
-	deltaFloat := writeRPCCount * weights.ResourceManagerWriteCntTiKV
+	deltaFloat := fallbackWriteRPCCount * weights.ResourceManagerWriteCntTiKV
 	if details != nil && details.RuV2 != nil {
 		ru := details.RuV2
+		deltaFloat = float64(ru.WriteRpcCount) * weights.ResourceManagerWriteCntTiKV
 		var execInputs uint64
 		if inputs := ru.ExecutorInputs; inputs != nil {
 			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan

@@ -1119,6 +1119,43 @@ func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
 	return details.GetExecDetailsV2()
 }
 
+// SetExecDetailsV2 sets ExecDetailsV2 on the underlying concrete response when supported.
+func (resp *Response) SetExecDetailsV2(details *kvrpcpb.ExecDetailsV2) {
+	if resp == nil {
+		return
+	}
+	switch r := resp.Resp.(type) {
+	case *kvrpcpb.GetResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.PrewriteResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.PessimisticLockResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.PessimisticRollbackResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.TxnHeartBeatResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.CheckTxnStatusResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.CheckSecondaryLocksResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.CommitResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.BatchGetResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.BatchRollbackResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.ScanLockResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.ResolveLockResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.FlushResponse:
+		r.ExecDetailsV2 = details
+	case *kvrpcpb.BufferBatchGetResponse:
+		r.ExecDetailsV2 = details
+	}
+}
+
 func (resp *Response) GetSize() int {
 	size := 0
 	switch r := resp.Resp.(type) {
@@ -1329,7 +1366,7 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 			readRPCCount = 1
 			resp.CountResourceManagerRPC = false
 		}
-		util.UpdateTiKVRUV2RawDetails(resp.Ctx, ret.GetExecDetailsV2(), readRPCCount, 0)
+		ret.ExecDetailsV2 = util.FillTiKVRUV2RPCCount(ret.GetExecDetailsV2(), readRPCCount, 0)
 		if !resp.Bypass {
 			config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
 		}
@@ -1357,12 +1394,7 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.BatchResponse = ret
-		readRPCCount := int64(0)
-		if resp.CountResourceManagerRPC {
-			readRPCCount = 1
-			resp.CountResourceManagerRPC = false
-		}
-		util.UpdateTiKVRUV2RawDetails(resp.Ctx, nil, readRPCCount, 0)
+		resp.CountResourceManagerRPC = false
 	}
 	return ret, errors.WithStack(err)
 }

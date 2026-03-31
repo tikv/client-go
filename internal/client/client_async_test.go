@@ -200,6 +200,7 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		called = true
 		require.NoError(t, err)
 		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
 	})
 
 	cli.SendRequestAsync(sendCtx, addr, req, cb)
@@ -208,8 +209,6 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 
 	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
 	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
-	require.Equal(t, int64(0), ruDetails.ReadRPCCount())
-	require.Equal(t, int64(1), ruDetails.WriteRPCCount())
 
 	bypassDetails := util.NewRUDetails()
 	bypassCtx := context.WithValue(ctx, util.RUDetailsCtxKey, bypassDetails)
@@ -222,14 +221,13 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		called = true
 		require.NoError(t, err)
 		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
 	})
 
 	cli.SendRequestAsync(bypassCtx, addr, bypassReq, cb)
 	rl.Exec(ctx)
 	require.True(t, called)
 	require.Zero(t, bypassDetails.TiKVRUV2())
-	require.Equal(t, int64(0), bypassDetails.ReadRPCCount())
-	require.Equal(t, int64(1), bypassDetails.WriteRPCCount())
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {

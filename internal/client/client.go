@@ -352,7 +352,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				util.UpdateTiKVRUV2RawDetails(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCDetailCount)
+				resp.SetExecDetailsV2(util.FillTiKVRUV2RPCCount(resp.GetExecDetailsV2(), readRPCCount, writeRPCDetailCount))
 				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
 			}
 		}

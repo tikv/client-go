@@ -15,13 +15,13 @@
 package util
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLockKeysDetailsMerge(t *testing.T) {
@@ -425,37 +425,33 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 		RRU: 3.0,
 		WRU: 4.0,
 	})
-	UpdateTiKVRUV2RawDetails(context.WithValue(context.Background(), RUDetailsCtxKey, rd), &kvrpcpb.ExecDetailsV2{
-		RuV2: &kvrpcpb.RUV2{
-			StorageProcessedKeysBatchGet: 5,
-			StorageProcessedKeysGet:      7,
-		},
-	}, 11, 13)
 
 	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
 	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
 	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
-	assert.Equal(t, int64(11), rd.ReadRPCCount())
-	assert.Equal(t, int64(13), rd.WriteRPCCount())
-	assert.Equal(t, int64(5), rd.BatchGetKeysCount())
-	assert.Equal(t, int64(7), rd.GetKeysCount())
 
 	cloned := rd.Clone()
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
-	assert.Equal(t, rd.ReadRPCCount(), cloned.ReadRPCCount())
-	assert.Equal(t, rd.WriteRPCCount(), cloned.WriteRPCCount())
-	assert.Equal(t, rd.BatchGetKeysCount(), cloned.BatchGetKeysCount())
-	assert.Equal(t, rd.GetKeysCount(), cloned.GetKeysCount())
+}
 
-	other := NewRUDetails()
-	other.AddReadRPCCount(1)
-	other.AddWriteRPCCount(2)
-	other.AddBatchGetKeysCount(3)
-	other.AddGetKeysCount(4)
-	rd.Merge(other)
-	assert.Equal(t, int64(12), rd.ReadRPCCount())
-	assert.Equal(t, int64(15), rd.WriteRPCCount())
-	assert.Equal(t, int64(8), rd.BatchGetKeysCount())
-	assert.Equal(t, int64(11), rd.GetKeysCount())
+func TestFillTiKVRUV2RPCCount(t *testing.T) {
+	details := FillTiKVRUV2RPCCount(&kvrpcpb.ExecDetailsV2{
+		RuV2: &kvrpcpb.RUV2{
+			StorageProcessedKeysBatchGet: 5,
+			StorageProcessedKeysGet:      7,
+		},
+	}, 11, 13)
+	require.NotNil(t, details)
+	require.NotNil(t, details.RuV2)
+	assert.Equal(t, uint64(11), details.RuV2.ReadRpcCount)
+	assert.Equal(t, uint64(13), details.RuV2.WriteRpcCount)
+	assert.Equal(t, uint64(5), details.RuV2.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(7), details.RuV2.StorageProcessedKeysGet)
+
+	created := FillTiKVRUV2RPCCount(nil, 17, 19)
+	require.NotNil(t, created)
+	require.NotNil(t, created.RuV2)
+	assert.Equal(t, uint64(17), created.RuV2.ReadRpcCount)
+	assert.Equal(t, uint64(19), created.RuV2.WriteRpcCount)
 }

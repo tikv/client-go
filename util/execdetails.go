@@ -816,12 +816,6 @@ type RUDetails struct {
 	tiflashRU *uatomic.Float64
 	// tikvRUV2 stores TiKV RU v2 value in scaled units.
 	tikvRUV2 *uatomic.Float64
-	// The following fields preserve TiKV-side RUv2 raw counters that TiDB
-	// needs for statement-level detail output and TiDB-side RUv2 calculation.
-	readRPCCount      int64
-	writeRPCCount     int64
-	getKeysCount      int64
-	batchGetKeysCount int64
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -849,18 +843,13 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
-	cloned := &RUDetails{
+	return &RUDetails{
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 		tiflashRU:      uatomic.NewFloat64(rd.tiflashRU.Load()),
 		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
 	}
-	atomic.StoreInt64(&cloned.readRPCCount, atomic.LoadInt64(&rd.readRPCCount))
-	atomic.StoreInt64(&cloned.writeRPCCount, atomic.LoadInt64(&rd.writeRPCCount))
-	atomic.StoreInt64(&cloned.getKeysCount, atomic.LoadInt64(&rd.getKeysCount))
-	atomic.StoreInt64(&cloned.batchGetKeysCount, atomic.LoadInt64(&rd.batchGetKeysCount))
-	return cloned
 }
 
 // Merge implements the RuntimeStats interface.
@@ -870,10 +859,6 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
-	atomic.AddInt64(&rd.readRPCCount, other.ReadRPCCount())
-	atomic.AddInt64(&rd.writeRPCCount, other.WriteRPCCount())
-	atomic.AddInt64(&rd.getKeysCount, other.GetKeysCount())
-	atomic.AddInt64(&rd.batchGetKeysCount, other.BatchGetKeysCount())
 }
 
 // String implements fmt.Stringer interface.
@@ -919,88 +904,24 @@ func (rd *RUDetails) AddTiKVRUV2(delta float64) {
 	rd.tikvRUV2.Add(delta)
 }
 
-// AddReadRPCCount records TiKV read RPCs charged to resource management.
-func (rd *RUDetails) AddReadRPCCount(delta int64) {
-	if rd == nil || delta == 0 {
-		return
+// FillTiKVRUV2RPCCount fills TiKV-side RUv2 raw RPC counters into ExecDetailsV2.RuV2.
+func FillTiKVRUV2RPCCount(details *kvrpcpb.ExecDetailsV2, readRPCCount, writeRPCCount int64) *kvrpcpb.ExecDetailsV2 {
+	if details == nil && readRPCCount == 0 && writeRPCCount == 0 {
+		return nil
 	}
-	atomic.AddInt64(&rd.readRPCCount, delta)
-}
-
-// ReadRPCCount returns TiKV read RPCs charged to resource management.
-func (rd *RUDetails) ReadRPCCount() int64 {
-	if rd == nil {
-		return 0
+	if details == nil {
+		details = &kvrpcpb.ExecDetailsV2{}
 	}
-	return atomic.LoadInt64(&rd.readRPCCount)
-}
-
-// AddWriteRPCCount records TiKV write RPCs charged to resource management.
-func (rd *RUDetails) AddWriteRPCCount(delta int64) {
-	if rd == nil || delta == 0 {
-		return
+	if details.RuV2 == nil {
+		details.RuV2 = &kvrpcpb.RUV2{}
 	}
-	atomic.AddInt64(&rd.writeRPCCount, delta)
-}
-
-// WriteRPCCount returns TiKV write RPCs charged to resource management.
-func (rd *RUDetails) WriteRPCCount() int64 {
-	if rd == nil {
-		return 0
+	if readRPCCount != 0 {
+		details.RuV2.ReadRpcCount += uint64(readRPCCount)
 	}
-	return atomic.LoadInt64(&rd.writeRPCCount)
-}
-
-// AddBatchGetKeysCount records TiKV batch-get processed keys.
-func (rd *RUDetails) AddBatchGetKeysCount(delta int64) {
-	if rd == nil || delta == 0 {
-		return
+	if writeRPCCount != 0 {
+		details.RuV2.WriteRpcCount += uint64(writeRPCCount)
 	}
-	atomic.AddInt64(&rd.batchGetKeysCount, delta)
-}
-
-// BatchGetKeysCount returns TiKV batch-get processed keys.
-func (rd *RUDetails) BatchGetKeysCount() int64 {
-	if rd == nil {
-		return 0
-	}
-	return atomic.LoadInt64(&rd.batchGetKeysCount)
-}
-
-// AddGetKeysCount records TiKV get processed keys.
-func (rd *RUDetails) AddGetKeysCount(delta int64) {
-	if rd == nil || delta == 0 {
-		return
-	}
-	atomic.AddInt64(&rd.getKeysCount, delta)
-}
-
-// GetKeysCount returns TiKV get processed keys.
-func (rd *RUDetails) GetKeysCount() int64 {
-	if rd == nil {
-		return 0
-	}
-	return atomic.LoadInt64(&rd.getKeysCount)
-}
-
-// UpdateTiKVRUV2RawDetails accumulates TiKV-side RUv2 raw counters into RUDetails.
-func UpdateTiKVRUV2RawDetails(ctx context.Context, details *kvrpcpb.ExecDetailsV2, resourceManagerReadCnt, resourceManagerWriteCnt int64) {
-	if ctx == nil {
-		return
-	}
-	ruDetails, _ := ctx.Value(RUDetailsCtxKey).(*RUDetails)
-	if ruDetails == nil {
-		return
-	}
-
-	ruDetails.AddReadRPCCount(resourceManagerReadCnt)
-	ruDetails.AddWriteRPCCount(resourceManagerWriteCnt)
-	if details == nil || details.RuV2 == nil {
-		return
-	}
-	ru := details.RuV2
-	ruDetails.AddBatchGetKeysCount(int64(ru.StorageProcessedKeysBatchGet))
-	ruDetails.AddGetKeysCount(int64(ru.StorageProcessedKeysGet))
+	return details
 }
 
 // Update updates the RU runtime stats with the given consumption info.

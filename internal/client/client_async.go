@@ -124,7 +124,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		connPool.updateRPCMetrics(req, resp, elapsed)
 		if resp != nil {
 			readRPCCount, writeRPCDetailCount := completedTiKVRUV2RPCCount(req)
-			util.UpdateTiKVRUV2RawDetails(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCDetailCount)
+			resp.SetExecDetailsV2(util.FillTiKVRUV2RPCCount(resp.GetExecDetailsV2(), readRPCCount, writeRPCDetailCount))
 			if !resourcecontrol.MakeRequestInfo(req).Bypass() {
 				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
 			}
