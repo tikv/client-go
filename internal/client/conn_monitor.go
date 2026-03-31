@@ -15,14 +15,19 @@
 package client
 
 import (
+	"context"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/stats"
 )
 
 type monitoredConn struct {
@@ -97,5 +102,144 @@ func (c *connMonitor) start() {
 		case <-c.stop:
 			return
 		}
+	}
+}
+
+const batchCommandsMethod = "/tikvpb.Tikv/BatchCommands"
+
+type batchClientStreamKey struct{}
+
+var globalBatchClientStreamID uint64
+
+type batchClientStreamMetrics struct {
+	inited sync.Once
+
+	sendTime prometheus.Gauge
+	recvTime prometheus.Gauge
+}
+
+func (m *batchClientStreamMetrics) init(addr string, id uint64) {
+	m.inited.Do(func() {
+		streamID := strconv.FormatUint(id, 10)
+		m.sendTime = metrics.TiKVBatchCommandsSendTime.WithLabelValues(addr, streamID)
+		m.recvTime = metrics.TiKVBatchCommandsRecvTime.WithLabelValues(addr, streamID)
+	})
+}
+
+func (m *batchClientStreamMetrics) onOutPayload(ev *stats.OutPayload) {
+	m.sendTime.Set(float64(ev.SentTime.Unix()))
+}
+
+func (m *batchClientStreamMetrics) onInPayload(ev *stats.InPayload) {
+	m.recvTime.Set(float64(ev.RecvTime.Unix()))
+}
+
+func (m *batchClientStreamMetrics) cleanUp(addr string, id uint64) {
+	streamID := strconv.FormatUint(id, 10)
+	metrics.TiKVBatchCommandsSendTime.DeleteLabelValues(addr, streamID)
+	metrics.TiKVBatchCommandsRecvTime.DeleteLabelValues(addr, streamID)
+}
+
+type batchClientTargetMetrics struct {
+	inited sync.Once
+
+	sendWireBytes    prometheus.Counter
+	recvWireBytes    prometheus.Counter
+	delayedPick      prometheus.Counter
+	transparentRetry prometheus.Counter
+}
+
+func (m *batchClientTargetMetrics) init(addr string) {
+	m.inited.Do(func() {
+		m.sendWireBytes = metrics.TiKVBatchCommandsSendWireBytes.WithLabelValues(addr)
+		m.recvWireBytes = metrics.TiKVBatchCommandsRecvWireBytes.WithLabelValues(addr)
+		m.delayedPick = metrics.TiKVBatchCommandsDelayedPick.WithLabelValues(addr)
+		m.transparentRetry = metrics.TiKVBatchCommandsTransparentRetry.WithLabelValues(addr)
+	})
+}
+
+func (m *batchClientTargetMetrics) onOutPayload(ev *stats.OutPayload) {
+	m.sendWireBytes.Add(float64(ev.WireLength))
+}
+
+func (m *batchClientTargetMetrics) onInPayload(ev *stats.InPayload) {
+	m.recvWireBytes.Add(float64(ev.WireLength))
+}
+
+func (m *batchClientTargetMetrics) onDelayedPickComplete(*stats.DelayedPickComplete) {
+	m.delayedPick.Inc()
+}
+
+func (m *batchClientTargetMetrics) onBegin(ev *stats.Begin) {
+	if ev.IsTransparentRetryAttempt {
+		m.transparentRetry.Inc()
+	}
+}
+
+type batchClientStatsMonitor struct {
+	addr          string
+	targetMetrics batchClientTargetMetrics
+	streamMetrics sync.Map
+}
+
+func (m *batchClientStatsMonitor) getStreamMetrics(id uint64) *batchClientStreamMetrics {
+	mm, _ := m.streamMetrics.LoadOrStore(id, &batchClientStreamMetrics{})
+	return mm.(*batchClientStreamMetrics)
+}
+
+// TagConn implements [stats.Handler].
+func (m *batchClientStatsMonitor) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+
+// HandleConn implements [stats.Handler].
+func (m *batchClientStatsMonitor) HandleConn(context.Context, stats.ConnStats) {
+}
+
+// TagRPC implements [stats.Handler].
+func (m *batchClientStatsMonitor) TagRPC(ctx context.Context, i *stats.RPCTagInfo) context.Context {
+	if i.FullMethodName != batchCommandsMethod {
+		return ctx
+	}
+	return context.WithValue(ctx, batchClientStreamKey{}, atomic.AddUint64(&globalBatchClientStreamID, 1))
+}
+
+// HandleRPC implements [stats.Handler].
+func (m *batchClientStatsMonitor) HandleRPC(ctx context.Context, s stats.RPCStats) {
+	id, ok := ctx.Value(batchClientStreamKey{}).(uint64)
+	if !ok {
+		return
+	}
+	switch ev := s.(type) {
+	case *stats.OutPayload:
+		m.targetMetrics.init(m.addr)
+		m.targetMetrics.onOutPayload(ev)
+
+		streamMetrics := m.getStreamMetrics(id)
+		streamMetrics.init(m.addr, id)
+		streamMetrics.onOutPayload(ev)
+
+	case *stats.InPayload:
+		m.targetMetrics.init(m.addr)
+		m.targetMetrics.onInPayload(ev)
+
+		streamMetrics := m.getStreamMetrics(id)
+		streamMetrics.init(m.addr, id)
+		streamMetrics.onInPayload(ev)
+
+	case *stats.DelayedPickComplete:
+		m.targetMetrics.init(m.addr)
+		m.targetMetrics.onDelayedPickComplete(ev)
+
+	case *stats.Begin:
+		m.targetMetrics.init(m.addr)
+		m.targetMetrics.onBegin(ev)
+
+	case *stats.End:
+		mm, ok := m.streamMetrics.LoadAndDelete(id)
+		if !ok {
+			return
+		}
+		mm.(*batchClientStreamMetrics).cleanUp(m.addr, id)
 	}
 }
