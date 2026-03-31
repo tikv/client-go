@@ -200,6 +200,7 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		called = true
 		require.NoError(t, err)
 		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
 	})
 
 	cli.SendRequestAsync(sendCtx, addr, req, cb)
@@ -220,6 +221,7 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		called = true
 		require.NoError(t, err)
 		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
 	})
 
 	cli.SendRequestAsync(bypassCtx, addr, bypassReq, cb)

@@ -343,14 +343,17 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
 		writeRPCCount := completedTiKVWriteRPCCount(req)
+		readRPCCount, writeRPCDetailCount := completedTiKVRUV2RPCCount(req)
+		if bypass {
+			writeRPCCount = 0
+		}
 		if resp != nil {
 			switch resp.Resp.(type) {
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				if !bypass {
-					config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
-				}
+				resp.SetExecDetailsV2(util.FillTiKVRUV2RPCCount(resp.GetExecDetailsV2(), readRPCCount, writeRPCDetailCount))
+				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
 			}
 		}
 
@@ -414,6 +417,16 @@ func completedTiKVWriteRPCCount(req *tikvrpc.Request) float64 {
 	return 0
 }
 
+func completedTiKVRUV2RPCCount(req *tikvrpc.Request) (readRPCCount, writeRPCCount int64) {
+	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
+		return 0, 0
+	}
+	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
+		return 0, 1
+	}
+	return 1, 0
+}
+
 // SendRequest sends a Request to server and receives Response.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// In unit test, the option or codec may be nil. Here should skip the encode/decode process.
@@ -452,6 +465,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
 	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
+	copStream.CountResourceManagerRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -487,6 +501,8 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.Ctx = ctx
+	copStream.CountResourceManagerRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.

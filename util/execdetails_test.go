@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLockKeysDetailsMerge(t *testing.T) {
@@ -431,4 +433,25 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 
 	cloned := rd.Clone()
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
+}
+
+func TestFillTiKVRUV2RPCCount(t *testing.T) {
+	details := FillTiKVRUV2RPCCount(&kvrpcpb.ExecDetailsV2{
+		RuV2: &kvrpcpb.RUV2{
+			StorageProcessedKeysBatchGet: 5,
+			StorageProcessedKeysGet:      7,
+		},
+	}, 11, 13)
+	require.NotNil(t, details)
+	require.NotNil(t, details.RuV2)
+	assert.Equal(t, uint64(11), details.RuV2.ReadRpcCount)
+	assert.Equal(t, uint64(13), details.RuV2.WriteRpcCount)
+	assert.Equal(t, uint64(5), details.RuV2.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(7), details.RuV2.StorageProcessedKeysGet)
+
+	created := FillTiKVRUV2RPCCount(nil, 17, 19)
+	require.NotNil(t, created)
+	require.NotNil(t, created.RuV2)
+	assert.Equal(t, uint64(17), created.RuV2.ReadRpcCount)
+	assert.Equal(t, uint64(19), created.RuV2.WriteRpcCount)
 }

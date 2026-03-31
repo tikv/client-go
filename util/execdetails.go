@@ -904,6 +904,26 @@ func (rd *RUDetails) AddTiKVRUV2(delta float64) {
 	rd.tikvRUV2.Add(delta)
 }
 
+// FillTiKVRUV2RPCCount fills TiKV-side RUv2 raw RPC counters into ExecDetailsV2.RuV2.
+func FillTiKVRUV2RPCCount(details *kvrpcpb.ExecDetailsV2, readRPCCount, writeRPCCount int64) *kvrpcpb.ExecDetailsV2 {
+	if details == nil && readRPCCount == 0 && writeRPCCount == 0 {
+		return nil
+	}
+	if details == nil {
+		details = &kvrpcpb.ExecDetailsV2{}
+	}
+	if details.RuV2 == nil {
+		details.RuV2 = &kvrpcpb.RUV2{}
+	}
+	if readRPCCount != 0 {
+		details.RuV2.ReadRpcCount += uint64(readRPCCount)
+	}
+	if writeRPCCount != 0 {
+		details.RuV2.WriteRpcCount += uint64(writeRPCCount)
+	}
+	return details
+}
+
 // Update updates the RU runtime stats with the given consumption info.
 func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
 	if rd == nil || consumption == nil {
