@@ -127,11 +127,11 @@ func (m *batchClientStreamMetrics) init(addr string, id uint64) {
 }
 
 func (m *batchClientStreamMetrics) onOutPayload(ev *stats.OutPayload) {
-	m.sendTime.Set(float64(ev.SentTime.Unix()))
+	m.sendTime.Set(float64(ev.SentTime.UnixNano()) / float64(time.Second))
 }
 
 func (m *batchClientStreamMetrics) onInPayload(ev *stats.InPayload) {
-	m.recvTime.Set(float64(ev.RecvTime.Unix()))
+	m.recvTime.Set(float64(ev.RecvTime.UnixNano()) / float64(time.Second))
 }
 
 func (m *batchClientStreamMetrics) cleanUp(addr string, id uint64) {
