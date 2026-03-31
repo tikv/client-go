@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -121,7 +122,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 
 		// rpc metrics
 		connPool.updateRPCMetrics(req, resp, elapsed)
-		if resp != nil {
+		if resp != nil && !resourcecontrol.MakeRequestInfo(req).Bypass() {
 			config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
 		}
 
