@@ -823,14 +823,17 @@ type CopStreamResponse struct {
 	Lease                 // Shared by this object and a background goroutine.
 	Ctx                   context.Context
 	Bypass                bool
+	CountRPC              bool
 }
 
 // BatchCopStreamResponse comprises the BatchCoprocessorClient , the first result and timeout detector.
 type BatchCopStreamResponse struct {
 	tikvpb.Tikv_BatchCoprocessorClient
 	*coprocessor.BatchResponse
-	Timeout time.Duration
-	Lease   // Shared by this object and a background goroutine.
+	Timeout  time.Duration
+	Lease    // Shared by this object and a background goroutine.
+	Ctx      context.Context
+	CountRPC bool
 }
 
 // MPPStreamResponse is indeed a wrapped client that can receive data packet from tiflash mpp server.
@@ -1320,8 +1323,13 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.Response = ret
+		readRPCCount := int64(0)
+		if resp.CountRPC {
+			resp.CountRPC = false
+			readRPCCount = 1
+		}
 		if !resp.Bypass {
-			config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
+			config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), readRPCCount, 0)
 		}
 	}
 	return ret, errors.WithStack(err)
@@ -1347,6 +1355,7 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.BatchResponse = ret
+		resp.CountRPC = false
 	}
 	return ret, errors.WithStack(err)
 }

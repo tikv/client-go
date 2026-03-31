@@ -23,7 +23,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
-func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
+func TestUpdateTiKVRUV2FromExecDetailsV2(t *testing.T) {
 	original := GetGlobalConfig()
 	t.Cleanup(func() {
 		StoreGlobalConfig(original)
@@ -48,8 +48,9 @@ func TestUpdateTiKVRUV2FromExecDetailsV2AndWriteRPCCount(t *testing.T) {
 			RaftstoreStoreWriteTriggerWbBytes: 71,
 			StorageProcessedKeysBatchGet:      73,
 			StorageProcessedKeysGet:           79,
+			WriteRpcCount:                     31,
 		},
-	}, 31)
+	}, 0, 0)
 
 	require.InDelta(t, 38.64481334, ruDetails.TiKVRUV2(), 1e-9)
 }
