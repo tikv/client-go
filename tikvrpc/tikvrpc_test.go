@@ -191,10 +191,10 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 		_, err := resp.Recv()
 		require.NoError(t, err)
 		require.Greater(t, ruDetails.TiKVRUV2(), 0.0)
-		require.Equal(t, int64(1), ruDetails.ResourceManagerReadCnt())
-		require.Equal(t, int64(0), ruDetails.ResourceManagerWriteCnt())
-		require.Equal(t, int64(2), ruDetails.TiKVStorageProcessedKeysGet())
-		require.Equal(t, int64(3), ruDetails.TiKVStorageProcessedKeysBatchGet())
+		require.Equal(t, int64(1), ruDetails.ReadRPCCount())
+		require.Equal(t, int64(0), ruDetails.WriteRPCCount())
+		require.Equal(t, int64(2), ruDetails.GetKeysCount())
+		require.Equal(t, int64(3), ruDetails.BatchGetKeysCount())
 	})
 
 	t.Run("bypass stream skips tikv ruv2", func(t *testing.T) {
@@ -209,8 +209,8 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 		_, err := resp.Recv()
 		require.NoError(t, err)
 		require.Zero(t, ruDetails.TiKVRUV2())
-		require.Equal(t, int64(1), ruDetails.ResourceManagerReadCnt())
-		require.Equal(t, int64(2), ruDetails.TiKVStorageProcessedKeysGet())
-		require.Equal(t, int64(3), ruDetails.TiKVStorageProcessedKeysBatchGet())
+		require.Equal(t, int64(1), ruDetails.ReadRPCCount())
+		require.Equal(t, int64(2), ruDetails.GetKeysCount())
+		require.Equal(t, int64(3), ruDetails.BatchGetKeysCount())
 	})
 }
