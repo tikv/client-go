@@ -177,7 +177,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				eventListener:    eventListener,
-				metrics:          &a.batchConn.metrics,
+				metrics:          initBatchCommandsClientMetrics(a.target, i),
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)

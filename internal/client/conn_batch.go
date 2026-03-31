@@ -71,10 +71,7 @@ func (a *batchConn) initMetrics(target string) {
 	a.metrics.sendLoopWaitHeadDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-head")
 	a.metrics.sendLoopWaitMoreDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-more")
 	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
-	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
-	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
 	a.metrics.batchSendTailLat = metrics.TiKVBatchSendTailLatency.WithLabelValues(target)
-	a.metrics.batchRecvTailLat = metrics.TiKVBatchRecvTailLatency.WithLabelValues(target)
 	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
 	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
 	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
@@ -308,6 +305,7 @@ func (a *batchConn) getClientAndSend() {
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
+		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
 		atomic.StoreInt64(&e.sendLat, int64(reqSendTime.Sub(e.start)))
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
