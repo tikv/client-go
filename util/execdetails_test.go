@@ -15,9 +15,11 @@
 package util
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 )
@@ -423,12 +425,37 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 		RRU: 3.0,
 		WRU: 4.0,
 	})
+	UpdateTiKVRUV2RawDetails(context.WithValue(context.Background(), RUDetailsCtxKey, rd), &kvrpcpb.ExecDetailsV2{
+		RuV2: &kvrpcpb.RUV2{
+			StorageProcessedKeysBatchGet: 5,
+			StorageProcessedKeysGet:      7,
+		},
+	}, 11, 13)
 
 	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
 	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
 	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
+	assert.Equal(t, int64(11), rd.ResourceManagerReadCnt())
+	assert.Equal(t, int64(13), rd.ResourceManagerWriteCnt())
+	assert.Equal(t, int64(5), rd.TiKVStorageProcessedKeysBatchGet())
+	assert.Equal(t, int64(7), rd.TiKVStorageProcessedKeysGet())
 
 	cloned := rd.Clone()
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
+	assert.Equal(t, rd.ResourceManagerReadCnt(), cloned.ResourceManagerReadCnt())
+	assert.Equal(t, rd.ResourceManagerWriteCnt(), cloned.ResourceManagerWriteCnt())
+	assert.Equal(t, rd.TiKVStorageProcessedKeysBatchGet(), cloned.TiKVStorageProcessedKeysBatchGet())
+	assert.Equal(t, rd.TiKVStorageProcessedKeysGet(), cloned.TiKVStorageProcessedKeysGet())
+
+	other := NewRUDetails()
+	other.AddResourceManagerReadCnt(1)
+	other.AddResourceManagerWriteCnt(2)
+	other.AddTiKVStorageProcessedKeysBatchGet(3)
+	other.AddTiKVStorageProcessedKeysGet(4)
+	rd.Merge(other)
+	assert.Equal(t, int64(12), rd.ResourceManagerReadCnt())
+	assert.Equal(t, int64(15), rd.ResourceManagerWriteCnt())
+	assert.Equal(t, int64(8), rd.TiKVStorageProcessedKeysBatchGet())
+	assert.Equal(t, int64(11), rd.TiKVStorageProcessedKeysGet())
 }

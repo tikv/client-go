@@ -50,6 +50,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -818,19 +819,22 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 // to be handled in Recv() function. This struct facilitates the error handling.
 type CopStreamResponse struct {
 	tikvpb.Tikv_CoprocessorStreamClient
-	*coprocessor.Response // The first result of Recv()
-	Timeout               time.Duration
-	Lease                 // Shared by this object and a background goroutine.
-	Ctx                   context.Context
-	Bypass                bool
+	*coprocessor.Response   // The first result of Recv()
+	Timeout                 time.Duration
+	Lease                   // Shared by this object and a background goroutine.
+	Ctx                     context.Context
+	Bypass                  bool
+	CountResourceManagerRPC bool
 }
 
 // BatchCopStreamResponse comprises the BatchCoprocessorClient , the first result and timeout detector.
 type BatchCopStreamResponse struct {
 	tikvpb.Tikv_BatchCoprocessorClient
 	*coprocessor.BatchResponse
-	Timeout time.Duration
-	Lease   // Shared by this object and a background goroutine.
+	Timeout                 time.Duration
+	Lease                   // Shared by this object and a background goroutine.
+	Ctx                     context.Context
+	CountResourceManagerRPC bool
 }
 
 // MPPStreamResponse is indeed a wrapped client that can receive data packet from tiflash mpp server.
@@ -1320,6 +1324,12 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.Response = ret
+		readRPCCount := int64(0)
+		if resp.CountResourceManagerRPC {
+			readRPCCount = 1
+			resp.CountResourceManagerRPC = false
+		}
+		util.UpdateTiKVRUV2RawDetails(resp.Ctx, ret.GetExecDetailsV2(), readRPCCount, 0)
 		if !resp.Bypass {
 			config.UpdateTiKVRUV2FromExecDetailsV2(resp.Ctx, ret.GetExecDetailsV2(), 0)
 		}
@@ -1347,6 +1357,12 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	if ret != nil {
 		resp.BatchResponse = ret
+		readRPCCount := int64(0)
+		if resp.CountResourceManagerRPC {
+			readRPCCount = 1
+			resp.CountResourceManagerRPC = false
+		}
+		util.UpdateTiKVRUV2RawDetails(resp.Ctx, nil, readRPCCount, 0)
 	}
 	return ret, errors.WithStack(err)
 }
