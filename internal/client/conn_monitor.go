@@ -118,12 +118,13 @@ type batchClientStreamMetrics struct {
 	recvTime prometheus.Gauge
 }
 
-func (m *batchClientStreamMetrics) init(addr string, id uint64) {
+func (m *batchClientStreamMetrics) init(addr string, id uint64) *batchClientStreamMetrics {
 	m.inited.Do(func() {
 		streamID := strconv.FormatUint(id, 10)
 		m.sendTime = metrics.TiKVBatchCommandsSendTime.WithLabelValues(addr, streamID)
 		m.recvTime = metrics.TiKVBatchCommandsRecvTime.WithLabelValues(addr, streamID)
 	})
+	return m
 }
 
 func (m *batchClientStreamMetrics) onOutPayload(ev *stats.OutPayload) {
@@ -141,21 +142,10 @@ func (m *batchClientStreamMetrics) cleanUp(addr string, id uint64) {
 }
 
 type batchClientTargetMetrics struct {
-	inited sync.Once
-
 	sendWireBytes    prometheus.Counter
 	recvWireBytes    prometheus.Counter
 	delayedPick      prometheus.Counter
 	transparentRetry prometheus.Counter
-}
-
-func (m *batchClientTargetMetrics) init(addr string) {
-	m.inited.Do(func() {
-		m.sendWireBytes = metrics.TiKVBatchCommandsSendWireBytes.WithLabelValues(addr)
-		m.recvWireBytes = metrics.TiKVBatchCommandsRecvWireBytes.WithLabelValues(addr)
-		m.delayedPick = metrics.TiKVBatchCommandsDelayedPick.WithLabelValues(addr)
-		m.transparentRetry = metrics.TiKVBatchCommandsTransparentRetry.WithLabelValues(addr)
-	})
 }
 
 func (m *batchClientTargetMetrics) onOutPayload(ev *stats.OutPayload) {
@@ -182,9 +172,21 @@ type batchClientStatsMonitor struct {
 	streamMetrics sync.Map
 }
 
+func newBatchClientStatsMonitor(addr string) *batchClientStatsMonitor {
+	return &batchClientStatsMonitor{
+		addr: addr,
+		targetMetrics: batchClientTargetMetrics{
+			sendWireBytes:    metrics.TiKVBatchCommandsSendWireBytes.WithLabelValues(addr),
+			recvWireBytes:    metrics.TiKVBatchCommandsRecvWireBytes.WithLabelValues(addr),
+			delayedPick:      metrics.TiKVBatchCommandsDelayedPick.WithLabelValues(addr),
+			transparentRetry: metrics.TiKVBatchCommandsTransparentRetry.WithLabelValues(addr),
+		},
+	}
+}
+
 func (m *batchClientStatsMonitor) getStreamMetrics(id uint64) *batchClientStreamMetrics {
 	mm, _ := m.streamMetrics.LoadOrStore(id, &batchClientStreamMetrics{})
-	return mm.(*batchClientStreamMetrics)
+	return mm.(*batchClientStreamMetrics).init(m.addr, id)
 }
 
 // TagConn implements [stats.Handler].
@@ -212,27 +214,21 @@ func (m *batchClientStatsMonitor) HandleRPC(ctx context.Context, s stats.RPCStat
 	}
 	switch ev := s.(type) {
 	case *stats.OutPayload:
-		m.targetMetrics.init(m.addr)
 		m.targetMetrics.onOutPayload(ev)
 
 		streamMetrics := m.getStreamMetrics(id)
-		streamMetrics.init(m.addr, id)
 		streamMetrics.onOutPayload(ev)
 
 	case *stats.InPayload:
-		m.targetMetrics.init(m.addr)
 		m.targetMetrics.onInPayload(ev)
 
 		streamMetrics := m.getStreamMetrics(id)
-		streamMetrics.init(m.addr, id)
 		streamMetrics.onInPayload(ev)
 
 	case *stats.DelayedPickComplete:
-		m.targetMetrics.init(m.addr)
 		m.targetMetrics.onDelayedPickComplete(ev)
 
 	case *stats.Begin:
-		m.targetMetrics.init(m.addr)
 		m.targetMetrics.onBegin(ev)
 
 	case *stats.End:

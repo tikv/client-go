@@ -55,10 +55,10 @@ func TestBatchClientStatsMonitorTagRPCUsesGlobalStreamID(t *testing.T) {
 	resetBatchCommandsStatsMetrics()
 	t.Cleanup(resetBatchCommandsStatsMetrics)
 
-	ctx1 := (&batchClientStatsMonitor{addr: "tikv-1"}).TagRPC(context.Background(), &stats.RPCTagInfo{
+	ctx1 := (newBatchClientStatsMonitor("tikv-1")).TagRPC(context.Background(), &stats.RPCTagInfo{
 		FullMethodName: batchCommandsMethod,
 	})
-	ctx2 := (&batchClientStatsMonitor{addr: "tikv-1"}).TagRPC(context.Background(), &stats.RPCTagInfo{
+	ctx2 := (newBatchClientStatsMonitor("tikv-1")).TagRPC(context.Background(), &stats.RPCTagInfo{
 		FullMethodName: batchCommandsMethod,
 	})
 
@@ -76,7 +76,7 @@ func TestBatchClientStatsMonitorHandleRPC(t *testing.T) {
 	t.Cleanup(resetBatchCommandsStatsMetrics)
 
 	addr := "tikv-1"
-	monitor := &batchClientStatsMonitor{addr: addr}
+	monitor := newBatchClientStatsMonitor(addr)
 	ctx := monitor.TagRPC(context.Background(), &stats.RPCTagInfo{
 		FullMethodName: batchCommandsMethod,
 	})

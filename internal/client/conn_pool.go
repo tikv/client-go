@@ -114,7 +114,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	if allowBatch {
 		a.batchConn = newBatchConn(uint(len(a.conns)), cfg.TiKVClient.MaxBatchSize, idleNotify)
 		a.initMetrics(a.target)
-		batchStatsMonitor = &batchClientStatsMonitor{addr: addr}
+		batchStatsMonitor = newBatchClientStatsMonitor(addr)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.conns {
