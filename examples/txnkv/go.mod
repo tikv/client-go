@@ -3,7 +3,7 @@ module txnkv
 go 1.25.8
 
 require (
-	github.com/pingcap/kvproto v0.0.0-20260106110113-438649d89ee7
+	github.com/pingcap/kvproto v0.0.0-20260320060847-534bbfabf736
 	github.com/tikv/client-go/v2 v2.0.0
 )
 
@@ -33,7 +33,7 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
-	github.com/tikv/pd/client v0.0.0-20260226073533-5885ceca6b4f // indirect
+	github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71 // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.10 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect

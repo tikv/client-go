@@ -83,6 +83,8 @@ github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 h1:surzm05a8C9dN
 github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989/go.mod h1:O17XtbryoCJhkKGbT62+L2OlrniwqiGLSqrmdHCMzZw=
 github.com/pingcap/kvproto v0.0.0-20260309153435-8478a5610086 h1:z4Xe1L68se/GBq6yDOW/+CASGCh6wbZmr46chz7PzBM=
 github.com/pingcap/kvproto v0.0.0-20260309153435-8478a5610086/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
+github.com/pingcap/kvproto v0.0.0-20260320060847-534bbfabf736 h1:GKdGsEfcE4ImbSN24AIt51t+3sUyqNTLoeUaJiZld8s=
+github.com/pingcap/kvproto v0.0.0-20260320060847-534bbfabf736/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3 h1:HR/ylkkLmGdSSDaD8IDP+SZrdhV1Kibl9KrHxJ9eciw=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
@@ -117,6 +119,8 @@ github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tikv/pd/client v0.0.0-20260226073533-5885ceca6b4f h1:hFnht5CcP3ssOxp74f00WcitbXs6lNUIBm0mzdojs24=
 github.com/tikv/pd/client v0.0.0-20260226073533-5885ceca6b4f/go.mod h1:tloQKNFqF/T5JfLx4bloR8MKPZyp7y6cF3guAlls88M=
+github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71 h1:5hCQ6J2fwUpYqIgQGR625bW98wvYS9FUpTiVszIbVSg=
+github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71/go.mod h1:4kxXuAQAREpH+lVbydVwGNNDmcwdj0RG4Ofwky08W/k=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
