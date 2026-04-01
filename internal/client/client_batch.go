@@ -256,6 +256,20 @@ func batchRequestTerminalOutcome(err error) batchRequestOutcome {
 	}
 }
 
+// normalizeObservedSentNS clamps the observed send boundary when sentNS is read
+// concurrently with recvNS. The send loop stamps sentNS asynchronously, so a
+// reader can observe recvNS first or see a stale sentNS that lands after recvNS.
+func normalizeObservedSentNS(batchedNS, sentNS, recvNS int64) int64 {
+	if recvNS > 0 {
+		if sentNS == 0 {
+			sentNS = batchedNS + 1
+		} else if sentNS > recvNS {
+			sentNS = recvNS - 1
+		}
+	}
+	return sentNS
+}
+
 func visitBatchRequestObservations(entry *batchCommandsEntry, terminal batchRequestOutcome, now time.Time, visit func(batchRequestStage, batchRequestOutcome, time.Duration)) {
 	nowNS := batchRequestElapsedNS(entry.start, now)
 
@@ -267,13 +281,16 @@ func visitBatchRequestObservations(entry *batchCommandsEntry, terminal batchRequ
 	visit(batchRequestStageBatchWait, batchRequestOutcomeOK, time.Duration(batchedNS))
 
 	sentNS := entry.sentNS.Load()
-	if sentNS == 0 {
+	recvNS := entry.recvNS.Load()
+
+	sentNS = normalizeObservedSentNS(batchedNS, sentNS, recvNS)
+
+	if sentNS == 0 && recvNS == 0 {
 		visit(batchRequestStageSendWait, terminal, batchRequestStageDurationNS(nowNS, batchedNS))
 		return
 	}
 	visit(batchRequestStageSendWait, batchRequestOutcomeOK, batchRequestStageDurationNS(sentNS, batchedNS))
 
-	recvNS := entry.recvNS.Load()
 	if recvNS == 0 {
 		visit(batchRequestStageRecvWait, terminal, batchRequestStageDurationNS(nowNS, sentNS))
 		return
@@ -1044,7 +1061,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				// Put the response only if the request is not canceled.
 				entry.response(responses[i])
 			} else {
-				canceledEntryTailLat.Observe(float64(recvNS-entry.sentNS.Load()) / 1e9)
+				canceledEntryTailLat.Observe(float64(recvNS-entry.batchedNS.Load()) / 1e9)
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
@@ -1165,13 +1182,16 @@ func formatBatchRequestTimeoutReason(entry *batchCommandsEntry, timeout time.Dur
 	reason += fmt.Sprintf(", batch:%s", util.FormatDuration(time.Duration(batchedNS)))
 
 	sentNS := entry.sentNS.Load()
-	if sentNS == 0 {
+	recvNS := entry.recvNS.Load()
+
+	sentNS = normalizeObservedSentNS(batchedNS, sentNS, recvNS)
+
+	if sentNS == 0 && recvNS == 0 {
 		reason += fmt.Sprintf(", send:%s", util.FormatDuration(batchRequestStageDurationNS(batchRequestElapsedNS(entry.start, now), batchedNS)))
 		return reason
 	}
 	reason += fmt.Sprintf(", send:%s", util.FormatDuration(batchRequestStageDurationNS(sentNS, batchedNS)))
 
-	recvNS := entry.recvNS.Load()
 	if recvNS > 0 {
 		reason += fmt.Sprintf(", recv:%s", util.FormatDuration(batchRequestStageDurationNS(recvNS, sentNS)))
 	}

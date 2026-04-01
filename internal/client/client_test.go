@@ -594,6 +594,41 @@ func TestVisitBatchRequestObservations(t *testing.T) {
 		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Millisecond},
 		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 5 * time.Millisecond},
 	}, mustObservations(newEntry(start, 4*time.Millisecond, 5*time.Millisecond, 10*time.Millisecond), batchRequestOutcomeCanceled, start.Add(12*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Nanosecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 4*time.Millisecond - 1*time.Nanosecond},
+		{stage: batchRequestStageDone, outcome: batchRequestOutcomeOK, duration: 10 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 0, 8*time.Millisecond), batchRequestOutcomeOK, start.Add(10*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1*time.Millisecond - 1*time.Nanosecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Nanosecond},
+		{stage: batchRequestStageDone, outcome: batchRequestOutcomeOK, duration: 10 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 7*time.Millisecond, 5*time.Millisecond), batchRequestOutcomeOK, start.Add(10*time.Millisecond)))
+}
+
+func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
+	start := time.Unix(0, 0)
+
+	entry := &batchCommandsEntry{start: start}
+	entry.batchedNS.Store(int64(4 * time.Millisecond))
+	entry.recvNS.Store(int64(8 * time.Millisecond))
+	require.Equal(t,
+		"wait recvLoop timeout, timeout:10ms, batch:4ms, send:1ns, recv:4ms",
+		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
+	)
+
+	entry = &batchCommandsEntry{start: start}
+	entry.batchedNS.Store(int64(4 * time.Millisecond))
+	entry.sentNS.Store(int64(7 * time.Millisecond))
+	entry.recvNS.Store(int64(5 * time.Millisecond))
+	require.Equal(t,
+		"wait recvLoop timeout, timeout:10ms, batch:4ms, send:1ms, recv:1ns",
+		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
+	)
 }
 
 func TestTraceExecDetails(t *testing.T) {
