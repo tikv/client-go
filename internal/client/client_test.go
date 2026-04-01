@@ -149,7 +149,7 @@ func TestSendWhenReconnect(t *testing.T) {
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
-	require.Regexp(t, "wait recvLoop timeout, timeout:5s: context deadline exceeded", err.Error())
+	require.Regexp(t, "wait recvLoop timeout, timeout:5s.*context deadline exceeded", err.Error())
 	server.Stop()
 }
 
@@ -617,7 +617,7 @@ func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
 	entry.batchedNS.Store(int64(4 * time.Millisecond))
 	entry.recvNS.Store(int64(8 * time.Millisecond))
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, batch:4ms, send:1ns, recv:4ms",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ns, recv:4ms}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
 
@@ -626,9 +626,67 @@ func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
 	entry.sentNS.Store(int64(7 * time.Millisecond))
 	entry.recvNS.Store(int64(5 * time.Millisecond))
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, batch:4ms, send:1ms, recv:1ns",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ms, recv:1ns}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
+}
+
+func TestWriteBatchCommandsEntryProgress(t *testing.T) {
+	start := time.Unix(0, 0)
+	entry := &batchCommandsEntry{start: start}
+	require.Equal(t, "EntryProgress{}", writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String())
+
+	entry.batchedNS.Store(int64(4 * time.Millisecond))
+	entry.recvNS.Store(int64(8 * time.Millisecond))
+	require.Equal(t,
+		"EntryProgress{batch:4ms, send:1ns, recv:4ms}",
+		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
+	)
+
+	var builder strings.Builder
+	builder.WriteString("prefix=")
+	require.Equal(t,
+		"prefix=EntryProgress{batch:4ms, send:1ns, recv:4ms}",
+		writeBatchCommandsEntryProgress(&builder, entry, start.Add(10*time.Millisecond)).String(),
+	)
+}
+
+func TestInspectPendingBatchRequests(t *testing.T) {
+	now := time.Unix(0, 0).Add(7 * time.Minute)
+
+	newEntry := func(wait time.Duration, batchedAt time.Duration, forwardedHost string) *batchCommandsEntry {
+		entry := &batchCommandsEntry{
+			start:         now.Add(-wait),
+			forwardedHost: forwardedHost,
+		}
+		entry.batchedNS.Store(int64(batchedAt))
+		return entry
+	}
+
+	client := &batchCommandsClient{}
+	client.batched.Store(uint64(1), newEntry(7*time.Minute+30*time.Second, 30*time.Second, ""))
+	client.batched.Store(uint64(2), newEntry(5*time.Minute, 3*time.Minute, "store-1"))
+	client.batched.Store(uint64(3), newEntry(30*time.Second, 0, ""))
+	client.batched.Store(uint64(4), newEntry(4*time.Minute, 2*time.Minute, "store-1"))
+	client.batched.Store(uint64(5), newEntry(6*time.Minute, time.Minute, "store-2"))
+
+	stats := client.inspectPendingBatchRequests(now, "")
+	require.NotNil(t, stats.oldestEntry)
+	require.Equal(t, uint64(1), stats.oldestID)
+	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
+	require.Equal(t, 1, stats.hangingCount)
+
+	stats = client.inspectPendingBatchRequests(now, "store-1")
+	require.NotNil(t, stats.oldestEntry)
+	require.Equal(t, uint64(2), stats.oldestID)
+	require.Equal(t, 5*time.Minute, stats.oldestWait)
+	require.Equal(t, 2, stats.hangingCount)
+
+	stats = client.inspectPendingBatchRequests(now, "store-2")
+	require.NotNil(t, stats.oldestEntry)
+	require.Equal(t, uint64(5), stats.oldestID)
+	require.Equal(t, 6*time.Minute, stats.oldestWait)
+	require.Equal(t, 1, stats.hangingCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {

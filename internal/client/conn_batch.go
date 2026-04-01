@@ -81,25 +81,68 @@ func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
 }
 
+func stopAndDrainTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
+func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
+	for _, client := range a.batchCommandsClients {
+		if !client.tryLockForSend() {
+			continue
+		}
+		forwardedHosts := make([]string, 0, len(client.forwardedClients))
+		for forwardedHost := range client.forwardedClients {
+			forwardedHosts = append(forwardedHosts, forwardedHost)
+		}
+		client.unlockForSend()
+
+		client.logPendingBatchRequests(checkTime, "")
+		for _, forwardedHost := range forwardedHosts {
+			client.logPendingBatchRequests(checkTime, forwardedHost)
+		}
+	}
+}
+
 // fetchAllPendingRequests fetches all pending requests from the channel.
-func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
+func (a *batchConn) fetchAllPendingRequests(maxBatchSize int, lastPendingInspectAt *time.Time) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
 	latestReqStartTime := a.reqBuilder.latestReqStartTime
 	var headEntry *batchCommandsEntry
-	select {
-	case headEntry = <-a.batchCommandsCh:
-		if !a.idleDetect.Stop() {
-			<-a.idleDetect.C
+	for {
+		inspectWait := time.Until(lastPendingInspectAt.Add(batchRecvLoopInspectInterval))
+		if inspectWait < 0 {
+			inspectWait = 0
 		}
-		a.idleDetect.Reset(idleTimeout)
-	case <-a.idleDetect.C:
-		a.idleDetect.Reset(idleTimeout)
-		atomic.AddUint32(&a.idle, 1)
-		atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
-		// This batchConn to be recycled
-		return time.Now(), 0
-	case <-a.closed:
-		return time.Now(), 0
+		inspectTimer := time.NewTimer(inspectWait)
+		select {
+		case headEntry = <-a.batchCommandsCh:
+			stopAndDrainTimer(inspectTimer)
+			if !a.idleDetect.Stop() {
+				<-a.idleDetect.C
+			}
+			a.idleDetect.Reset(idleTimeout)
+		case <-inspectTimer.C:
+			now := time.Now()
+			a.inspectPendingRequests(now)
+			*lastPendingInspectAt = now
+			continue
+		case <-a.idleDetect.C:
+			stopAndDrainTimer(inspectTimer)
+			a.idleDetect.Reset(idleTimeout)
+			atomic.AddUint32(&a.idle, 1)
+			atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
+			// This batchConn to be recycled
+			return time.Now(), 0
+		case <-a.closed:
+			stopAndDrainTimer(inspectTimer)
+			return time.Now(), 0
+		}
+		break
 	}
 	if headEntry == nil {
 		return time.Now(), 0
@@ -206,11 +249,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	turboBatchWaitTime := trigger.turboWaitTime()
 
 	avgBatchWaitSize := float64(cfg.BatchWaitSize)
+	lastPendingInspectAt := time.Now()
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
 
-		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
+		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize), &lastPendingInspectAt)
 		if a.reqBuilder.len() == 0 {
 			// the conn is closed or recycled.
 			return
@@ -248,6 +292,10 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
 		if dur := sendLoopEndTime.Sub(headRecvTime); dur > batchSendTailLatThreshold {
 			a.metrics.batchSendTailLat.Observe(dur.Seconds())
+		}
+		if sendLoopEndTime.Sub(lastPendingInspectAt) >= batchRecvLoopInspectInterval {
+			a.inspectPendingRequests(sendLoopEndTime)
+			lastPendingInspectAt = sendLoopEndTime
 		}
 	}
 }
@@ -303,10 +351,10 @@ func (a *batchConn) getClientAndSend() {
 	reqSendTime := time.Now()
 	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
+		recordBatchRequestStage(&e.batchedNS, e.start, reqSendTime)
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
 		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
-		recordBatchRequestStage(&e.batchedNS, e.start, reqSendTime)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
