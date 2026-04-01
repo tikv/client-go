@@ -230,7 +230,9 @@ func batchRequestStageDurationNS(endNS, startNS int64) time.Duration {
 
 func recordBatchRequestStage(stage *atomic.Int64, start, now time.Time) int64 {
 	elapsed := batchRequestElapsedNS(start, now)
-	stage.CompareAndSwap(0, elapsed)
+	if stage.CompareAndSwap(0, elapsed) {
+		return elapsed
+	}
 	return stage.Load()
 }
 
@@ -443,6 +445,7 @@ type batchCommandsClientMetrics struct {
 	recvLoopRecvDur        prometheus.Observer
 	recvLoopProcessDur     prometheus.Observer
 	batchRecvTailLat       prometheus.Observer
+	canceledEntryTailLat   prometheus.Observer
 	trackedRequestCount    prometheus.Counter
 	retiredRequestCount    prometheus.Counter
 	completedResponseCount prometheus.Counter
@@ -454,6 +457,7 @@ type batchCommandsClientMetrics struct {
 	recvLoopRecvDurFwd        prometheus.Observer
 	recvLoopProcessDurFwd     prometheus.Observer
 	batchRecvTailLatFwd       prometheus.Observer
+	canceledEntryTailLatFwd   prometheus.Observer
 	trackedRequestCountFwd    prometheus.Counter
 	retiredRequestCountFwd    prometheus.Counter
 	completedResponseCountFwd prometheus.Counter
@@ -470,6 +474,7 @@ func initBatchCommandsClientMetrics(target string, connIdx int) *batchCommandsCl
 		recvLoopRecvDur:        metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, conn, "0", "recv"),
 		recvLoopProcessDur:     metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, conn, "0", "process"),
 		batchRecvTailLat:       metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(target, conn, "0"),
+		canceledEntryTailLat:   metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(target, conn, "0"),
 		trackedRequestCount:    metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(target, conn, "0"),
 		retiredRequestCount:    metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(target, conn, "0"),
 		completedResponseCount: metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(target, conn, "0"),
@@ -499,6 +504,14 @@ func (m *batchCommandsClientMetrics) batchRecvTailLatObserver(forwarded bool) pr
 		return m.batchRecvTailLatFwd
 	}
 	return m.batchRecvTailLat
+}
+
+func (m *batchCommandsClientMetrics) canceledEntryTailLatObserver(forwarded bool) prometheus.Observer {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.canceledEntryTailLatFwd
+	}
+	return m.canceledEntryTailLat
 }
 
 func (m *batchCommandsClientMetrics) trackedRequestCounter(forwarded bool) prometheus.Counter {
@@ -538,6 +551,7 @@ func (m *batchCommandsClientMetrics) initForwardedMetrics() {
 		m.recvLoopRecvDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.conn, "1", "recv")
 		m.recvLoopProcessDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.conn, "1", "process")
 		m.batchRecvTailLatFwd = metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(m.target, m.conn, "1")
+		m.canceledEntryTailLatFwd = metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(m.target, m.conn, "1")
 		m.trackedRequestCountFwd = metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(m.target, m.conn, "1")
 		m.retiredRequestCountFwd = metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(m.target, m.conn, "1")
 		m.completedResponseCountFwd = metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(m.target, m.conn, "1")
@@ -961,6 +975,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 	forwarded := streamClient.forwardedHost != ""
 	recvDur := c.metrics.recvLoopRecvDurObserver(forwarded)
 	recvDurTail := c.metrics.batchRecvTailLatObserver(forwarded)
+	canceledEntryTailLat := c.metrics.canceledEntryTailLatObserver(forwarded)
 	processDur := c.metrics.recvLoopProcessDurObserver(forwarded)
 	retiredReqCount := c.metrics.retiredRequestCounter(forwarded)
 	completedRespCount := c.metrics.completedResponseCounter(forwarded)
@@ -1018,7 +1033,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			completedRespCount.Inc()
 			entry := value.(*batchCommandsEntry)
-			recordBatchRequestStage(&entry.recvNS, entry.start, respRecvTime)
+			recvNS := recordBatchRequestStage(&entry.recvNS, entry.start, respRecvTime)
 			if trace.IsEnabled() {
 				trace.Log(entry.ctx, "rpc", "received")
 			}
@@ -1026,6 +1041,8 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
 				entry.response(responses[i])
+			} else {
+				canceledEntryTailLat.Observe(float64(recvNS-entry.sentNS.Load()) / 1e9)
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)

@@ -69,6 +69,7 @@ var (
 	TiKVBatchSendLoopDuration                      *prometheus.SummaryVec
 	TiKVBatchStreamRecvLoopDuration                *prometheus.SummaryVec
 	TiKVBatchStreamRecvTailLatency                 *prometheus.HistogramVec
+	TiKVBatchStreamCanceledEntryTailLatency        *prometheus.HistogramVec
 	TiKVBatchStreamTrackedRequestCount             *prometheus.CounterVec
 	TiKVBatchStreamRetiredRequestCount             *prometheus.CounterVec
 	TiKVBatchStreamCompletedResponseCount          *prometheus.CounterVec
@@ -420,6 +421,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_stream_recv_tail_latency_seconds",
 			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
 			Help:        "batch stream recv tail latency",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamCanceledEntryTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_canceled_entry_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 8), // 1s ~ 128s
+			Help:        "tail latency of canceled entries that later receive responses on each batch stream",
 			ConstLabels: constLabels,
 		}, []string{LblTarget, LblConn, LblForward})
 
@@ -1069,6 +1080,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
 	prometheus.MustRegister(TiKVBatchStreamRecvLoopDuration)
 	prometheus.MustRegister(TiKVBatchStreamRecvTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamCanceledEntryTailLatency)
 	prometheus.MustRegister(TiKVBatchStreamTrackedRequestCount)
 	prometheus.MustRegister(TiKVBatchStreamRetiredRequestCount)
 	prometheus.MustRegister(TiKVBatchStreamCompletedResponseCount)
