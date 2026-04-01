@@ -7,7 +7,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260309153435-8478a5610086
+	github.com/pingcap/kvproto v0.0.0-20260320060847-534bbfabf736
 	github.com/pingcap/tidb v1.1.0-beta.0.20260317213042-b1525070ca3e
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
@@ -15,7 +15,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.14.4
 	github.com/tikv/client-go/v2 v2.0.8-0.20260316081220-602cdf086c43
-	github.com/tikv/pd/client v0.0.0-20260228084044-4f5039d43753
+	github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.75.1
 )
