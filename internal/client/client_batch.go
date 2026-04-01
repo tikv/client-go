@@ -41,7 +41,6 @@ import (
 	"fmt"
 	"math"
 	"runtime/trace"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -438,8 +437,8 @@ type batchConnMetrics struct {
 
 // batchCommandsClientMetrics contains metrics for a single batchCommandsClient.
 type batchCommandsClientMetrics struct {
-	target string
-	conn   string
+	target  string
+	connIdx string
 
 	// Non-forwarded stream metrics
 	recvLoopRecvDur        prometheus.Observer
@@ -466,19 +465,18 @@ type batchCommandsClientMetrics struct {
 
 // initBatchCommandsClientMetrics initializes metrics for a batchCommandsClient.
 // The connIdx is the index of this client in batchCommandsClients slice.
-func initBatchCommandsClientMetrics(target string, connIdx int) *batchCommandsClientMetrics {
-	conn := strconv.Itoa(connIdx)
+func initBatchCommandsClientMetrics(target string, connIdx string) *batchCommandsClientMetrics {
 	return &batchCommandsClientMetrics{
 		target:                 target,
-		conn:                   conn,
-		recvLoopRecvDur:        metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, conn, "0", "recv"),
-		recvLoopProcessDur:     metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, conn, "0", "process"),
-		batchRecvTailLat:       metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(target, conn, "0"),
-		canceledEntryTailLat:   metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(target, conn, "0"),
-		trackedRequestCount:    metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(target, conn, "0"),
-		retiredRequestCount:    metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(target, conn, "0"),
-		completedResponseCount: metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(target, conn, "0"),
-		outdatedResponseCount:  metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(target, conn, "0"),
+		connIdx:                connIdx,
+		recvLoopRecvDur:        metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, connIdx, "0", "recv"),
+		recvLoopProcessDur:     metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, connIdx, "0", "process"),
+		batchRecvTailLat:       metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(target, connIdx, "0"),
+		canceledEntryTailLat:   metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(target, connIdx, "0"),
+		trackedRequestCount:    metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(target, connIdx, "0"),
+		retiredRequestCount:    metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(target, connIdx, "0"),
+		completedResponseCount: metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(target, connIdx, "0"),
+		outdatedResponseCount:  metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(target, connIdx, "0"),
 	}
 }
 
@@ -548,14 +546,14 @@ func (m *batchCommandsClientMetrics) outdatedResponseCounter(forwarded bool) pro
 
 func (m *batchCommandsClientMetrics) initForwardedMetrics() {
 	m.forwardedMetricsInit.Do(func() {
-		m.recvLoopRecvDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.conn, "1", "recv")
-		m.recvLoopProcessDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.conn, "1", "process")
-		m.batchRecvTailLatFwd = metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(m.target, m.conn, "1")
-		m.canceledEntryTailLatFwd = metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(m.target, m.conn, "1")
-		m.trackedRequestCountFwd = metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(m.target, m.conn, "1")
-		m.retiredRequestCountFwd = metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(m.target, m.conn, "1")
-		m.completedResponseCountFwd = metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(m.target, m.conn, "1")
-		m.outdatedResponseCountFwd = metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(m.target, m.conn, "1")
+		m.recvLoopRecvDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.connIdx, "1", "recv")
+		m.recvLoopProcessDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.connIdx, "1", "process")
+		m.batchRecvTailLatFwd = metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(m.target, m.connIdx, "1")
+		m.canceledEntryTailLatFwd = metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(m.target, m.connIdx, "1")
+		m.trackedRequestCountFwd = metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.retiredRequestCountFwd = metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.completedResponseCountFwd = metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.outdatedResponseCountFwd = metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(m.target, m.connIdx, "1")
 	})
 }
 
@@ -714,6 +712,7 @@ func (l *tryLock) unlockForRecreate() {
 type batchCommandsStream struct {
 	tikvpb.Tikv_BatchCommandsClient
 	forwardedHost string
+	connIdx       string
 }
 
 func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err error) {
@@ -738,9 +737,11 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 	tikvClient := tikvpb.NewTikvClient(conn)
 	ctx := context.TODO()
-	// Set metadata for forwarding stream.
 	if s.forwardedHost != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, s.forwardedHost)
+	}
+	if s.connIdx != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, batchConnIdxMetadataKey, s.connIdx)
 	}
 	streamClient, err := tikvClient.BatchCommands(ctx)
 	if err != nil {
@@ -752,7 +753,8 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 
 type batchCommandsClient struct {
 	// The target host.
-	target string
+	target  string
+	connIdx string
 
 	conn *grpc.ClientConn
 	// client and forwardedClients are protected by tryLock.
@@ -1121,7 +1123,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 }
 
 func (c *batchCommandsClient) newBatchStream(forwardedHost string) (*batchCommandsStream, error) {
-	batchStream := &batchCommandsStream{forwardedHost: forwardedHost}
+	batchStream := &batchCommandsStream{forwardedHost: forwardedHost, connIdx: c.connIdx}
 	if err := batchStream.recreate(c.conn); err != nil {
 		return nil, err
 	}

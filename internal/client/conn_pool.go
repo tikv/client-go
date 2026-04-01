@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,8 +166,10 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		a.conns[i] = conn
 
 		if allowBatch {
+			connIdx := strconv.Itoa(i)
 			batchClient := &batchCommandsClient{
 				target:           a.target,
+				connIdx:          connIdx,
 				conn:             conn.ClientConn,
 				forwardedClients: make(map[string]*batchCommandsStream),
 				batched:          sync.Map{},
@@ -177,7 +180,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				eventListener:    eventListener,
-				metrics:          initBatchCommandsClientMetrics(a.target, i),
+				metrics:          initBatchCommandsClientMetrics(a.target, connIdx),
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)

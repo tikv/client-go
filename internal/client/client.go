@@ -88,6 +88,9 @@ const (
 // forwardMetadataKey is the key of gRPC metadata which represents a forwarded request.
 const forwardMetadataKey = "tikv-forwarded-host"
 
+// batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
+const batchConnIdxMetadataKey = "tikv-batch-conn-index"
+
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
