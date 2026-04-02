@@ -482,10 +482,8 @@ func newTestCollector(t *testing.T, server *fakeChannelzServer, opts ChannelzCol
 		_ = grpcServer.Serve(listener)
 	}()
 
-	ctx := context.Background()
-	conn, err := grpc.DialContext(
-		ctx,
-		"bufnet",
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			return listener.Dial()
 		}),
