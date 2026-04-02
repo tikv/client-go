@@ -15,6 +15,7 @@
 package client
 
 import (
+	"math/rand/v2"
 	"runtime"
 	"runtime/trace"
 	"sync"
@@ -233,7 +234,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	turboBatchWaitTime := trigger.turboWaitTime()
 
 	avgBatchWaitSize := float64(cfg.BatchWaitSize)
-	lastPendingInspectAt := time.Now()
+	lastPendingInspectAt := time.Now().Add(-time.Duration(rand.Int64N(int64(batchRequestInspectInterval))))
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()

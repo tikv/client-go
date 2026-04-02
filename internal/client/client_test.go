@@ -674,7 +674,7 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 	require.NotNil(t, stats.oldestEntry)
 	require.Equal(t, uint64(1), stats.oldestID)
 	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
-	require.Equal(t, 3, stats.hangingCount)
+	require.Equal(t, 4, stats.hangingCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {

@@ -488,8 +488,8 @@ const (
 	batchSendTailLatThreshold   = 20 * time.Millisecond
 	batchRecvTailLatThreshold   = 20 * time.Millisecond
 	batchRequestInspectInterval = time.Minute
-	batchRequestSlowThreshold   = time.Minute
-	batchRequestHangThreshold   = 5 * time.Minute
+	batchRequestSlowThreshold   = 30 * time.Second
+	batchRequestHangThreshold   = 90 * time.Second
 )
 
 type pendingBatchRequestStats struct {
