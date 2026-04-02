@@ -314,6 +314,11 @@ func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsE
 		buf.WriteString(", recv:")
 		buf.WriteString(util.FormatDuration(batchRequestStageDurationNS(recvNS, sentNS)))
 	}
+
+	if entry.forwardedHost != "" {
+		buf.WriteString(", fwd:")
+		buf.WriteString(entry.forwardedHost)
+	}
 	buf.WriteString("}")
 	return buf
 }
@@ -480,11 +485,11 @@ func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 }
 
 const (
-	batchSendTailLatThreshold    = 20 * time.Millisecond
-	batchRecvTailLatThreshold    = 20 * time.Millisecond
-	batchRecvLoopInspectInterval = time.Minute
-	batchRequestSlowThreshold    = time.Second
-	batchRequestHangThreshold    = 2 * time.Minute
+	batchSendTailLatThreshold   = 20 * time.Millisecond
+	batchRecvTailLatThreshold   = 20 * time.Millisecond
+	batchRequestInspectInterval = time.Minute
+	batchRequestSlowThreshold   = time.Minute
+	batchRequestHangThreshold   = 5 * time.Minute
 )
 
 type pendingBatchRequestStats struct {
@@ -1044,13 +1049,10 @@ func (c *batchCommandsClient) recreateStreamingClientOnce(streamClient *batchCom
 	return err
 }
 
-func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time, forwardedHost string) pendingBatchRequestStats {
+func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) pendingBatchRequestStats {
 	stats := pendingBatchRequestStats{}
 	c.batched.Range(func(key, value interface{}) bool {
 		entry := value.(*batchCommandsEntry)
-		if entry.forwardedHost != forwardedHost {
-			return true
-		}
 		wait := checkTime.Sub(entry.start)
 		if wait < batchRequestSlowThreshold {
 			return true
@@ -1068,28 +1070,18 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time, f
 	return stats
 }
 
-func (c *batchCommandsClient) logPendingBatchRequests(checkTime time.Time, forwardedHost string) {
-	stats := c.inspectPendingBatchRequests(checkTime, forwardedHost)
+func (c *batchCommandsClient) logPendingBatchRequests(checkTime time.Time) {
+	stats := c.inspectPendingBatchRequests(checkTime)
 	if stats.oldestEntry != nil {
 		logutil.BgLogger().Warn(
 			"batchRecvLoop detects slow pending request",
 			zap.String("target", c.target),
 			zap.String("conn", c.connIdx),
-			zap.String("forwardedHost", forwardedHost),
 			zap.Uint64("requestID", stats.oldestID),
 			zap.Duration("waitTime", stats.oldestWait),
 			zap.Bool("canceled", atomic.LoadInt32(&stats.oldestEntry.canceled) == 1),
 			zap.String("progress", writeBatchCommandsEntryProgress(nil, stats.oldestEntry, checkTime).String()),
-		)
-	}
-	if stats.hangingCount > 0 {
-		logutil.BgLogger().Warn(
-			"batchRecvLoop detects hanging requests",
-			zap.String("target", c.target),
-			zap.String("conn", c.connIdx),
-			zap.String("forwardedHost", forwardedHost),
-			zap.Duration("threshold", batchRequestHangThreshold),
-			zap.Int("count", stats.hangingCount),
+			zap.Int("hangingCount", stats.hangingCount),
 		)
 	}
 }

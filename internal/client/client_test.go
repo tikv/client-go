@@ -670,23 +670,11 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 	client.batched.Store(uint64(4), newEntry(4*time.Minute, 2*time.Minute, "store-1"))
 	client.batched.Store(uint64(5), newEntry(6*time.Minute, time.Minute, "store-2"))
 
-	stats := client.inspectPendingBatchRequests(now, "")
+	stats := client.inspectPendingBatchRequests(now)
 	require.NotNil(t, stats.oldestEntry)
 	require.Equal(t, uint64(1), stats.oldestID)
 	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
-	require.Equal(t, 1, stats.hangingCount)
-
-	stats = client.inspectPendingBatchRequests(now, "store-1")
-	require.NotNil(t, stats.oldestEntry)
-	require.Equal(t, uint64(2), stats.oldestID)
-	require.Equal(t, 5*time.Minute, stats.oldestWait)
-	require.Equal(t, 2, stats.hangingCount)
-
-	stats = client.inspectPendingBatchRequests(now, "store-2")
-	require.NotNil(t, stats.oldestEntry)
-	require.Equal(t, uint64(5), stats.oldestID)
-	require.Equal(t, 6*time.Minute, stats.oldestWait)
-	require.Equal(t, 1, stats.hangingCount)
+	require.Equal(t, 3, stats.hangingCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {

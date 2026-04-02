@@ -92,19 +92,7 @@ func stopAndDrainTimer(timer *time.Timer) {
 
 func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
 	for _, client := range a.batchCommandsClients {
-		if !client.tryLockForSend() {
-			continue
-		}
-		forwardedHosts := make([]string, 0, len(client.forwardedClients))
-		for forwardedHost := range client.forwardedClients {
-			forwardedHosts = append(forwardedHosts, forwardedHost)
-		}
-		client.unlockForSend()
-
-		client.logPendingBatchRequests(checkTime, "")
-		for _, forwardedHost := range forwardedHosts {
-			client.logPendingBatchRequests(checkTime, forwardedHost)
-		}
+		client.logPendingBatchRequests(checkTime)
 	}
 }
 
@@ -114,11 +102,8 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int, lastPendingInspect
 	latestReqStartTime := a.reqBuilder.latestReqStartTime
 	var headEntry *batchCommandsEntry
 	for {
-		inspectWait := time.Until(lastPendingInspectAt.Add(batchRecvLoopInspectInterval))
-		if inspectWait < 0 {
-			inspectWait = 0
-		}
-		inspectTimer := time.NewTimer(inspectWait)
+		inspectWait := time.Until(lastPendingInspectAt.Add(batchRequestInspectInterval))
+		inspectTimer := time.NewTimer(max(inspectWait, 0))
 		select {
 		case headEntry = <-a.batchCommandsCh:
 			stopAndDrainTimer(inspectTimer)
@@ -126,11 +111,6 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int, lastPendingInspect
 				<-a.idleDetect.C
 			}
 			a.idleDetect.Reset(idleTimeout)
-		case <-inspectTimer.C:
-			now := time.Now()
-			a.inspectPendingRequests(now)
-			*lastPendingInspectAt = now
-			continue
 		case <-a.idleDetect.C:
 			stopAndDrainTimer(inspectTimer)
 			a.idleDetect.Reset(idleTimeout)
@@ -141,6 +121,10 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int, lastPendingInspect
 		case <-a.closed:
 			stopAndDrainTimer(inspectTimer)
 			return time.Now(), 0
+		case now := <-inspectTimer.C:
+			a.inspectPendingRequests(now)
+			*lastPendingInspectAt = now
+			continue
 		}
 		break
 	}
@@ -293,7 +277,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		if dur := sendLoopEndTime.Sub(headRecvTime); dur > batchSendTailLatThreshold {
 			a.metrics.batchSendTailLat.Observe(dur.Seconds())
 		}
-		if sendLoopEndTime.Sub(lastPendingInspectAt) >= batchRecvLoopInspectInterval {
+		if sendLoopEndTime.Sub(lastPendingInspectAt) >= batchRequestInspectInterval {
 			a.inspectPendingRequests(sendLoopEndTime)
 			lastPendingInspectAt = sendLoopEndTime
 		}
