@@ -342,15 +342,13 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	defer func() {
 		elapsed := time.Since(start)
 		connPool.updateRPCMetrics(req, resp, elapsed)
-		writeRPCCount := completedTiKVWriteRPCCount(req)
-		if resp != nil {
+		if resp != nil && !bypass {
+			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
 			switch resp.Resp.(type) {
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				if !bypass {
-					config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), writeRPCCount)
-				}
+				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
 			}
 		}
 
@@ -404,14 +402,14 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
-func completedTiKVWriteRPCCount(req *tikvrpc.Request) float64 {
+func completedTiKVRUV2RPCCount(req *tikvrpc.Request) (readRPCCount, writeRPCCount int64) {
 	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
-		return 0
+		return 0, 0
 	}
 	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
-		return 1
+		return 0, 1
 	}
-	return 0
+	return 1, 0
 }
 
 // SendRequest sends a Request to server and receives Response.
@@ -452,6 +450,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
 	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
+	copStream.CountRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -487,6 +486,8 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.Ctx = ctx
+	copStream.CountRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.

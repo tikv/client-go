@@ -171,7 +171,11 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 	makeResponse := func() *coprocessor.Response {
 		return &coprocessor.Response{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
-				RuV2: &kvrpcpb.RUV2{KvEngineCacheMiss: 1},
+				RuV2: &kvrpcpb.RUV2{
+					KvEngineCacheMiss:            1,
+					StorageProcessedKeysGet:      2,
+					StorageProcessedKeysBatchGet: 3,
+				},
 			},
 		}
 	}
@@ -182,10 +186,14 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 		resp := &CopStreamResponse{
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
+			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
 		require.Greater(t, ruDetails.TiKVRUV2(), 0.0)
+		require.Equal(t, uint64(1), resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
+		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
 	})
 
 	t.Run("bypass stream skips tikv ruv2", func(t *testing.T) {
@@ -195,9 +203,13 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
 			Bypass:                       true,
+			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
 		require.Zero(t, ruDetails.TiKVRUV2())
+		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
+		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
 	})
 }
