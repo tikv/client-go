@@ -82,15 +82,6 @@ func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
 }
 
-func stopAndDrainTimer(timer *time.Timer) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-}
-
 func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
 	for _, client := range a.batchCommandsClients {
 		client.logPendingBatchRequests(checkTime)
@@ -98,36 +89,24 @@ func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
-func (a *batchConn) fetchAllPendingRequests(maxBatchSize int, lastPendingInspectAt *time.Time) (headRecvTime time.Time, headArrivalInterval time.Duration) {
+func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
 	latestReqStartTime := a.reqBuilder.latestReqStartTime
 	var headEntry *batchCommandsEntry
-	for {
-		inspectWait := time.Until(lastPendingInspectAt.Add(batchRequestInspectInterval))
-		inspectTimer := time.NewTimer(max(inspectWait, 0))
-		select {
-		case headEntry = <-a.batchCommandsCh:
-			stopAndDrainTimer(inspectTimer)
-			if !a.idleDetect.Stop() {
-				<-a.idleDetect.C
-			}
-			a.idleDetect.Reset(idleTimeout)
-		case <-a.idleDetect.C:
-			stopAndDrainTimer(inspectTimer)
-			a.idleDetect.Reset(idleTimeout)
-			atomic.AddUint32(&a.idle, 1)
-			atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
-			// This batchConn to be recycled
-			return time.Now(), 0
-		case <-a.closed:
-			stopAndDrainTimer(inspectTimer)
-			return time.Now(), 0
-		case now := <-inspectTimer.C:
-			a.inspectPendingRequests(now)
-			*lastPendingInspectAt = now
-			continue
+	select {
+	case headEntry = <-a.batchCommandsCh:
+		if !a.idleDetect.Stop() {
+			<-a.idleDetect.C
 		}
-		break
+		a.idleDetect.Reset(idleTimeout)
+	case <-a.idleDetect.C:
+		a.idleDetect.Reset(idleTimeout)
+		atomic.AddUint32(&a.idle, 1)
+		atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
+		// This batchConn to be recycled
+		return time.Now(), 0
+	case <-a.closed:
+		return time.Now(), 0
 	}
 	if headEntry == nil {
 		return time.Now(), 0
@@ -239,7 +218,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
 
-		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize), &lastPendingInspectAt)
+		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
 		if a.reqBuilder.len() == 0 {
 			// the conn is closed or recycled.
 			return

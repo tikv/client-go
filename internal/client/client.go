@@ -836,7 +836,7 @@ func newStoreMetrics(storeID uint64) *storeMetrics {
 
 func (m *batchRequestStageMetrics) observe(stage batchRequestStage, outcome batchRequestOutcome, duration time.Duration) {
 	// This method is called internally and the caller [visitBatchRequestObservations] is guaranteed to pass valid stage
-	// and outcome, so we don't need to handle the default case in the follwoing switch statements.
+	// and outcome, so we don't need to handle the default case in the following switch statements.
 	var observer prometheus.Observer
 	switch stage {
 	case batchRequestStageBatchWait:
