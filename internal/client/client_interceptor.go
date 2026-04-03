@@ -19,7 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util"
@@ -63,6 +65,9 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 			ruDetails = val.(*util.RUDetails)
 			ruDetails.Update(consumption, waitDuration)
 		}
+		recordResourceControlMetrics(resourceGroupName, req.GetRequestSource(), consumption)
+	} else if reqInfo != nil && reqInfo.Bypass() {
+		metrics.TiKVResourceControlBypassedCounter.WithLabelValues(resourceGroupName, req.GetRequestSource()).Inc()
 	}
 
 	if ctxInterceptor := interceptor.GetRPCInterceptorFromCtx(ctx); ctxInterceptor == nil {
@@ -82,6 +87,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		if ruDetails != nil {
 			ruDetails.Update(consumption, waitDuration)
 		}
+		recordResourceControlMetrics(resourceGroupName, req.GetRequestSource(), consumption)
 	}
 
 	return resp, err
@@ -111,6 +117,7 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			ruDetails = val.(*util.RUDetails)
 			ruDetails.Update(consumption, waitDuration)
 		}
+		recordResourceControlMetrics(resourceGroupName, req.GetRequestSource(), consumption)
 
 		cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
 			if ctxInterceptor := interceptor.GetRPCInterceptorFromCtx(ctx); ctxInterceptor != nil {
@@ -130,9 +137,12 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 				if ruDetails != nil {
 					ruDetails.Update(consumption, waitDuration)
 				}
+				recordResourceControlMetrics(resourceGroupName, req.GetRequestSource(), consumption)
 			}
 			return resp, err
 		})
+	} else if reqInfo != nil && reqInfo.Bypass() {
+		metrics.TiKVResourceControlBypassedCounter.WithLabelValues(resourceGroupName, req.GetRequestSource()).Inc()
 	}
 
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
@@ -144,6 +154,20 @@ var (
 	// ResourceControlInterceptor is used to build the resource control interceptor.
 	ResourceControlInterceptor atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
 )
+
+// recordResourceControlMetrics records RU consumption from a single resource
+// control call (OnRequestWait or OnResponseWait).
+func recordResourceControlMetrics(resourceGroupName, requestSource string, consumption *rmpb.Consumption) {
+	if consumption == nil {
+		return
+	}
+	if consumption.RRU > 0 {
+		metrics.TiKVResourceControlRUCounter.WithLabelValues(resourceGroupName, requestSource, "rru").Add(consumption.RRU)
+	}
+	if consumption.WRU > 0 {
+		metrics.TiKVResourceControlRUCounter.WithLabelValues(resourceGroupName, requestSource, "wru").Add(consumption.WRU)
+	}
+}
 
 func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	string,
@@ -169,7 +193,7 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	}
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	if reqInfo.Bypass() {
-		return "", nil, nil
+		return resourceGroupName, nil, reqInfo
 	}
 	return resourceGroupName, resourceControlInterceptor, reqInfo
 }
