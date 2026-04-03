@@ -15,6 +15,7 @@
 package client
 
 import (
+	"math/rand/v2"
 	"runtime"
 	"runtime/trace"
 	"sync"
@@ -71,10 +72,7 @@ func (a *batchConn) initMetrics(target string) {
 	a.metrics.sendLoopWaitHeadDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-head")
 	a.metrics.sendLoopWaitMoreDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-more")
 	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
-	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
-	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
 	a.metrics.batchSendTailLat = metrics.TiKVBatchSendTailLatency.WithLabelValues(target)
-	a.metrics.batchRecvTailLat = metrics.TiKVBatchRecvTailLatency.WithLabelValues(target)
 	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
 	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
 	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
@@ -82,6 +80,12 @@ func (a *batchConn) initMetrics(target string) {
 
 func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
+}
+
+func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
+	for _, client := range a.batchCommandsClients {
+		client.logPendingBatchRequests(checkTime)
+	}
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
@@ -209,6 +213,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	turboBatchWaitTime := trigger.turboWaitTime()
 
 	avgBatchWaitSize := float64(cfg.BatchWaitSize)
+	lastPendingInspectAt := time.Now().Add(-time.Duration(rand.Int64N(int64(batchRequestInspectInterval))))
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
@@ -251,6 +256,10 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
 		if dur := sendLoopEndTime.Sub(headRecvTime); dur > batchSendTailLatThreshold {
 			a.metrics.batchSendTailLat.Observe(dur.Seconds())
+		}
+		if sendLoopEndTime.Sub(lastPendingInspectAt) >= batchRequestInspectInterval {
+			a.inspectPendingRequests(sendLoopEndTime)
+			lastPendingInspectAt = sendLoopEndTime
 		}
 	}
 }
@@ -306,9 +315,10 @@ func (a *batchConn) getClientAndSend() {
 	reqSendTime := time.Now()
 	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
+		recordBatchRequestStage(&e.batchedNS, e.start, reqSendTime)
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
-		atomic.StoreInt64(&e.sendLat, int64(reqSendTime.Sub(e.start)))
+		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}

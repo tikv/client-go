@@ -67,15 +67,20 @@ var (
 	TiKVStatusCounter                              *prometheus.CounterVec
 	TiKVBatchSendTailLatency                       *prometheus.HistogramVec
 	TiKVBatchSendLoopDuration                      *prometheus.SummaryVec
-	TiKVBatchRecvTailLatency                       *prometheus.HistogramVec
-	TiKVBatchRecvLoopDuration                      *prometheus.SummaryVec
+	TiKVBatchStreamRecvLoopDuration                *prometheus.SummaryVec
+	TiKVBatchStreamRecvTailLatency                 *prometheus.HistogramVec
+	TiKVBatchStreamCanceledEntryTailLatency        *prometheus.HistogramVec
+	TiKVBatchStreamTrackedRequestCount             *prometheus.CounterVec
+	TiKVBatchStreamRetiredRequestCount             *prometheus.CounterVec
+	TiKVBatchStreamCompletedResponseCount          *prometheus.CounterVec
+	TiKVBatchStreamOutdatedResponseCount           *prometheus.CounterVec
 	TiKVBatchHeadArrivalInterval                   *prometheus.SummaryVec
 	TiKVBatchBestSize                              *prometheus.SummaryVec
 	TiKVBatchMoreRequests                          *prometheus.SummaryVec
 	TiKVBatchWaitOverLoad                          prometheus.Counter
 	TiKVBatchPendingRequests                       *prometheus.HistogramVec
 	TiKVBatchRequests                              *prometheus.HistogramVec
-	TiKVBatchRequestDuration                       *prometheus.SummaryVec
+	TiKVBatchRequestStageDuration                  *prometheus.SummaryVec
 	TiKVBatchClientUnavailable                     prometheus.Histogram
 	TiKVBatchClientWaitEstablish                   prometheus.Histogram
 	TiKVBatchClientRecycle                         prometheus.Histogram
@@ -138,6 +143,8 @@ const (
 	LblResult          = "result"
 	LblStore           = "store"
 	LblTarget          = "target"
+	LblConn            = "conn"
+	LblForward         = "forward"
 	LblCommit          = "commit"
 	LblAbort           = "abort"
 	LblRollback        = "rollback"
@@ -157,6 +164,7 @@ const (
 	LblGeneral         = "general"
 	LblDirection       = "direction"
 	LblReason          = "reason"
+	LblStage           = "stage"
 )
 
 var storeMetricVecList atomic.Pointer[[]MetricVec]
@@ -397,24 +405,70 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblTarget, "step"})
 
-	TiKVBatchRecvTailLatency = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "batch_recv_tail_latency_seconds",
-			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
-			Help:        "batch recv tail latency",
-			ConstLabels: constLabels,
-		}, []string{LblTarget})
-
-	TiKVBatchRecvLoopDuration = prometheus.NewSummaryVec(
+	TiKVBatchStreamRecvLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "batch_recv_loop_duration_seconds",
-			Help:        "batch recv loop duration breakdown by steps",
+			Name:        "batch_stream_recv_loop_duration_seconds",
+			Help:        "batch stream recv loop duration breakdown by steps",
 			ConstLabels: constLabels,
-		}, []string{LblTarget, "step"})
+		}, []string{LblTarget, LblConn, LblForward, "step"})
+
+	TiKVBatchStreamRecvTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_recv_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
+			Help:        "batch stream recv tail latency",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamCanceledEntryTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_canceled_entry_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 8), // 1s ~ 128s
+			Help:        "tail latency of canceled entries that later receive responses on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamTrackedRequestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_tracked_request_count",
+			Help:        "count of requests tracked by each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamRetiredRequestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_retired_request_count",
+			Help:        "count of requests retired from each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamCompletedResponseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_completed_response_count",
+			Help:        "count of matched responses completed on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamOutdatedResponseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_outdated_response_count",
+			Help:        "count of outdated responses received on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
 
 	TiKVBatchHeadArrivalInterval = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -472,14 +526,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblTarget})
 
-	TiKVBatchRequestDuration = prometheus.NewSummaryVec(
+	TiKVBatchRequestStageDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "batch_request_duration_seconds",
-			Help:        "batch request duration breakdown by steps",
+			Name:        "batch_request_stage_duration_seconds",
+			Help:        "batch request stage duration breakdown by store and outcome",
 			ConstLabels: constLabels,
-		}, []string{"step"})
+		}, []string{LblStore, LblStage, LblResult})
+	storeMetrics = append(storeMetrics, TiKVBatchRequestStageDuration)
 
 	TiKVBatchClientUnavailable = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -1022,16 +1077,21 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)
 	prometheus.MustRegister(TiKVBatchSendTailLatency)
-	prometheus.MustRegister(TiKVBatchRecvTailLatency)
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
-	prometheus.MustRegister(TiKVBatchRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchStreamRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchStreamRecvTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamCanceledEntryTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamTrackedRequestCount)
+	prometheus.MustRegister(TiKVBatchStreamRetiredRequestCount)
+	prometheus.MustRegister(TiKVBatchStreamCompletedResponseCount)
+	prometheus.MustRegister(TiKVBatchStreamOutdatedResponseCount)
 	prometheus.MustRegister(TiKVBatchHeadArrivalInterval)
 	prometheus.MustRegister(TiKVBatchBestSize)
 	prometheus.MustRegister(TiKVBatchMoreRequests)
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
 	prometheus.MustRegister(TiKVBatchPendingRequests)
 	prometheus.MustRegister(TiKVBatchRequests)
-	prometheus.MustRegister(TiKVBatchRequestDuration)
+	prometheus.MustRegister(TiKVBatchRequestStageDuration)
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
 	prometheus.MustRegister(TiKVBatchClientRecycle)

@@ -145,6 +145,8 @@ type batchCommandsEntry struct {
 	req *tikvpb.BatchCommandsRequest_Request
 	res chan *tikvpb.BatchCommandsResponse_Response
 	cb  async.Callback[*tikvrpc.Response]
+	// batchRequestMetrics is cached by store in connPool.metrics.
+	batchRequestMetrics *batchRequestStageMetrics
 	// forwardedHost is the address of a store which will handle the request.
 	// It's different from the address the request sent to.
 	forwardedHost string
@@ -154,9 +156,14 @@ type batchCommandsEntry struct {
 	pri      uint64
 
 	// start indicates when the batch commands entry is generated and sent to the batch conn channel.
-	start   time.Time
-	sendLat int64
-	recvLat int64
+	start time.Time
+
+	// batchedNS is the elapsed time from start until the request is placed into a batch to be sent.
+	batchedNS atomic.Int64
+	// sentNS is the elapsed time from start until the batch send finishes.
+	sentNS atomic.Int64
+	// recvNS is the elapsed time from start until the response is received.
+	recvNS atomic.Int64
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -186,6 +193,173 @@ func (b *batchCommandsEntry) error(err error) {
 	} else {
 		close(b.res)
 	}
+}
+
+type batchRequestStage string
+
+const (
+	batchRequestStageBatchWait batchRequestStage = "batch_wait"
+	batchRequestStageSendWait  batchRequestStage = "send_wait"
+	batchRequestStageRecvWait  batchRequestStage = "recv_wait"
+	batchRequestStageDone      batchRequestStage = "done"
+)
+
+type batchRequestOutcome string
+
+const (
+	batchRequestOutcomeOK       batchRequestOutcome = "ok"
+	batchRequestOutcomeTimeout  batchRequestOutcome = "timeout"
+	batchRequestOutcomeCanceled batchRequestOutcome = "canceled"
+	batchRequestOutcomeFailed   batchRequestOutcome = "failed"
+	batchRequestOutcomeClosed   batchRequestOutcome = "closed"
+)
+
+func batchRequestElapsedNS(start, end time.Time) int64 {
+	elapsed := end.Sub(start).Nanoseconds()
+	if elapsed <= 0 {
+		return 1
+	}
+	return elapsed
+}
+
+func batchRequestStageDurationNS(endNS, startNS int64) time.Duration {
+	delta := endNS - startNS
+	if delta <= 0 {
+		delta = 1
+	}
+	return time.Duration(delta)
+}
+
+func recordBatchRequestStage(stage *atomic.Int64, start, now time.Time) int64 {
+	elapsed := batchRequestElapsedNS(start, now)
+	if stage.CompareAndSwap(0, elapsed) {
+		return elapsed
+	}
+	return stage.Load()
+}
+
+func batchRequestTerminalOutcome(err error) batchRequestOutcome {
+	if err == nil {
+		return batchRequestOutcomeOK
+	}
+
+	cause := errors.Cause(err)
+	switch cause {
+	case context.DeadlineExceeded:
+		return batchRequestOutcomeTimeout
+	case context.Canceled:
+		return batchRequestOutcomeCanceled
+	}
+
+	switch cause.Error() {
+	case "batchConn closed", "batch client closed":
+		return batchRequestOutcomeClosed
+	default:
+		return batchRequestOutcomeFailed
+	}
+}
+
+// normalizeObservedSentNS clamps the observed send boundary when sentNS is read
+// concurrently with recvNS. The send loop stamps sentNS asynchronously, so a
+// reader can observe recvNS first or see a stale sentNS that lands after recvNS.
+func normalizeObservedSentNS(batchedNS, sentNS, recvNS int64) int64 {
+	if recvNS > 0 {
+		if sentNS == 0 {
+			sentNS = batchedNS + 1
+		} else if sentNS > recvNS {
+			sentNS = recvNS - 1
+		}
+	}
+	return sentNS
+}
+
+func formatBatchRequestTimeoutReason(entry *batchCommandsEntry, timeout time.Duration, now time.Time) string {
+	var builder strings.Builder
+	builder.WriteString("wait recvLoop timeout, timeout:")
+	builder.WriteString(timeout.String())
+	builder.WriteString(", ")
+	writeBatchCommandsEntryProgress(&builder, entry, now)
+	return builder.String()
+}
+
+func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsEntry, now time.Time) *strings.Builder {
+	if buf == nil {
+		buf = &strings.Builder{}
+	}
+	buf.WriteString("EntryProgress{")
+
+	batchedNS := entry.batchedNS.Load()
+	if batchedNS == 0 {
+		buf.WriteString("}")
+		return buf
+	}
+	buf.WriteString("batch:")
+	buf.WriteString(util.FormatDuration(time.Duration(batchedNS)))
+
+	sentNS := entry.sentNS.Load()
+	recvNS := entry.recvNS.Load()
+
+	sentNS = normalizeObservedSentNS(batchedNS, sentNS, recvNS)
+
+	if sentNS == 0 && recvNS == 0 {
+		buf.WriteString(", send:")
+		buf.WriteString(util.FormatDuration(batchRequestStageDurationNS(batchRequestElapsedNS(entry.start, now), batchedNS)))
+		buf.WriteString("}")
+		return buf
+	}
+	buf.WriteString(", send:")
+	buf.WriteString(util.FormatDuration(batchRequestStageDurationNS(sentNS, batchedNS)))
+
+	if recvNS > 0 {
+		buf.WriteString(", recv:")
+		buf.WriteString(util.FormatDuration(batchRequestStageDurationNS(recvNS, sentNS)))
+	}
+
+	if entry.forwardedHost != "" {
+		buf.WriteString(", fwd:")
+		buf.WriteString(entry.forwardedHost)
+	}
+	buf.WriteString("}")
+	return buf
+}
+
+func visitBatchRequestObservations(entry *batchCommandsEntry, terminal batchRequestOutcome, now time.Time, visit func(batchRequestStage, batchRequestOutcome, time.Duration)) {
+	nowNS := batchRequestElapsedNS(entry.start, now)
+
+	batchedNS := entry.batchedNS.Load()
+	if batchedNS == 0 {
+		visit(batchRequestStageBatchWait, terminal, time.Duration(nowNS))
+		return
+	}
+	visit(batchRequestStageBatchWait, batchRequestOutcomeOK, time.Duration(batchedNS))
+
+	sentNS := entry.sentNS.Load()
+	recvNS := entry.recvNS.Load()
+
+	sentNS = normalizeObservedSentNS(batchedNS, sentNS, recvNS)
+
+	if sentNS == 0 && recvNS == 0 {
+		visit(batchRequestStageSendWait, terminal, batchRequestStageDurationNS(nowNS, batchedNS))
+		return
+	}
+	visit(batchRequestStageSendWait, batchRequestOutcomeOK, batchRequestStageDurationNS(sentNS, batchedNS))
+
+	if recvNS == 0 {
+		visit(batchRequestStageRecvWait, terminal, batchRequestStageDurationNS(nowNS, sentNS))
+		return
+	}
+	visit(batchRequestStageRecvWait, batchRequestOutcomeOK, batchRequestStageDurationNS(recvNS, sentNS))
+
+	if terminal == batchRequestOutcomeOK {
+		visit(batchRequestStageDone, batchRequestOutcomeOK, time.Duration(nowNS))
+	}
+}
+
+func observeBatchRequestCompletion(entry *batchCommandsEntry, err error) {
+	if entry.batchRequestMetrics == nil {
+		return
+	}
+	visitBatchRequestObservations(entry, batchRequestTerminalOutcome(err), time.Now(), entry.batchRequestMetrics.observe)
 }
 
 // batchCommandsBuilder collects a batch of `batchCommandsEntry`s to build
@@ -311,9 +485,19 @@ func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 }
 
 const (
-	batchSendTailLatThreshold = 20 * time.Millisecond
-	batchRecvTailLatThreshold = 20 * time.Millisecond
+	batchSendTailLatThreshold   = 20 * time.Millisecond
+	batchRecvTailLatThreshold   = 20 * time.Millisecond
+	batchRequestInspectInterval = time.Minute
+	batchRequestSlowThreshold   = 30 * time.Second
+	batchRequestHangThreshold   = 90 * time.Second
 )
+
+type pendingBatchRequestStats struct {
+	oldestID     uint64
+	oldestEntry  *batchCommandsEntry
+	oldestWait   time.Duration
+	hangingCount int
+}
 
 type batchConnMetrics struct {
 	pendingRequests prometheus.Observer
@@ -323,16 +507,143 @@ type batchConnMetrics struct {
 	sendLoopWaitMoreDur prometheus.Observer
 	sendLoopSendDur     prometheus.Observer
 
-	recvLoopRecvDur    prometheus.Observer
-	recvLoopProcessDur prometheus.Observer
-
 	batchSendTailLat prometheus.Observer
-	batchRecvTailLat prometheus.Observer
 
 	headArrivalInterval prometheus.Observer
 	batchMoreRequests   prometheus.Observer
 
 	bestBatchSize prometheus.Observer
+}
+
+// batchCommandsClientMetrics contains metrics for a single batchCommandsClient.
+type batchCommandsClientMetrics struct {
+	target  string
+	connIdx string
+
+	// Non-forwarded stream metrics
+
+	// recvLoopRecvDur tracks time spent blocked in stream Recv.
+	recvLoopRecvDur prometheus.Observer
+	// recvLoopProcessDur tracks time spent handling a received batch.
+	recvLoopProcessDur prometheus.Observer
+	// batchRecvTailLat records unusually slow recv loop iterations.
+	batchRecvTailLat prometheus.Observer
+	// canceledEntryTailLat records canceled entries that later still receive responses.
+	canceledEntryTailLat prometheus.Observer
+	// trackedRequestCount counts requests registered on this stream.
+	trackedRequestCount prometheus.Counter
+	// retiredRequestCount counts requests removed from this stream.
+	retiredRequestCount prometheus.Counter
+	// completedResponseCount counts responses matched to tracked requests.
+	completedResponseCount prometheus.Counter
+	// outdatedResponseCount counts responses for requests no longer tracked.
+	outdatedResponseCount prometheus.Counter
+
+	// Forwarded stream metrics are initialized lazily because most clients never create
+	// forwarding streams.
+	forwardedMetricsInit      sync.Once
+	recvLoopRecvDurFwd        prometheus.Observer
+	recvLoopProcessDurFwd     prometheus.Observer
+	batchRecvTailLatFwd       prometheus.Observer
+	canceledEntryTailLatFwd   prometheus.Observer
+	trackedRequestCountFwd    prometheus.Counter
+	retiredRequestCountFwd    prometheus.Counter
+	completedResponseCountFwd prometheus.Counter
+	outdatedResponseCountFwd  prometheus.Counter
+}
+
+// initBatchCommandsClientMetrics initializes metrics for a batchCommandsClient.
+// The connIdx is the index of this client in batchCommandsClients slice.
+func initBatchCommandsClientMetrics(target string, connIdx string) *batchCommandsClientMetrics {
+	return &batchCommandsClientMetrics{
+		target:                 target,
+		connIdx:                connIdx,
+		recvLoopRecvDur:        metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, connIdx, "0", "recv"),
+		recvLoopProcessDur:     metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(target, connIdx, "0", "process"),
+		batchRecvTailLat:       metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(target, connIdx, "0"),
+		canceledEntryTailLat:   metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(target, connIdx, "0"),
+		trackedRequestCount:    metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(target, connIdx, "0"),
+		retiredRequestCount:    metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(target, connIdx, "0"),
+		completedResponseCount: metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(target, connIdx, "0"),
+		outdatedResponseCount:  metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(target, connIdx, "0"),
+	}
+}
+
+func (m *batchCommandsClientMetrics) recvLoopRecvDurObserver(forwarded bool) prometheus.Observer {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.recvLoopRecvDurFwd
+	}
+	return m.recvLoopRecvDur
+}
+
+func (m *batchCommandsClientMetrics) recvLoopProcessDurObserver(forwarded bool) prometheus.Observer {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.recvLoopProcessDurFwd
+	}
+	return m.recvLoopProcessDur
+}
+
+func (m *batchCommandsClientMetrics) batchRecvTailLatObserver(forwarded bool) prometheus.Observer {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.batchRecvTailLatFwd
+	}
+	return m.batchRecvTailLat
+}
+
+func (m *batchCommandsClientMetrics) canceledEntryTailLatObserver(forwarded bool) prometheus.Observer {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.canceledEntryTailLatFwd
+	}
+	return m.canceledEntryTailLat
+}
+
+func (m *batchCommandsClientMetrics) trackedRequestCounter(forwarded bool) prometheus.Counter {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.trackedRequestCountFwd
+	}
+	return m.trackedRequestCount
+}
+
+func (m *batchCommandsClientMetrics) retiredRequestCounter(forwarded bool) prometheus.Counter {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.retiredRequestCountFwd
+	}
+	return m.retiredRequestCount
+}
+
+func (m *batchCommandsClientMetrics) completedResponseCounter(forwarded bool) prometheus.Counter {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.completedResponseCountFwd
+	}
+	return m.completedResponseCount
+}
+
+func (m *batchCommandsClientMetrics) outdatedResponseCounter(forwarded bool) prometheus.Counter {
+	if forwarded {
+		m.initForwardedMetrics()
+		return m.outdatedResponseCountFwd
+	}
+	return m.outdatedResponseCount
+}
+
+func (m *batchCommandsClientMetrics) initForwardedMetrics() {
+	m.forwardedMetricsInit.Do(func() {
+		m.recvLoopRecvDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.connIdx, "1", "recv")
+		m.recvLoopProcessDurFwd = metrics.TiKVBatchStreamRecvLoopDuration.WithLabelValues(m.target, m.connIdx, "1", "process")
+		m.batchRecvTailLatFwd = metrics.TiKVBatchStreamRecvTailLatency.WithLabelValues(m.target, m.connIdx, "1")
+		m.canceledEntryTailLatFwd = metrics.TiKVBatchStreamCanceledEntryTailLatency.WithLabelValues(m.target, m.connIdx, "1")
+		m.trackedRequestCountFwd = metrics.TiKVBatchStreamTrackedRequestCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.retiredRequestCountFwd = metrics.TiKVBatchStreamRetiredRequestCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.completedResponseCountFwd = metrics.TiKVBatchStreamCompletedResponseCount.WithLabelValues(m.target, m.connIdx, "1")
+		m.outdatedResponseCountFwd = metrics.TiKVBatchStreamOutdatedResponseCount.WithLabelValues(m.target, m.connIdx, "1")
+	})
 }
 
 var (
@@ -490,6 +801,7 @@ func (l *tryLock) unlockForRecreate() {
 type batchCommandsStream struct {
 	tikvpb.Tikv_BatchCommandsClient
 	forwardedHost string
+	connIdx       string
 }
 
 func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err error) {
@@ -514,9 +826,11 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 	tikvClient := tikvpb.NewTikvClient(conn)
 	ctx := context.TODO()
-	// Set metadata for forwarding stream.
 	if s.forwardedHost != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, s.forwardedHost)
+	}
+	if s.connIdx != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, batchConnIdxMetadataKey, s.connIdx)
 	}
 	streamClient, err := tikvClient.BatchCommands(ctx)
 	if err != nil {
@@ -528,7 +842,8 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 
 type batchCommandsClient struct {
 	// The target host.
-	target string
+	target  string
+	connIdx string
 
 	conn *grpc.ClientConn
 	// client and forwardedClients are protected by tryLock.
@@ -565,7 +880,7 @@ type batchCommandsClient struct {
 	// pointer to make setting thread-safe.
 	eventListener *atomic.Pointer[ClientEventListener]
 
-	metrics *batchConnMetrics
+	metrics *batchCommandsClientMetrics
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -613,6 +928,17 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 			zap.Error(err),
 		)
 		c.failRequestsByIDs(err, req.RequestIds) // fast fail requests.
+		return
+	}
+
+	sentAt := time.Now()
+	for _, requestID := range req.RequestIds {
+		value, ok := c.batched.Load(requestID)
+		if !ok {
+			continue
+		}
+		entry := value.(*batchCommandsEntry)
+		recordBatchRequestStage(&entry.sentNS, entry.start, sentAt)
 	}
 }
 
@@ -666,6 +992,7 @@ func (c *batchCommandsClient) failRequestsByIDs(err error, requestIDs []uint64) 
 func (c *batchCommandsClient) failRequest(err error, requestID uint64, entry *batchCommandsEntry) {
 	c.batched.Delete(requestID)
 	c.sent.Add(-1)
+	c.metrics.retiredRequestCounter(entry.forwardedHost != "").Inc()
 	entry.error(err)
 }
 
@@ -722,7 +1049,44 @@ func (c *batchCommandsClient) recreateStreamingClientOnce(streamClient *batchCom
 	return err
 }
 
-func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransportLayerLoad *uint64, connMetrics *batchConnMetrics, streamClient *batchCommandsStream) {
+func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) pendingBatchRequestStats {
+	stats := pendingBatchRequestStats{}
+	c.batched.Range(func(key, value interface{}) bool {
+		entry := value.(*batchCommandsEntry)
+		wait := checkTime.Sub(entry.start)
+		if wait < batchRequestSlowThreshold {
+			return true
+		}
+		if wait >= batchRequestHangThreshold {
+			stats.hangingCount++
+		}
+		if stats.oldestEntry == nil || wait > stats.oldestWait {
+			stats.oldestID = key.(uint64)
+			stats.oldestEntry = entry
+			stats.oldestWait = wait
+		}
+		return true
+	})
+	return stats
+}
+
+func (c *batchCommandsClient) logPendingBatchRequests(checkTime time.Time) {
+	stats := c.inspectPendingBatchRequests(checkTime)
+	if stats.oldestEntry != nil {
+		logutil.BgLogger().Warn(
+			"batchRecvLoop detects slow pending request",
+			zap.String("target", c.target),
+			zap.String("conn", c.connIdx),
+			zap.Uint64("requestID", stats.oldestID),
+			zap.Duration("waitTime", stats.oldestWait),
+			zap.Bool("canceled", atomic.LoadInt32(&stats.oldestEntry.canceled) == 1),
+			zap.String("progress", writeBatchCommandsEntryProgress(nil, stats.oldestEntry, checkTime).String()),
+			zap.Int("hangingCount", stats.hangingCount),
+		)
+	}
+}
+
+func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransportLayerLoad *uint64, streamClient *batchCommandsStream) {
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
@@ -730,21 +1094,31 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
-			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, connMetrics, streamClient)
+			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)
 		} else {
 			c.failAsyncRequestsOnClose()
 		}
 	}()
 
+	forwarded := streamClient.forwardedHost != ""
+	recvDur := c.metrics.recvLoopRecvDurObserver(forwarded)
+	recvDurTail := c.metrics.batchRecvTailLatObserver(forwarded)
+	canceledEntryTailLat := c.metrics.canceledEntryTailLatObserver(forwarded)
+	processDur := c.metrics.recvLoopProcessDurObserver(forwarded)
+	retiredReqCount := c.metrics.retiredRequestCounter(forwarded)
+	completedRespCount := c.metrics.completedResponseCounter(forwarded)
+	outdatedRespCount := c.metrics.outdatedResponseCounter(forwarded)
+
 	epoch := atomic.LoadUint64(&c.epoch)
 	for {
+
 		recvLoopStartTime := time.Now()
 		resp, err := streamClient.recv()
 		respRecvTime := time.Now()
-		recvDur := respRecvTime.Sub(recvLoopStartTime)
-		connMetrics.recvLoopRecvDur.Observe(recvDur.Seconds())
-		if recvDur > batchRecvTailLatThreshold {
-			c.metrics.batchRecvTailLat.Observe(recvDur.Seconds())
+		recvDurVal := respRecvTime.Sub(recvLoopStartTime)
+		recvDur.Observe(recvDurVal.Seconds())
+		if recvDurVal > batchRecvTailLatThreshold {
+			recvDurTail.Observe(recvDurVal.Seconds())
 		}
 		if err != nil {
 			if c.isStopped() {
@@ -782,12 +1156,13 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			if !ok {
 				// this maybe caused by batchCommandsClient#send meets ambiguous error that request has be sent to TiKV but still report a error.
 				// then TiKV will send response back though stream and reach here.
-				logutil.BgLogger().Warn("batchRecvLoop receives outdated response", zap.Uint64("requestID", requestID), zap.String("forwardedHost", streamClient.forwardedHost))
+				outdatedRespCount.Inc()
+				logutil.BgLogger().Warn("batchRecvLoop receives outdated response", zap.Uint64("requestID", requestID), zap.String("conn", c.connIdx), zap.String("forwardedHost", streamClient.forwardedHost))
 				continue
 			}
+			completedRespCount.Inc()
 			entry := value.(*batchCommandsEntry)
-
-			atomic.StoreInt64(&entry.recvLat, int64(respRecvTime.Sub(entry.start)))
+			recvNS := recordBatchRequestStage(&entry.recvNS, entry.start, respRecvTime)
 			if trace.IsEnabled() {
 				trace.Log(entry.ctx, "rpc", "received")
 			}
@@ -795,9 +1170,12 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
 				entry.response(responses[i])
+			} else {
+				canceledEntryTailLat.Observe(float64(recvNS-entry.batchedNS.Load()) / 1e9)
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
+			retiredReqCount.Inc()
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
@@ -805,7 +1183,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
-		connMetrics.recvLoopProcessDur.Observe(time.Since(recvLoopStartTime).Seconds())
+		processDur.Observe(time.Since(recvLoopStartTime).Seconds())
 	}
 }
 
@@ -872,7 +1250,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 }
 
 func (c *batchCommandsClient) newBatchStream(forwardedHost string) (*batchCommandsStream, error) {
-	batchStream := &batchCommandsStream{forwardedHost: forwardedHost}
+	batchStream := &batchCommandsStream{forwardedHost: forwardedHost, connIdx: c.connIdx}
 	if err := batchStream.recreate(c.conn); err != nil {
 		return nil, err
 	}
@@ -900,7 +1278,7 @@ func (c *batchCommandsClient) initBatchClient(forwardedHost string) error {
 	} else {
 		c.forwardedClients[forwardedHost] = streamClient
 	}
-	go c.batchRecvLoop(c.tikvClientCfg, c.tikvLoad, c.metrics, streamClient)
+	go c.batchRecvLoop(c.tikvClientCfg, c.tikvLoad, streamClient)
 	return nil
 }
 
@@ -909,33 +1287,29 @@ func sendBatchRequest(
 	addr string,
 	forwardedHost string,
 	batchConn *batchConn,
+	batchRequestMetrics *batchRequestStageMetrics,
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 	priority uint64,
-) (*tikvrpc.Response, error) {
+) (_ *tikvrpc.Response, err error) {
 	if err := encodeRequestCmd(req); err != nil {
 		return nil, err
 	}
 	entry := &batchCommandsEntry{
-		ctx:           ctx,
-		req:           req,
-		res:           make(chan *tikvpb.BatchCommandsResponse_Response, 1),
-		forwardedHost: forwardedHost,
-		canceled:      0,
-		err:           nil,
-		pri:           priority,
-		start:         time.Now(),
+		ctx:                 ctx,
+		req:                 req,
+		res:                 make(chan *tikvpb.BatchCommandsResponse_Response, 1),
+		batchRequestMetrics: batchRequestMetrics,
+		forwardedHost:       forwardedHost,
+		canceled:            0,
+		err:                 nil,
+		pri:                 priority,
+		start:               time.Now(),
 	}
 	timer := time.NewTimer(timeout)
 	defer func() {
 		timer.Stop()
-		if sendLat := atomic.LoadInt64(&entry.sendLat); sendLat > 0 {
-			metrics.BatchRequestDurationSend.Observe(time.Duration(sendLat).Seconds())
-		}
-		if recvLat := atomic.LoadInt64(&entry.recvLat); recvLat > 0 {
-			metrics.BatchRequestDurationRecv.Observe(time.Duration(recvLat).Seconds())
-		}
-		metrics.BatchRequestDurationDone.Observe(time.Since(entry.start).Seconds())
+		observeBatchRequestCompletion(entry, err)
 	}()
 
 	select {
@@ -968,13 +1342,6 @@ func sendBatchRequest(
 		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		reason := fmt.Sprintf("wait recvLoop timeout, timeout:%s", timeout)
-		if sendLat := atomic.LoadInt64(&entry.sendLat); sendLat > 0 {
-			reason += fmt.Sprintf(", send:%s", util.FormatDuration(time.Duration(sendLat)))
-			if recvLat := atomic.LoadInt64(&entry.recvLat); recvLat > 0 {
-				reason += fmt.Sprintf(", recv:%s", util.FormatDuration(time.Duration(recvLat-sendLat)))
-			}
-		}
-		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
+		return nil, errors.WithMessage(context.DeadlineExceeded, formatBatchRequestTimeoutReason(entry, timeout, time.Now()))
 	}
 }
