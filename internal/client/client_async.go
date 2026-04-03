@@ -143,6 +143,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	stop = context.AfterFunc(ctx, func() {
 		logutil.Logger(ctx).Debug("async send request cancelled (context done)", zap.String("to", addr), zap.Error(ctx.Err()))
 		entry.error(ctx.Err())
+		atomic.StoreInt32(&entry.canceled, 1)
 	})
 
 	batchConn := connPool.batchConn
