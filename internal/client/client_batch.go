@@ -146,8 +146,10 @@ type batchCommandsEntry struct {
 	res chan *tikvpb.BatchCommandsResponse_Response
 	cb  async.Callback[*tikvrpc.Response]
 	// batchState is shared by all requests contained in the same BatchCommandsRequest.
+	// It is published atomically because timeout/metrics paths may observe an entry
+	// concurrently with the send loop assigning it to a concrete batch.
 	// Invariant: any entry published to batchCommandsClient.batched must already have a non-nil batchState.
-	batchState *batchCommandsRequestState
+	batchState atomic.Pointer[batchCommandsRequestState]
 	// batchRequestMetrics is cached by store in connPool.metrics.
 	batchRequestMetrics *batchRequestStageMetrics
 	// forwardedHost is the address of a store which will handle the request.
@@ -262,12 +264,12 @@ func normalizeObservedSentNS(batchedNS, sentNS, firstRespNS, recvNS int64) int64
 }
 
 func loadBatchRequestProgress(entry *batchCommandsEntry) (batchedNS, sentNS, firstRespNS, recvNS int64) {
-	if entry.batchState != nil && !entry.batchState.batchedAt.IsZero() {
-		batchedNS = max(entry.batchState.batchedAt.Sub(entry.start).Nanoseconds(), int64(1))
-		if sentAfterBatchedNS := entry.batchState.sentAfterBatchedNS.Load(); sentAfterBatchedNS > 0 {
+	if batchState := entry.batchState.Load(); batchState != nil && !batchState.batchedAt.IsZero() {
+		batchedNS = max(batchState.batchedAt.Sub(entry.start).Nanoseconds(), int64(1))
+		if sentAfterBatchedNS := batchState.sentAfterBatchedNS.Load(); sentAfterBatchedNS > 0 {
 			sentNS = batchedNS + sentAfterBatchedNS
 		}
-		if firstRespAfterBatchedNS := entry.batchState.firstRespAfterBatchedNS.Load(); firstRespAfterBatchedNS > 0 {
+		if firstRespAfterBatchedNS := batchState.firstRespAfterBatchedNS.Load(); firstRespAfterBatchedNS > 0 {
 			firstRespNS = batchedNS + firstRespAfterBatchedNS
 		}
 	}
@@ -429,7 +431,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 				if group.state == nil {
 					group.state = &batchCommandsRequestState{batchedAt: buildTime}
 				}
-				e.batchState = b.directGroup.state
+				e.batchState.Store(group.state)
 			} else {
 				group, ok = b.forwardingGroups[e.forwardedHost]
 				if !ok {
@@ -439,7 +441,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 					}
 					b.forwardingGroups[e.forwardedHost] = group
 				}
-				e.batchState = group.state
+				e.batchState.Store(group.state)
 			}
 
 			if collect != nil {
@@ -1088,7 +1090,8 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 			return true
 		}
 		stats.slowCount++
-		unconfirmed := entry.batchState.firstRespAfterBatchedNS.Load() == 0
+		batchState := entry.batchState.Load()
+		unconfirmed := batchState == nil || batchState.firstRespAfterBatchedNS.Load() == 0
 		if unconfirmed {
 			stats.slowUnconfirmedCount++
 		}
@@ -1209,7 +1212,8 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			completedRespCount.Inc()
 			entry := value.(*batchCommandsEntry)
-			entry.batchState.firstRespAfterBatchedNS.CompareAndSwap(0, max(respRecvTime.Sub(entry.batchState.batchedAt).Nanoseconds(), int64(1)))
+			batchState := entry.batchState.Load()
+			batchState.firstRespAfterBatchedNS.CompareAndSwap(0, max(respRecvTime.Sub(batchState.batchedAt).Nanoseconds(), int64(1)))
 			entry.recvAfterStartNS.CompareAndSwap(0, max(respRecvTime.Sub(entry.start).Nanoseconds(), int64(1)))
 			recvNS := entry.recvAfterStartNS.Load()
 			if trace.IsEnabled() {
