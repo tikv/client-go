@@ -18,9 +18,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 )
+
+func newWriteRUV2(kvMiss, batchGet, get, readRPC, writeRPC uint64, indexScan, tableScan uint64) *kvrpcpb.RUV2 {
+	return &kvrpcpb.RUV2{
+		KvEngineCacheMiss:            kvMiss,
+		StorageProcessedKeysBatchGet: batchGet,
+		StorageProcessedKeysGet:      get,
+		ReadRpcCount:                 readRPC,
+		WriteRpcCount:                writeRPC,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan: indexScan,
+			TikvCoprocessorExecutorWorkTotalBatchTableScan: tableScan,
+		},
+	}
+}
+
+func newWriteExecDetailsV2(kvMiss, batchGet, get, readRPC, writeRPC uint64, indexScan, tableScan uint64) *kvrpcpb.ExecDetailsV2 {
+	return &kvrpcpb.ExecDetailsV2{RuV2: newWriteRUV2(kvMiss, batchGet, get, readRPC, writeRPC, indexScan, tableScan)}
+}
 
 func TestLockKeysDetailsMerge(t *testing.T) {
 	a := &LockKeysDetails{
@@ -163,6 +182,7 @@ func TestCommitDetailsMerge(t *testing.T) {
 	a.Mu.CommitBackoffTypes = []string{"regionMiss"}
 	a.Mu.SlowestPrewrite = ReqDetailInfo{ReqTotalTime: 5 * time.Millisecond, Region: 1, StoreAddr: "s1"}
 	a.Mu.CommitPrimary = ReqDetailInfo{ReqTotalTime: 3 * time.Millisecond, Region: 2, StoreAddr: "s2"}
+	a.Mu.WriteRUV2 = newWriteRUV2(1, 2, 3, 4, 5, 6, 7)
 
 	b := &CommitDetails{
 		GetCommitTsTime:        12 * time.Millisecond,
@@ -182,6 +202,7 @@ func TestCommitDetailsMerge(t *testing.T) {
 	b.Mu.CommitBackoffTypes = []string{"txnLock"}
 	b.Mu.SlowestPrewrite = ReqDetailInfo{ReqTotalTime: 8 * time.Millisecond, Region: 10, StoreAddr: "s10"}
 	b.Mu.CommitPrimary = ReqDetailInfo{ReqTotalTime: 6 * time.Millisecond, Region: 20, StoreAddr: "s20"}
+	b.Mu.WriteRUV2 = newWriteRUV2(10, 20, 30, 40, 50, 60, 70)
 
 	a.Merge(b)
 
@@ -206,6 +227,14 @@ func TestCommitDetailsMerge(t *testing.T) {
 	assert.Equal(t, 6*time.Millisecond, a.Mu.CommitPrimary.ReqTotalTime)
 	assert.Equal(t, uint64(20), a.Mu.CommitPrimary.Region)
 	assert.Equal(t, "s20", a.Mu.CommitPrimary.StoreAddr)
+	assert.NotNil(t, a.Mu.WriteRUV2)
+	assert.Equal(t, uint64(11), a.Mu.WriteRUV2.KvEngineCacheMiss)
+	assert.Equal(t, uint64(22), a.Mu.WriteRUV2.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(33), a.Mu.WriteRUV2.StorageProcessedKeysGet)
+	assert.Equal(t, uint64(44), a.Mu.WriteRUV2.ReadRpcCount)
+	assert.Equal(t, uint64(55), a.Mu.WriteRUV2.WriteRpcCount)
+	assert.Equal(t, uint64(66), a.Mu.WriteRUV2.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(77), a.Mu.WriteRUV2.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan)
 }
 
 func TestCommitDetailsMergeSlowestNotReplaced(t *testing.T) {
@@ -242,6 +271,7 @@ func TestCommitDetailsClone(t *testing.T) {
 	orig.Mu.CommitBackoffTypes = []string{"tikvRPC"}
 	orig.Mu.SlowestPrewrite = ReqDetailInfo{ReqTotalTime: 5 * time.Millisecond, Region: 1, StoreAddr: "s1"}
 	orig.Mu.CommitPrimary = ReqDetailInfo{ReqTotalTime: 3 * time.Millisecond, Region: 2, StoreAddr: "s2"}
+	orig.Mu.WriteRUV2 = newWriteRUV2(1, 2, 3, 4, 5, 6, 7)
 
 	cloned := orig.Clone()
 
@@ -261,6 +291,7 @@ func TestCommitDetailsClone(t *testing.T) {
 	assert.Equal(t, orig.Mu.CommitBackoffTypes, cloned.Mu.CommitBackoffTypes)
 	assert.Equal(t, orig.Mu.SlowestPrewrite, cloned.Mu.SlowestPrewrite)
 	assert.Equal(t, orig.Mu.CommitPrimary, cloned.Mu.CommitPrimary)
+	assert.Equal(t, orig.Mu.WriteRUV2, cloned.Mu.WriteRUV2)
 
 	// Verify deep copy: modifying cloned slices should not affect original
 	cloned.Mu.PrewriteBackoffTypes = append(cloned.Mu.PrewriteBackoffTypes, "extra")
@@ -271,6 +302,34 @@ func TestCommitDetailsClone(t *testing.T) {
 
 	cloned.GetCommitTsTime = 999 * time.Millisecond
 	assert.Equal(t, 10*time.Millisecond, orig.GetCommitTsTime)
+
+	cloned.Mu.WriteRUV2.KvEngineCacheMiss = 999
+	assert.Equal(t, uint64(1), orig.Mu.WriteRUV2.KvEngineCacheMiss)
+}
+
+func TestCommitDetailsMergeWriteRUV2(t *testing.T) {
+	commitDetails := &CommitDetails{}
+	prewriteDetails := newWriteExecDetailsV2(1, 2, 0, 0, 0, 4, 5)
+	commitDetails.MergePrewriteReqDetails(5*time.Millisecond, 10, "store-1", prewriteDetails)
+
+	commitDetails.MergePrewriteReqDetails(3*time.Millisecond, 11, "store-2", newWriteExecDetailsV2(10, 20, 0, 0, 0, 40, 50))
+	commitDetails.MergeCommitReqDetails(7*time.Millisecond, 12, "store-3", newWriteExecDetailsV2(100, 0, 200, 6, 0, 400, 500))
+
+	agg := commitDetails.GetWriteRUV2()
+	assert.NotNil(t, agg)
+	assert.Equal(t, uint64(111), agg.KvEngineCacheMiss)
+	assert.Equal(t, uint64(22), agg.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(200), agg.StorageProcessedKeysGet)
+	assert.Equal(t, uint64(6), agg.ReadRpcCount)
+	assert.Equal(t, uint64(3), agg.WriteRpcCount)
+	assert.Equal(t, uint64(444), agg.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(555), agg.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan)
+
+	assert.Equal(t, uint64(10), commitDetails.Mu.SlowestPrewrite.Region)
+	assert.Equal(t, uint64(12), commitDetails.Mu.CommitPrimary.Region)
+
+	agg.KvEngineCacheMiss = 999
+	assert.Equal(t, uint64(111), commitDetails.GetWriteRUV2().KvEngineCacheMiss)
 }
 
 func TestScanDetailMerge(t *testing.T) {
