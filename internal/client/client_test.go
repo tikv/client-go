@@ -413,12 +413,13 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs := builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 10)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 10)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 10)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 10)
 	assert.Equal(t, len(entryMap), 10)
-	for i, id := range batchedReq.GetRequestIds() {
+	for i, id := range batchedReq.req.GetRequestIds() {
 		assert.Equal(t, id, uint64(i))
-		assert.Equal(t, entryMap[id].req, batchedReq.GetRequests()[i])
+		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
+		assert.Same(t, batchedReq.state, entryMap[id].batchState)
 	}
 	assert.Equal(t, len(forwardingReqs), 0)
 	assert.Equal(t, builder.idAlloc, uint64(10))
@@ -439,19 +440,20 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 1)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 1)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 1)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 1)
 	assert.Equal(t, len(forwardingReqs), 3)
 	for i, host := range forwardedHosts[1:] {
-		assert.Equal(t, len(forwardingReqs[host].GetRequests()), i+2)
-		assert.Equal(t, len(forwardingReqs[host].GetRequestIds()), i+2)
+		assert.Equal(t, len(forwardingReqs[host].req.GetRequests()), i+2)
+		assert.Equal(t, len(forwardingReqs[host].req.GetRequestIds()), i+2)
 	}
 	assert.Equal(t, int(builder.idAlloc), 20)
 	assert.Equal(t, len(entryMap), 10)
 	for host, forwardingReq := range forwardingReqs {
-		for i, id := range forwardingReq.GetRequestIds() {
-			assert.Equal(t, entryMap[id].req, forwardingReq.GetRequests()[i])
+		for i, id := range forwardingReq.req.GetRequestIds() {
+			assert.Equal(t, entryMap[id].req, forwardingReq.req.GetRequests()[i])
 			assert.Equal(t, entryMap[id].forwardedHost, host)
+			assert.Same(t, forwardingReq.state, entryMap[id].batchState)
 		}
 	}
 
@@ -471,12 +473,12 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 2)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 2)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 2)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 2)
 	assert.Equal(t, len(forwardingReqs), 0)
 	assert.Equal(t, len(entryMap), 2)
-	for i, id := range batchedReq.GetRequestIds() {
-		assert.Equal(t, entryMap[id].req, batchedReq.GetRequests()[i])
+	for i, id := range batchedReq.req.GetRequestIds() {
+		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
 		assert.False(t, entryMap[id].isCanceled())
 	}
 
@@ -499,21 +501,12 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	// Test reset
 	builder.reset()
 	assert.Equal(t, builder.len(), 0)
-	assert.Equal(t, len(builder.requests), 0)
-	assert.Equal(t, len(builder.requestIDs), 0)
-	assert.Equal(t, len(builder.forwardingReqs), 0)
+	assert.NotNil(t, builder.directGroup.req)
+	assert.Nil(t, builder.directGroup.state)
+	assert.Len(t, builder.directGroup.req.GetRequests(), 0)
+	assert.Len(t, builder.directGroup.req.GetRequestIds(), 0)
+	assert.Equal(t, len(builder.forwardingGroups), 0)
 	assert.NotEqual(t, builder.idAlloc, 0)
-}
-
-func TestRecordBatchRequestStage(t *testing.T) {
-	start := time.Unix(0, 0)
-	first := start.Add(5 * time.Millisecond)
-	second := start.Add(10 * time.Millisecond)
-	var stage atomic.Int64
-
-	require.Equal(t, int64(5*time.Millisecond), recordBatchRequestStage(&stage, start, first))
-	require.Equal(t, int64(5*time.Millisecond), recordBatchRequestStage(&stage, start, second))
-	require.Equal(t, int64(5*time.Millisecond), stage.Load())
 }
 
 func TestBatchRequestTerminalOutcome(t *testing.T) {
@@ -552,15 +545,16 @@ func TestVisitBatchRequestObservations(t *testing.T) {
 		return observations
 	}
 	newEntry := func(start time.Time, batched, sent, recv time.Duration) *batchCommandsEntry {
-		entry := &batchCommandsEntry{start: start}
+		entry := &batchCommandsEntry{start: start, batchState: &batchCommandsRequestState{}}
 		if batched > 0 {
-			entry.batchedNS.Store(int64(batched))
+			entry.batchState.batchedAt = start.Add(batched)
 		}
 		if sent > 0 {
-			entry.sentNS.Store(int64(sent))
+			entry.batchState.sentAfterBatchedNS.Store(max(sent-batched, time.Nanosecond).Nanoseconds())
 		}
 		if recv > 0 {
-			entry.recvNS.Store(int64(recv))
+			entry.batchState.firstRespAfterBatchedNS.Store(max(recv-batched, time.Nanosecond).Nanoseconds())
+			entry.recvAfterStartNS.Store(max(recv, time.Nanosecond).Nanoseconds())
 		}
 		return entry
 	}
@@ -614,19 +608,21 @@ func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
 	start := time.Unix(0, 0)
 
 	entry := &batchCommandsEntry{start: start}
-	entry.batchedNS.Store(int64(4 * time.Millisecond))
-	entry.recvNS.Store(int64(8 * time.Millisecond))
+	entry.batchState = &batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)}
+	entry.batchState.firstRespAfterBatchedNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterStartNS.Store((8 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ns, recv:4ms}",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
 
 	entry = &batchCommandsEntry{start: start}
-	entry.batchedNS.Store(int64(4 * time.Millisecond))
-	entry.sentNS.Store(int64(7 * time.Millisecond))
-	entry.recvNS.Store(int64(5 * time.Millisecond))
+	entry.batchState = &batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)}
+	entry.batchState.sentAfterBatchedNS.Store((3 * time.Millisecond).Nanoseconds())
+	entry.batchState.firstRespAfterBatchedNS.Store((1 * time.Millisecond).Nanoseconds())
+	entry.recvAfterStartNS.Store((5 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ms, recv:1ns}",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ms, ack:1ns, recv:1ns}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
 }
@@ -636,17 +632,18 @@ func TestWriteBatchCommandsEntryProgress(t *testing.T) {
 	entry := &batchCommandsEntry{start: start}
 	require.Equal(t, "EntryProgress{}", writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String())
 
-	entry.batchedNS.Store(int64(4 * time.Millisecond))
-	entry.recvNS.Store(int64(8 * time.Millisecond))
+	entry.batchState = &batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)}
+	entry.batchState.firstRespAfterBatchedNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterStartNS.Store((8 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"EntryProgress{batch:4ms, send:1ns, recv:4ms}",
+		"EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
 		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
 	)
 
 	var builder strings.Builder
 	builder.WriteString("prefix=")
 	require.Equal(t,
-		"prefix=EntryProgress{batch:4ms, send:1ns, recv:4ms}",
+		"prefix=EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
 		writeBatchCommandsEntryProgress(&builder, entry, start.Add(10*time.Millisecond)).String(),
 	)
 }
@@ -658,8 +655,11 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 		entry := &batchCommandsEntry{
 			start:         now.Add(-wait),
 			forwardedHost: forwardedHost,
+			batchState:    &batchCommandsRequestState{},
 		}
-		entry.batchedNS.Store(int64(batchedAt))
+		if batchedAt > 0 {
+			entry.batchState.batchedAt = entry.start.Add(batchedAt)
+		}
 		return entry
 	}
 
@@ -674,7 +674,10 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 	require.NotNil(t, stats.oldestEntry)
 	require.Equal(t, uint64(1), stats.oldestID)
 	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
+	require.Equal(t, 5, stats.slowCount)
+	require.Equal(t, 5, stats.slowUnconfirmedCount)
 	require.Equal(t, 4, stats.hangingCount)
+	require.Equal(t, 4, stats.hangingUnconfirmedCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {
@@ -922,7 +925,7 @@ func TestLimitConcurrency(t *testing.T) {
 	{
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		reqs, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 1)
+		re.Len(reqs.req.RequestIds, 1)
 		re.Equal(0, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
 	}
@@ -932,7 +935,7 @@ func TestLimitConcurrency(t *testing.T) {
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority - 1})
 		reqs, _ := batch.reqBuilder.buildWithLimit(0, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 1)
+		re.Len(reqs.req.RequestIds, 1)
 		batch.reqBuilder.reset()
 		re.Equal(1, batch.reqBuilder.len())
 	}
@@ -942,7 +945,7 @@ func TestLimitConcurrency(t *testing.T) {
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		reqs, _ := batch.reqBuilder.buildWithLimit(2, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 2)
+		re.Len(reqs.req.RequestIds, 2)
 		re.Equal(1, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
 	}

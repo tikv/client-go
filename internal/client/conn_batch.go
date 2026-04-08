@@ -312,10 +312,8 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 	available := cli.available()
-	reqSendTime := time.Now()
 	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
-		recordBatchRequestStage(&e.batchedNS, e.start, reqSendTime)
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
 		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
@@ -324,11 +322,11 @@ func (a *batchConn) getClientAndSend() {
 		}
 	})
 	if req != nil {
-		batch += len(req.RequestIds)
+		batch += len(req.req.RequestIds)
 		cli.send("", req)
 	}
 	for forwardedHost, req := range forwardingReqs {
-		batch += len(req.RequestIds)
+		batch += len(req.req.RequestIds)
 		cli.send(forwardedHost, req)
 	}
 	if batch > 0 {
