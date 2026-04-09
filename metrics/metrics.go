@@ -79,6 +79,12 @@ var (
 	TiKVBatchClientUnavailable                     prometheus.Histogram
 	TiKVBatchClientWaitEstablish                   prometheus.Histogram
 	TiKVBatchClientRecycle                         prometheus.Histogram
+	TiKVBatchCommandsSendTime                      *prometheus.GaugeVec
+	TiKVBatchCommandsRecvTime                      *prometheus.GaugeVec
+	TiKVBatchCommandsSendWireBytes                 *prometheus.CounterVec
+	TiKVBatchCommandsRecvWireBytes                 *prometheus.CounterVec
+	TiKVBatchCommandsDelayedPick                   *prometheus.CounterVec
+	TiKVBatchCommandsTransparentRetry              *prometheus.CounterVec
 	TiKVRangeTaskStats                             *prometheus.GaugeVec
 	TiKVRangeTaskPushDuration                      *prometheus.HistogramVec
 	TiKVTokenWaitDuration                          prometheus.Histogram
@@ -138,6 +144,7 @@ const (
 	LblResult          = "result"
 	LblStore           = "store"
 	LblTarget          = "target"
+	LblStream          = "stream"
 	LblCommit          = "commit"
 	LblAbort           = "abort"
 	LblRollback        = "rollback"
@@ -510,6 +517,60 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "batch client recycle connection and reconnect duration",
 			ConstLabels: constLabels,
 		})
+
+	TiKVBatchCommandsSendTime = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_send_time_unix_seconds",
+			Help:        "Unix timestamp in seconds when the last payload was sent on an active BatchCommands stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblStream})
+
+	TiKVBatchCommandsRecvTime = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_recv_time_unix_seconds",
+			Help:        "Unix timestamp in seconds when the last payload was received on an active BatchCommands stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblStream})
+
+	TiKVBatchCommandsSendWireBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_send_wire_bytes_total",
+			Help:        "Total payload wire bytes sent on BatchCommands streams",
+			ConstLabels: constLabels,
+		}, []string{LblTarget})
+
+	TiKVBatchCommandsRecvWireBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_recv_wire_bytes_total",
+			Help:        "Total payload wire bytes received on BatchCommands streams",
+			ConstLabels: constLabels,
+		}, []string{LblTarget})
+
+	TiKVBatchCommandsDelayedPick = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_delayed_pick_total",
+			Help:        "Counter of DelayedPickComplete events for BatchCommands streams",
+			ConstLabels: constLabels,
+		}, []string{LblTarget})
+
+	TiKVBatchCommandsTransparentRetry = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_stats_batch_commands_transparent_retry_total",
+			Help:        "Counter of transparent retry attempts observed by gRPC stats for BatchCommands",
+			ConstLabels: constLabels,
+		}, []string{LblTarget})
 
 	TiKVRangeTaskStats = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -1035,6 +1096,12 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
 	prometheus.MustRegister(TiKVBatchClientRecycle)
+	prometheus.MustRegister(TiKVBatchCommandsSendTime)
+	prometheus.MustRegister(TiKVBatchCommandsRecvTime)
+	prometheus.MustRegister(TiKVBatchCommandsSendWireBytes)
+	prometheus.MustRegister(TiKVBatchCommandsRecvWireBytes)
+	prometheus.MustRegister(TiKVBatchCommandsDelayedPick)
+	prometheus.MustRegister(TiKVBatchCommandsTransparentRetry)
 	prometheus.MustRegister(TiKVRangeTaskStats)
 	prometheus.MustRegister(TiKVRangeTaskPushDuration)
 	prometheus.MustRegister(TiKVTokenWaitDuration)

@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/mem"
+	"google.golang.org/grpc/stats"
 )
 
 type connPool struct {
@@ -102,6 +103,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	var (
 		unaryInterceptor  grpc.UnaryClientInterceptor
 		streamInterceptor grpc.StreamClientInterceptor
+		batchStatsMonitor stats.Handler
 	)
 	if cfg.OpenTracingEnable {
 		unaryInterceptor = grpc_opentracing.UnaryClientInterceptor()
@@ -112,6 +114,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	if allowBatch {
 		a.batchConn = newBatchConn(uint(len(a.conns)), cfg.TiKVClient.MaxBatchSize, idleNotify)
 		a.initMetrics(a.target)
+		batchStatsMonitor = newBatchClientStatsMonitor(addr)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.conns {
@@ -125,7 +128,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		// Don't remove this until we no longer use sharedBytes in tipb and kvproto.
 		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 
-		opts = append([]grpc.DialOption{
+		opts := append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
@@ -148,6 +151,9 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		}, opts...)
 		if !cfg.TiKVClient.GrpcSharedBufferPool {
 			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
+		}
+		if batchStatsMonitor != nil {
+			opts = append(opts, grpc.WithStatsHandler(batchStatsMonitor))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
