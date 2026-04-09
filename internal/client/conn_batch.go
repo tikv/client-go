@@ -17,7 +17,6 @@ package client
 import (
 	"math/rand/v2"
 	"runtime"
-	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -313,14 +312,7 @@ func (a *batchConn) getClientAndSend() {
 	defer cli.unlockForSend()
 	available := cli.available()
 	batch := 0
-	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
-		cli.batched.Store(id, e)
-		cli.sent.Add(1)
-		cli.metrics.trackedRequestCounter(e.forwardedHost != "").Inc()
-		if trace.IsEnabled() {
-			trace.Log(e.ctx, "rpc", "send")
-		}
-	})
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, nil)
 	if req != nil {
 		batch += len(req.req.RequestIds)
 		cli.send("", req)

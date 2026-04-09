@@ -417,7 +417,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 10)
 	assert.Equal(t, len(entryMap), 10)
 	for i, id := range batchedReq.req.GetRequestIds() {
-		assert.Equal(t, id, uint64(i))
+		assert.Equal(t, id, uint64(i+1))
 		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
 		assert.Same(t, batchedReq.state, entryMap[id].batchState.Load())
 	}
@@ -648,17 +648,32 @@ func TestWriteBatchCommandsEntryProgress(t *testing.T) {
 		"prefix=EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
 		writeBatchCommandsEntryProgress(&builder, entry, start.Add(10*time.Millisecond)).String(),
 	)
+
+	entry = &batchCommandsEntry{start: start}
+	entry.requestID.Store(4)
+	entry.batchState.Store(&batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().stream.Store(&batchCommandsStream{})
+	entry.batchState.Load().stream.Load().maxRespReqID.Store(5)
+	require.Equal(t,
+		"EntryProgress{batch:4ms, send:6ms, ack:yes}",
+		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
+	)
 }
 
 func TestInspectPendingBatchRequests(t *testing.T) {
 	now := time.Unix(0, 0).Add(7 * time.Minute)
+	stream1 := &batchCommandsStream{}
+	stream1.maxRespReqID.Store(5)
+	stream2 := &batchCommandsStream{}
 
-	newEntry := func(wait time.Duration, batchedAt time.Duration, forwardedHost string) *batchCommandsEntry {
+	newEntry := func(id uint64, wait time.Duration, batchedAt time.Duration, forwardedHost string, stream *batchCommandsStream) *batchCommandsEntry {
 		entry := &batchCommandsEntry{
 			start:         now.Add(-wait),
 			forwardedHost: forwardedHost,
 		}
+		entry.requestID.Store(id)
 		entry.batchState.Store(&batchCommandsRequestState{})
+		entry.batchState.Load().stream.Store(stream)
 		if batchedAt > 0 {
 			entry.batchState.Load().batchedAt = entry.start.Add(batchedAt)
 		}
@@ -666,20 +681,20 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 	}
 
 	client := &batchCommandsClient{}
-	client.batched.Store(uint64(1), newEntry(7*time.Minute+30*time.Second, 30*time.Second, ""))
-	client.batched.Store(uint64(2), newEntry(5*time.Minute, 3*time.Minute, "store-1"))
-	client.batched.Store(uint64(3), newEntry(30*time.Second, 0, ""))
-	client.batched.Store(uint64(4), newEntry(4*time.Minute, 2*time.Minute, "store-1"))
-	client.batched.Store(uint64(5), newEntry(6*time.Minute, time.Minute, "store-2"))
+	client.batched.Store(uint64(1), newEntry(1, 7*time.Minute+30*time.Second, 30*time.Second, "", stream2))
+	client.batched.Store(uint64(2), newEntry(2, 5*time.Minute, 3*time.Minute, "store-1", stream1))
+	client.batched.Store(uint64(3), newEntry(3, 30*time.Second, 0, "", stream2))
+	client.batched.Store(uint64(4), newEntry(4, 4*time.Minute, 2*time.Minute, "store-1", stream1))
+	client.batched.Store(uint64(5), newEntry(5, 6*time.Minute, time.Minute, "store-2", stream2))
 
 	stats := client.inspectPendingBatchRequests(now)
 	require.NotNil(t, stats.oldestEntry)
 	require.Equal(t, uint64(1), stats.oldestID)
 	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
 	require.Equal(t, 5, stats.slowCount)
-	require.Equal(t, 5, stats.slowUnconfirmedCount)
+	require.Equal(t, 3, stats.slowUnconfirmedCount)
 	require.Equal(t, 4, stats.hangingCount)
-	require.Equal(t, 4, stats.hangingUnconfirmedCount)
+	require.Equal(t, 2, stats.hangingUnconfirmedCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {

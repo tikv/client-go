@@ -145,6 +145,9 @@ type batchCommandsEntry struct {
 	req *tikvpb.BatchCommandsRequest_Request
 	res chan *tikvpb.BatchCommandsResponse_Response
 	cb  async.Callback[*tikvrpc.Response]
+	// requestID is assigned in the send loop before the entry is published to batched.
+	// Invariant: requestID > 0 means the entry has been assigned a concrete batch request ID.
+	requestID atomic.Uint64
 	// batchState is shared by all requests contained in the same BatchCommandsRequest.
 	// It is published atomically because timeout/metrics paths may observe an entry
 	// concurrently with the send loop assigning it to a concrete batch.
@@ -168,6 +171,8 @@ type batchCommandsEntry struct {
 }
 
 type batchCommandsRequestState struct {
+	// stream is the concrete batch stream selected for this batch request.
+	stream atomic.Pointer[batchCommandsStream]
 	// batchedAt is when the request is placed into a batch.
 	batchedAt time.Time
 	// sentAfterBatchedNS is the elapsed time in nanoseconds from batchedAt until sending the batch request finishes.
@@ -304,6 +309,9 @@ func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsE
 	if sentNS == 0 && recvNS == 0 {
 		buf.WriteString(", send:")
 		buf.WriteString(util.FormatDuration(time.Duration(max(now.Sub(entry.start).Nanoseconds()-batchedNS, int64(1)))))
+		if batchRequestReceivedByTiKV(entry) {
+			buf.WriteString(", ack:yes")
+		}
 		buf.WriteString("}")
 		return buf
 	}
@@ -313,6 +321,8 @@ func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsE
 	if firstRespNS > 0 {
 		buf.WriteString(", ack:")
 		buf.WriteString(util.FormatDuration(time.Duration(max(firstRespNS-sentNS, int64(1)))))
+	} else if batchRequestReceivedByTiKV(entry) {
+		buf.WriteString(", ack:yes")
 	}
 
 	if recvNS > 0 {
@@ -382,8 +392,9 @@ type batchCommandsBuilder struct {
 }
 
 type batchCommandsRequestGroup struct {
-	req   *tikvpb.BatchCommandsRequest
-	state *batchCommandsRequestState
+	req     *tikvpb.BatchCommandsRequest
+	state   *batchCommandsRequestState
+	entries []*batchCommandsEntry
 }
 
 func (b *batchCommandsBuilder) len() int {
@@ -444,12 +455,13 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 				e.batchState.Store(group.state)
 			}
 
+			b.idAlloc++
 			if collect != nil {
 				collect(b.idAlloc, e)
 			}
 			group.req.RequestIds = append(group.req.RequestIds, b.idAlloc)
 			group.req.Requests = append(group.req.Requests, e.req)
-			b.idAlloc++
+			group.entries = append(group.entries, e)
 		}
 	}
 	for (count < limit && b.entries.Len() > 0) || b.hasHighPriorityTask() {
@@ -487,6 +499,10 @@ func (b *batchCommandsBuilder) reset() {
 	}
 	b.directGroup.req.Requests = b.directGroup.req.Requests[:0]
 	b.directGroup.req.RequestIds = b.directGroup.req.RequestIds[:0]
+	for i := 0; i < len(b.directGroup.entries); i++ {
+		b.directGroup.entries[i] = nil
+	}
+	b.directGroup.entries = b.directGroup.entries[:0]
 	b.directGroup.state = nil
 
 	for k := range b.forwardingGroups {
@@ -503,6 +519,7 @@ func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 				Requests:   make([]*tikvpb.BatchCommandsRequest_Request, 0, maxBatchSize),
 				RequestIds: make([]uint64, 0, maxBatchSize),
 			},
+			entries: make([]*batchCommandsEntry, 0, maxBatchSize),
 		},
 		forwardingGroups: make(map[string]*batchCommandsRequestGroup),
 	}
@@ -524,6 +541,19 @@ type pendingBatchRequestStats struct {
 	slowUnconfirmedCount    int
 	hangingCount            int
 	hangingUnconfirmedCount int
+}
+
+func batchRequestReceivedByTiKV(entry *batchCommandsEntry) bool {
+	batchState := entry.batchState.Load()
+	if batchState == nil {
+		return false
+	}
+	stream := batchState.stream.Load()
+	if stream == nil {
+		return false
+	}
+	requestID := entry.requestID.Load()
+	return requestID > 0 && requestID < stream.maxRespReqID.Load()
 }
 
 type batchConnMetrics struct {
@@ -842,6 +872,7 @@ type batchCommandsStream struct {
 	tikvpb.Tikv_BatchCommandsClient
 	forwardedHost string
 	connIdx       string
+	maxRespReqID  atomic.Uint64
 }
 
 func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err error) {
@@ -877,6 +908,7 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 		return errors.WithStack(err)
 	}
 	s.Tikv_BatchCommandsClient = streamClient
+	s.maxRespReqID.Store(0)
 	return nil
 }
 
@@ -940,6 +972,13 @@ func (c *batchCommandsClient) available() int64 {
 	return limit
 }
 
+func (c *batchCommandsClient) stream(forwardedHost string) *batchCommandsStream {
+	if forwardedHost == "" {
+		return c.client
+	}
+	return c.forwardedClients[forwardedHost]
+}
+
 func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsRequestGroup) {
 	defer reuseRequestData(grp.req)
 
@@ -951,14 +990,24 @@ func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsReque
 			zap.String("forwardedHost", forwardedHost),
 			zap.Error(err),
 		)
-		c.failRequestsByIDs(err, grp.req.RequestIds) // fast fail requests.
+		for _, entry := range grp.entries {
+			entry.error(err)
+		}
 		return
 	}
-
-	client := c.client
-	if forwardedHost != "" {
-		client = c.forwardedClients[forwardedHost]
+	client := c.stream(forwardedHost)
+	grp.state.stream.Store(client)
+	for i, requestID := range grp.req.RequestIds {
+		entry := grp.entries[i]
+		entry.requestID.Store(requestID)
+		c.batched.Store(requestID, entry)
+		c.sent.Add(1)
+		c.metrics.trackedRequestCounter(entry.forwardedHost != "").Inc()
+		if trace.IsEnabled() {
+			trace.Log(entry.ctx, "rpc", "send")
+		}
 	}
+
 	grp.req.ClientSendTimeNs = uint64(time.Now().UnixNano())
 	if err := client.Send(grp.req); err != nil {
 		logutil.BgLogger().Info(
@@ -1090,8 +1139,10 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 			return true
 		}
 		stats.slowCount++
+		requestID := key.(uint64)
 		batchState := entry.batchState.Load()
-		unconfirmed := batchState == nil || batchState.firstRespAfterBatchedNS.Load() == 0
+		unconfirmed := batchState == nil ||
+			(batchState.firstRespAfterBatchedNS.Load() == 0 && !batchRequestReceivedByTiKV(entry))
 		if unconfirmed {
 			stats.slowUnconfirmedCount++
 		}
@@ -1102,7 +1153,7 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 			}
 		}
 		if stats.oldestEntry == nil || wait > stats.oldestWait {
-			stats.oldestID = key.(uint64)
+			stats.oldestID = requestID
 			stats.oldestEntry = entry
 			stats.oldestWait = wait
 		}
@@ -1114,7 +1165,6 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 func (c *batchCommandsClient) logPendingBatchRequests(checkTime time.Time) {
 	stats := c.inspectPendingBatchRequests(checkTime)
 	if stats.oldestEntry != nil {
-		unconfirmedRatio := float64(stats.slowUnconfirmedCount) / float64(stats.slowCount)
 		logutil.BgLogger().Warn(
 			"batchRecvLoop detects slow pending request",
 			zap.String("target", c.target),
@@ -1123,9 +1173,9 @@ func (c *batchCommandsClient) logPendingBatchRequests(checkTime time.Time) {
 			zap.Duration("waitTime", stats.oldestWait),
 			zap.Bool("canceled", atomic.LoadInt32(&stats.oldestEntry.canceled) == 1),
 			zap.String("progress", writeBatchCommandsEntryProgress(nil, stats.oldestEntry, checkTime).String()),
+			zap.Bool("receivedByTiKV", batchRequestReceivedByTiKV(stats.oldestEntry)),
 			zap.Int("slowCount", stats.slowCount),
-			zap.Int("unconfirmedCount", stats.slowUnconfirmedCount),
-			zap.Float64("unconfirmedRatio", unconfirmedRatio),
+			zap.Int("slowUnconfirmedCount", stats.slowUnconfirmedCount),
 			zap.Int("hangingCount", stats.hangingCount),
 			zap.Int("hangingUnconfirmedCount", stats.hangingUnconfirmedCount),
 		)
@@ -1201,7 +1251,11 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		responses := resp.GetResponses()
+		var maxRespReqID uint64
 		for i, requestID := range resp.GetRequestIds() {
+			if requestID > maxRespReqID {
+				maxRespReqID = requestID
+			}
 			value, ok := c.batched.Load(requestID)
 			if !ok {
 				// this maybe caused by batchCommandsClient#send meets ambiguous error that request has be sent to TiKV but still report a error.
@@ -1230,6 +1284,14 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
 			retiredReqCount.Inc()
+		}
+		if maxRespReqID > 0 {
+			for {
+				prev := streamClient.maxRespReqID.Load()
+				if prev >= maxRespReqID || streamClient.maxRespReqID.CompareAndSwap(prev, maxRespReqID) {
+					break
+				}
+			}
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
