@@ -220,6 +220,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
 		if a.reqBuilder.len() == 0 {
 			// the conn is closed or recycled.
+			a.inspectPendingRequests(headRecvTime)
 			return
 		}
 

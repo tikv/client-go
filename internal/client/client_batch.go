@@ -1208,7 +1208,6 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 
 	epoch := atomic.LoadUint64(&c.epoch)
 	for {
-
 		recvLoopStartTime := time.Now()
 		resp, err := streamClient.recv()
 		respRecvTime := time.Now()
