@@ -69,6 +69,10 @@ func (testResourceControlInterceptor) IsBackgroundRequest(context.Context, strin
 	return false
 }
 
+func (testResourceControlInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return 0
+}
+
 func TestInterceptedClient(t *testing.T) {
 	executed := false
 	client := NewInterceptedClient(emptyClient{})

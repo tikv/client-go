@@ -21,10 +21,9 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
-// UpdateTiKVRUV2FromExecDetailsV2 calculates and accumulates TiKV RU v2 from ExecDetailsV2.RuV2 into RUDetails in ctx.
-// writeRPCCount is the number of completed write RPCs to TiKV.
-func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecDetailsV2, writeRPCCount float64) {
-	if ctx == nil || (details == nil && writeRPCCount == 0) {
+// UpdateTiKVRUV2FromExecDetailsV2 updates TiKV-side raw RPC counters in ExecDetailsV2.RuV2 and accumulates TiKV RU v2 into RUDetails in ctx.
+func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecDetailsV2, readRPCCount, writeRPCCount int64) {
+	if ctx == nil || details == nil || details.RuV2 == nil {
 		return
 	}
 	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
@@ -34,27 +33,31 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 
 	weights := GetGlobalConfig().TiKVClient.RUV2
 
-	deltaFloat := writeRPCCount * weights.ResourceManagerWriteCntTiKV
-	if details != nil && details.RuV2 != nil {
-		ru := details.RuV2
-		var execInputs uint64
-		if inputs := ru.ExecutorInputs; inputs != nil {
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchTableScan
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchSelection
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchTopN
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchLimit
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr
-			execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr
-		}
-		deltaFloat += float64(ru.KvEngineCacheMiss)*weights.TiKVKVEngineCacheMiss +
-			float64(execInputs)*weights.ExecutorInputs +
-			float64(ru.CoprocessorExecutorIterations)*weights.TiKVCoprocessorExecutorIterations +
-			float64(ru.CoprocessorResponseBytes)*weights.TiKVCoprocessorResponseBytes +
-			float64(ru.RaftstoreStoreWriteTriggerWbBytes)*weights.TiKVRaftstoreStoreWriteTriggerWB +
-			float64(ru.StorageProcessedKeysBatchGet)*weights.TiKVStorageProcessedKeysBatchGet +
-			float64(ru.StorageProcessedKeysGet)*weights.TiKVStorageProcessedKeysGet
+	ru := details.RuV2
+	if readRPCCount != 0 {
+		ru.ReadRpcCount += uint64(readRPCCount)
 	}
+	if writeRPCCount != 0 {
+		ru.WriteRpcCount += uint64(writeRPCCount)
+	}
+	var execInputs uint64
+	if inputs := ru.ExecutorInputs; inputs != nil {
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchTableScan
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchSelection
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchTopN
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchLimit
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr
+		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr
+	}
+	deltaFloat := float64(ru.KvEngineCacheMiss)*weights.TiKVKVEngineCacheMiss +
+		float64(execInputs)*weights.ExecutorInputs +
+		float64(ru.CoprocessorExecutorIterations)*weights.TiKVCoprocessorExecutorIterations +
+		float64(ru.CoprocessorResponseBytes)*weights.TiKVCoprocessorResponseBytes +
+		float64(ru.RaftstoreStoreWriteTriggerWbBytes)*weights.TiKVRaftstoreStoreWriteTriggerWB +
+		float64(ru.StorageProcessedKeysBatchGet)*weights.TiKVStorageProcessedKeysBatchGet +
+		float64(ru.StorageProcessedKeysGet)*weights.TiKVStorageProcessedKeysGet +
+		float64(ru.WriteRpcCount)*weights.ResourceManagerWriteCntTiKV
 	if deltaFloat == 0 {
 		return
 	}
