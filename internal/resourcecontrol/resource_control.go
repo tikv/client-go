@@ -38,6 +38,7 @@ type RequestInfo struct {
 	replicaNumber int64
 	requestSize   uint64
 	accessType    controller.AccessLocationType
+	requestSource string
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -115,11 +116,12 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
 		return &RequestInfo{
-			writeBytes:  -1,
-			storeID:     storeID,
-			bypass:      bypass,
-			requestSize: uint64(req.GetSize()),
-			accessType:  toPDAccessLocationType(req.AccessLocation),
+			writeBytes:    -1,
+			storeID:       storeID,
+			requestSize:   uint64(req.GetSize()),
+			accessType:    toPDAccessLocationType(req.AccessLocation),
+			requestSource: req.GetRequestSource(),
+			bypass:        bypass,
 		}
 	}
 
@@ -142,9 +144,10 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		writeBytes:    writeBytes,
 		storeID:       storeID,
 		replicaNumber: req.ReplicaNumber,
-		bypass:        bypass,
 		requestSize:   uint64(req.GetSize()),
 		accessType:    toPDAccessLocationType(req.AccessLocation),
+		requestSource: req.GetRequestSource(),
+		bypass:        bypass,
 	}
 }
 
@@ -181,6 +184,10 @@ func (req *RequestInfo) RequestSize() uint64 {
 
 func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
+}
+
+func (req *RequestInfo) RequestSource() string {
+	return req.requestSource
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
