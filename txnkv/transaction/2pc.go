@@ -1678,18 +1678,24 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			}
 		} else if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			if err != nil {
+				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
+				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
+			} else {
+				logutil.Logger(ctx).Info("2PC prewrite lock cleanup finished",
+					zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic))
+			}
 		} else if c.isPessimistic {
 			err = c.pessimisticRollbackMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
-		}
-
-		if err != nil {
-			metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
-			logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
-				zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
-		} else {
-			logutil.Logger(ctx).Debug("2PC clean up done",
-				zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
-				zap.Bool("isOnePC", c.isOnePC()))
+			if err != nil {
+				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
+				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
+			} else {
+				logutil.Logger(ctx).Debug("2PC pessimistic lock rollback finished",
+					zap.Uint64("txnStartTS", c.startTS))
+			}
 		}
 	})
 }
