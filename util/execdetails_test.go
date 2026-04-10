@@ -18,9 +18,74 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestRUDetailsDrainRUV2(t *testing.T) {
+	ruDetails := NewRUDetails()
+	ruDetails.AddRUV2(&kvrpcpb.RUV2{
+		ReadRpcCount:                 1,
+		StorageProcessedKeysBatchGet: 2,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchSelection: 3,
+		},
+	})
+	ruDetails.AddRUV2(&kvrpcpb.RUV2{
+		WriteRpcCount:                     4,
+		StorageProcessedKeysGet:           5,
+		RaftstoreStoreWriteTriggerWbBytes: 6,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchSelection: 7,
+		},
+	})
+
+	drained := ruDetails.DrainRUV2()
+	assert.NotNil(t, drained)
+	assert.Equal(t, uint64(1), drained.ReadRpcCount)
+	assert.Equal(t, uint64(4), drained.WriteRpcCount)
+	assert.Equal(t, uint64(2), drained.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(5), drained.StorageProcessedKeysGet)
+	assert.Equal(t, uint64(6), drained.RaftstoreStoreWriteTriggerWbBytes)
+	assert.Equal(t, uint64(10), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+	assert.Nil(t, ruDetails.DrainRUV2())
+}
+
+func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
+	orig := NewRUDetails()
+	orig.AddRUV2(&kvrpcpb.RUV2{
+		ReadRpcCount: 1,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
+		},
+	})
+
+	cloned := orig.Clone()
+	cloned.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 3})
+
+	origDrained := orig.DrainRUV2()
+	assert.Equal(t, uint64(1), origDrained.ReadRpcCount)
+	assert.Zero(t, origDrained.WriteRpcCount)
+	assert.Equal(t, uint64(2), origDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+
+	clonedDrained := cloned.DrainRUV2()
+	assert.Equal(t, uint64(1), clonedDrained.ReadRpcCount)
+	assert.Equal(t, uint64(3), clonedDrained.WriteRpcCount)
+	assert.Equal(t, uint64(2), clonedDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+
+	left := NewRUDetails()
+	left.AddRUV2(&kvrpcpb.RUV2{ReadRpcCount: 5})
+	right := NewRUDetails()
+	right.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 7})
+	left.Merge(right)
+
+	merged := left.DrainRUV2()
+	assert.Equal(t, uint64(5), merged.ReadRpcCount)
+	assert.Equal(t, uint64(7), merged.WriteRpcCount)
+	rightDrained := right.DrainRUV2()
+	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
+}
 
 func TestLockKeysDetailsMerge(t *testing.T) {
 	a := &LockKeysDetails{

@@ -209,6 +209,11 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 
 	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
 	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
+	drained := ruDetails.DrainRUV2()
+	require.NotNil(t, drained)
+	require.Equal(t, uint64(1), drained.GetWriteRpcCount())
+	require.Equal(t, uint64(1), drained.GetKvEngineCacheMiss())
+	require.Nil(t, ruDetails.DrainRUV2())
 
 	bypassDetails := util.NewRUDetails()
 	bypassCtx := context.WithValue(ctx, util.RUDetailsCtxKey, bypassDetails)
@@ -228,6 +233,7 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 	rl.Exec(ctx)
 	require.True(t, called)
 	require.Zero(t, bypassDetails.TiKVRUV2())
+	require.Nil(t, bypassDetails.DrainRUV2())
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {
