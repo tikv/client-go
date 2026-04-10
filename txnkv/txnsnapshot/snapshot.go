@@ -447,8 +447,8 @@ func collectBatchGetResponseData(
 			data.locks = append(data.locks, lock)
 		}
 	}
+	updateTiKVRUV2FromReadResponse(ctx, details)
 	if details != nil {
-		updateTiKVRUV2FromReadResponse(ctx, details)
 		readKeys := len(pairs)
 		var readTime float64
 		if timeDetail := details.GetTimeDetailV2(); timeDetail != nil {
@@ -464,9 +464,6 @@ func collectBatchGetResponseData(
 }
 
 func updateTiKVRUV2FromReadResponse(ctx context.Context, details *kvrpcpb.ExecDetailsV2) {
-	if details == nil {
-		return
-	}
 	var backfillRead int64
 	if details.GetRuV2().GetReadRpcCount() == 0 {
 		backfillRead = 1
@@ -889,8 +886,8 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 			return kv.ValueEntry{}, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
+		updateTiKVRUV2FromReadResponse(bo.GetCtx(), cmdGetResp.ExecDetailsV2)
 		if cmdGetResp.ExecDetailsV2 != nil {
-			updateTiKVRUV2FromReadResponse(bo.GetCtx(), cmdGetResp.ExecDetailsV2)
 			readKeys := len(cmdGetResp.Value)
 			var readTime float64
 			if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
