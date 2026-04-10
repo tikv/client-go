@@ -494,7 +494,7 @@ func (s *replicaSelector) onNotLeader(
 	leader := notLeader.GetLeader()
 	if leader == nil {
 		// The region may be during transferring leader.
-		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("no leader", ctx))
 		return err == nil, err
 	}
 	leaderIdx := s.updateLeader(leader)
@@ -568,7 +568,7 @@ func (s *replicaSelector) onServerIsBusy(
 			ctx.Store.healthStatus.markAlreadySlow()
 		}
 	}
-	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
+	backoffErr := newBackoffErrWithRPCContext("server is busy", ctx)
 	if s.canFastRetry() {
 		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
 		if s.target != nil {
