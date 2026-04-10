@@ -98,7 +98,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			canceled:            0,
 			err:                 nil,
 			pri:                 req.GetResourceControlContext().GetOverridePriority(),
-			start:               time.Now(),
+			reqArriveAt:         time.Now(),
 		}
 		stop func() bool
 	)
@@ -109,7 +109,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			stop()
 		}
 
-		elapsed := time.Since(entry.start)
+		elapsed := time.Since(entry.reqArriveAt)
 
 		// batch client metrics
 		observeBatchRequestCompletion(entry, err)
@@ -125,7 +125,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		if spanRPC != nil {
 			if util.TraceExecDetailsEnabled(ctx) {
 				if si := buildSpanInfoFromResp(resp); si != nil {
-					si.addTo(spanRPC, entry.start)
+					si.addTo(spanRPC, entry.reqArriveAt)
 				}
 			}
 			spanRPC.Finish()

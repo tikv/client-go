@@ -90,7 +90,7 @@ func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
 // fetchAllPendingRequests fetches all pending requests from the channel.
 func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
-	latestReqStartTime := a.reqBuilder.latestReqStartTime
+	latestReqArriveTime := a.reqBuilder.latestReqArriveTime
 	var headEntry *batchCommandsEntry
 	select {
 	case headEntry = <-a.batchCommandsCh:
@@ -111,8 +111,8 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time
 		return time.Now(), 0
 	}
 	headRecvTime = time.Now()
-	if headEntry.start.After(latestReqStartTime) && !latestReqStartTime.IsZero() {
-		headArrivalInterval = headEntry.start.Sub(latestReqStartTime)
+	if headEntry.reqArriveAt.After(latestReqArriveTime) && !latestReqArriveTime.IsZero() {
+		headArrivalInterval = headEntry.reqArriveAt.Sub(latestReqArriveTime)
 	}
 	a.reqBuilder.push(headEntry)
 

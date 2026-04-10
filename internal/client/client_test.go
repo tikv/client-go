@@ -419,7 +419,8 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	for i, id := range batchedReq.req.GetRequestIds() {
 		assert.Equal(t, id, uint64(i+1))
 		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
-		assert.Same(t, batchedReq.state, entryMap[id].batchState.Load())
+		assert.Nil(t, entryMap[id].batchState.Load())
+		assert.Positive(t, entryMap[id].batchSelectedAfterReqArriveNS.Load())
 	}
 	assert.Equal(t, len(forwardingReqs), 0)
 	assert.Equal(t, builder.idAlloc, uint64(10))
@@ -453,7 +454,9 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		for i, id := range forwardingReq.req.GetRequestIds() {
 			assert.Equal(t, entryMap[id].req, forwardingReq.req.GetRequests()[i])
 			assert.Equal(t, entryMap[id].forwardedHost, host)
-			assert.Same(t, forwardingReq.state, entryMap[id].batchState.Load())
+			assert.Nil(t, entryMap[id].batchState.Load())
+			assert.Positive(t, entryMap[id].batchSelectedAfterReqArriveNS.Load())
+			assert.NotNil(t, forwardingReq.state)
 		}
 	}
 
@@ -544,19 +547,23 @@ func TestVisitBatchRequestObservations(t *testing.T) {
 		})
 		return observations
 	}
-	newEntry := func(start time.Time, batched, sent, recv time.Duration) *batchCommandsEntry {
-		entry := &batchCommandsEntry{start: start}
-		batchState := &batchCommandsRequestState{}
-		entry.batchState.Store(batchState)
+	newEntry := func(reqArriveAt time.Time, batched, sent, recv time.Duration) *batchCommandsEntry {
+		entry := &batchCommandsEntry{reqArriveAt: reqArriveAt}
 		if batched > 0 {
-			batchState.batchedAt = start.Add(batched)
+			entry.batchSelectedAfterReqArriveNS.Store(max(batched, time.Nanosecond).Nanoseconds())
 		}
-		if sent > 0 {
-			batchState.sentAfterBatchedNS.Store(max(sent-batched, time.Nanosecond).Nanoseconds())
-		}
-		if recv > 0 {
-			batchState.firstRespAfterBatchedNS.Store(max(recv-batched, time.Nanosecond).Nanoseconds())
-			entry.recvAfterStartNS.Store(max(recv, time.Nanosecond).Nanoseconds())
+		if batched > 0 && (sent > 0 || recv > 0) {
+			batchState := &batchCommandsRequestState{batchSize: 1, sendStartAt: reqArriveAt.Add(batched)}
+			entry.batchState.Store(batchState)
+			if sent > 0 {
+				batchState.sentAfterSendStartNS.Store(max(sent-batched, time.Nanosecond).Nanoseconds())
+			}
+			if recv > 0 {
+				batchState.firstRespAfterSendStartNS.Store(max(recv-batched, time.Nanosecond).Nanoseconds())
+				entry.recvAfterReqArriveNS.Store(max(recv, time.Nanosecond).Nanoseconds())
+			}
+		} else if recv > 0 {
+			entry.recvAfterReqArriveNS.Store(max(recv, time.Nanosecond).Nanoseconds())
 		}
 		return entry
 	}
@@ -609,53 +616,56 @@ func TestVisitBatchRequestObservations(t *testing.T) {
 func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
 	start := time.Unix(0, 0)
 
-	entry := &batchCommandsEntry{start: start}
-	entry.batchState.Store(&batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)})
-	entry.batchState.Load().firstRespAfterBatchedNS.Store((4 * time.Millisecond).Nanoseconds())
-	entry.recvAfterStartNS.Store((8 * time.Millisecond).Nanoseconds())
+	entry := &batchCommandsEntry{reqArriveAt: start}
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((8 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
 
-	entry = &batchCommandsEntry{start: start}
-	entry.batchState.Store(&batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)})
-	entry.batchState.Load().sentAfterBatchedNS.Store((3 * time.Millisecond).Nanoseconds())
-	entry.batchState.Load().firstRespAfterBatchedNS.Store((1 * time.Millisecond).Nanoseconds())
-	entry.recvAfterStartNS.Store((5 * time.Millisecond).Nanoseconds())
+	entry = &batchCommandsEntry{reqArriveAt: start}
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().sentAfterSendStartNS.Store((3 * time.Millisecond).Nanoseconds())
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((1 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((5 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, send:1ms, ack:1ns, recv:1ns}",
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, size:1, send:1ms, ack:1ns, recv:1ns}",
 		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
 	)
 }
 
 func TestWriteBatchCommandsEntryProgress(t *testing.T) {
 	start := time.Unix(0, 0)
-	entry := &batchCommandsEntry{start: start}
+	entry := &batchCommandsEntry{reqArriveAt: start}
 	require.Equal(t, "EntryProgress{}", writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String())
 
-	entry.batchState.Store(&batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)})
-	entry.batchState.Load().firstRespAfterBatchedNS.Store((4 * time.Millisecond).Nanoseconds())
-	entry.recvAfterStartNS.Store((8 * time.Millisecond).Nanoseconds())
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((8 * time.Millisecond).Nanoseconds())
 	require.Equal(t,
-		"EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
+		"EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
 		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
 	)
 
 	var builder strings.Builder
 	builder.WriteString("prefix=")
 	require.Equal(t,
-		"prefix=EntryProgress{batch:4ms, send:1ns, ack:4ms, recv:4ms}",
+		"prefix=EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
 		writeBatchCommandsEntryProgress(&builder, entry, start.Add(10*time.Millisecond)).String(),
 	)
 
-	entry = &batchCommandsEntry{start: start}
+	entry = &batchCommandsEntry{reqArriveAt: start}
 	entry.requestID.Store(4)
-	entry.batchState.Store(&batchCommandsRequestState{batchedAt: start.Add(4 * time.Millisecond)})
-	entry.batchState.Load().stream.Store(&batchCommandsStream{})
-	entry.batchState.Load().stream.Load().maxRespReqID.Store(5)
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond), stream: &batchCommandsStream{}})
+	entry.batchState.Load().stream.maxRespReqID.Store(5)
 	require.Equal(t,
-		"EntryProgress{batch:4ms, send:6ms, ack:yes}",
+		"EntryProgress{batch:4ms, size:1, send:6ms, ack:yes}",
 		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
 	)
 }
@@ -668,14 +678,14 @@ func TestInspectPendingBatchRequests(t *testing.T) {
 
 	newEntry := func(id uint64, wait time.Duration, batchedAt time.Duration, forwardedHost string, stream *batchCommandsStream) *batchCommandsEntry {
 		entry := &batchCommandsEntry{
-			start:         now.Add(-wait),
+			reqArriveAt:   now.Add(-wait),
 			forwardedHost: forwardedHost,
 		}
 		entry.requestID.Store(id)
-		entry.batchState.Store(&batchCommandsRequestState{})
-		entry.batchState.Load().stream.Store(stream)
+		entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, stream: stream})
 		if batchedAt > 0 {
-			entry.batchState.Load().batchedAt = entry.start.Add(batchedAt)
+			entry.batchSelectedAfterReqArriveNS.Store(max(batchedAt, time.Nanosecond).Nanoseconds())
+			entry.batchState.Load().sendStartAt = entry.reqArriveAt.Add(batchedAt)
 		}
 		return entry
 	}

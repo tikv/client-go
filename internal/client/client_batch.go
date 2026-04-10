@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math"
 	"runtime/trace"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,7 +151,7 @@ type batchCommandsEntry struct {
 	requestID atomic.Uint64
 	// batchState is shared by all requests contained in the same BatchCommandsRequest.
 	// It is published atomically because timeout/metrics paths may observe an entry
-	// concurrently with the send loop assigning it to a concrete batch.
+	// concurrently with the send loop assigning it a concrete send start.
 	// Invariant: any entry published to batchCommandsClient.batched must already have a non-nil batchState.
 	batchState atomic.Pointer[batchCommandsRequestState]
 	// batchRequestMetrics is cached by store in connPool.metrics.
@@ -163,22 +164,28 @@ type batchCommandsEntry struct {
 	err      error
 	pri      uint64
 
-	// start indicates when the batch commands entry is generated and sent to the batch conn channel.
-	start time.Time
+	// reqArriveAt indicates when the batch commands entry is generated and sent to the batch conn channel.
+	reqArriveAt time.Time
 
-	// recvAfterStartNS is the elapsed time in nanoseconds from start until the response is received.
-	recvAfterStartNS atomic.Int64
+	// batchSelectedAfterReqArriveNS is published when the entry is assigned to a concrete batch.
+	// It stays on the entry so timeout/metrics paths can observe batch selection before send()
+	// publishes the shared batch state.
+	batchSelectedAfterReqArriveNS atomic.Int64
+	// recvAfterReqArriveNS is the elapsed time in nanoseconds from reqArriveAt until the response is received.
+	recvAfterReqArriveNS atomic.Int64
 }
 
 type batchCommandsRequestState struct {
 	// stream is the concrete batch stream selected for this batch request.
-	stream atomic.Pointer[batchCommandsStream]
-	// batchedAt is when the request is placed into a batch.
-	batchedAt time.Time
-	// sentAfterBatchedNS is the elapsed time in nanoseconds from batchedAt until sending the batch request finishes.
-	sentAfterBatchedNS atomic.Int64
-	// firstRespAfterBatchedNS is the elapsed time in nanoseconds from batchedAt until the first response of the batch arrives.
-	firstRespAfterBatchedNS atomic.Int64
+	stream *batchCommandsStream
+	// batchSize is the number of requests in the batch.
+	batchSize int
+	// sendStartAt is when the client is ready to send the batch request, and matches ClientSendTimeNs.
+	sendStartAt time.Time
+	// sentAfterSendStartNS is the elapsed time in nanoseconds from sendStartAt until sending the batch request finishes.
+	sentAfterSendStartNS atomic.Int64
+	// firstRespAfterSendStartNS is the elapsed time in nanoseconds from sendStartAt until the first response of the batch arrives.
+	firstRespAfterSendStartNS atomic.Int64
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -251,8 +258,8 @@ func batchRequestTerminalOutcome(err error) batchRequestOutcome {
 }
 
 // normalizeObservedSentNS clamps the observed send boundary when sentNS is read concurrently with a later receive
-// event. The send loop stamps sentAfterBatchedNS asynchronously, so a reader can observe
-// firstRespAfterBatchedNS/recvAfterStartNS first or see a stale sentAfterBatchedNS that lands after them.
+// event. The send loop stamps sentAfterSendStartNS asynchronously, so a reader can observe
+// firstRespAfterSendStartNS/recvAfterReqArriveNS first or see a stale sentAfterSendStartNS that lands after them.
 func normalizeObservedSentNS(batchedNS, sentNS, firstRespNS, recvNS int64) int64 {
 	boundaryNS := recvNS
 	if boundaryNS == 0 {
@@ -269,16 +276,19 @@ func normalizeObservedSentNS(batchedNS, sentNS, firstRespNS, recvNS int64) int64
 }
 
 func loadBatchRequestProgress(entry *batchCommandsEntry) (batchedNS, sentNS, firstRespNS, recvNS int64) {
-	if batchState := entry.batchState.Load(); batchState != nil && !batchState.batchedAt.IsZero() {
-		batchedNS = max(batchState.batchedAt.Sub(entry.start).Nanoseconds(), int64(1))
-		if sentAfterBatchedNS := batchState.sentAfterBatchedNS.Load(); sentAfterBatchedNS > 0 {
-			sentNS = batchedNS + sentAfterBatchedNS
+	if batchSelectedAfterReqArriveNS := entry.batchSelectedAfterReqArriveNS.Load(); batchSelectedAfterReqArriveNS > 0 {
+		batchedNS = batchSelectedAfterReqArriveNS
+	}
+	if batchState := entry.batchState.Load(); batchState != nil && !batchState.sendStartAt.IsZero() {
+		sendStartNS := max(batchState.sendStartAt.Sub(entry.reqArriveAt).Nanoseconds(), int64(1))
+		if sentAfterSendStartNS := batchState.sentAfterSendStartNS.Load(); sentAfterSendStartNS > 0 {
+			sentNS = sendStartNS + sentAfterSendStartNS
 		}
-		if firstRespAfterBatchedNS := batchState.firstRespAfterBatchedNS.Load(); firstRespAfterBatchedNS > 0 {
-			firstRespNS = batchedNS + firstRespAfterBatchedNS
+		if firstRespAfterSendStartNS := batchState.firstRespAfterSendStartNS.Load(); firstRespAfterSendStartNS > 0 {
+			firstRespNS = sendStartNS + firstRespAfterSendStartNS
 		}
 	}
-	recvNS = entry.recvAfterStartNS.Load()
+	recvNS = entry.recvAfterReqArriveNS.Load()
 	sentNS = normalizeObservedSentNS(batchedNS, sentNS, firstRespNS, recvNS)
 	return
 }
@@ -305,10 +315,14 @@ func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsE
 	}
 	buf.WriteString("batch:")
 	buf.WriteString(util.FormatDuration(time.Duration(batchedNS)))
+	if batchState := entry.batchState.Load(); batchState != nil && batchState.batchSize > 0 {
+		buf.WriteString(", size:")
+		buf.WriteString(strconv.Itoa(batchState.batchSize))
+	}
 
 	if sentNS == 0 && recvNS == 0 {
 		buf.WriteString(", send:")
-		buf.WriteString(util.FormatDuration(time.Duration(max(now.Sub(entry.start).Nanoseconds()-batchedNS, int64(1)))))
+		buf.WriteString(util.FormatDuration(time.Duration(max(now.Sub(entry.reqArriveAt).Nanoseconds()-batchedNS, int64(1)))))
 		if batchRequestReceivedByTiKV(entry) {
 			buf.WriteString(", ack:yes")
 		}
@@ -339,7 +353,7 @@ func writeBatchCommandsEntryProgress(buf *strings.Builder, entry *batchCommandsE
 }
 
 func visitBatchRequestObservations(entry *batchCommandsEntry, terminal batchRequestOutcome, now time.Time, visit func(batchRequestStage, batchRequestOutcome, time.Duration)) {
-	nowNS := max(now.Sub(entry.start).Nanoseconds(), int64(1))
+	nowNS := max(now.Sub(entry.reqArriveAt).Nanoseconds(), int64(1))
 
 	batchedNS, sentNS, firstRespNS, recvNS := loadBatchRequestProgress(entry)
 	if batchedNS == 0 {
@@ -388,7 +402,7 @@ type batchCommandsBuilder struct {
 	// In most cases, there isn't any forwardingGroups.
 	forwardingGroups map[string]*batchCommandsRequestGroup
 
-	latestReqStartTime time.Time
+	latestReqArriveTime time.Time
 }
 
 type batchCommandsRequestGroup struct {
@@ -403,8 +417,8 @@ func (b *batchCommandsBuilder) len() int {
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
-	if entry.start.After(b.latestReqStartTime) {
-		b.latestReqStartTime = entry.start
+	if entry.reqArriveAt.After(b.latestReqArriveTime) {
+		b.latestReqArriveTime = entry.reqArriveAt
 	}
 }
 
@@ -440,20 +454,19 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 			if e.forwardedHost == "" {
 				group = &b.directGroup
 				if group.state == nil {
-					group.state = &batchCommandsRequestState{batchedAt: buildTime}
+					group.state = &batchCommandsRequestState{}
 				}
-				e.batchState.Store(group.state)
 			} else {
 				group, ok = b.forwardingGroups[e.forwardedHost]
 				if !ok {
 					group = &batchCommandsRequestGroup{
 						req:   &tikvpb.BatchCommandsRequest{},
-						state: &batchCommandsRequestState{batchedAt: buildTime},
+						state: &batchCommandsRequestState{},
 					}
 					b.forwardingGroups[e.forwardedHost] = group
 				}
-				e.batchState.Store(group.state)
 			}
+			e.batchSelectedAfterReqArriveNS.Store(max(buildTime.Sub(e.reqArriveAt).Nanoseconds(), int64(1)))
 
 			b.idAlloc++
 			if collect != nil {
@@ -462,6 +475,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 			group.req.RequestIds = append(group.req.RequestIds, b.idAlloc)
 			group.req.Requests = append(group.req.Requests, e.req)
 			group.entries = append(group.entries, e)
+			group.state.batchSize = len(group.entries)
 		}
 	}
 	for (count < limit && b.entries.Len() > 0) || b.hasHighPriorityTask() {
@@ -548,7 +562,7 @@ func batchRequestReceivedByTiKV(entry *batchCommandsEntry) bool {
 	if batchState == nil {
 		return false
 	}
-	stream := batchState.stream.Load()
+	stream := batchState.stream
 	if stream == nil {
 		return false
 	}
@@ -996,9 +1010,13 @@ func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsReque
 		return
 	}
 	client := c.stream(forwardedHost)
-	grp.state.stream.Store(client)
+	sendStartAt := time.Now()
+	grp.state.stream = client
+	grp.state.sendStartAt = sendStartAt
+	grp.req.ClientSendTimeNs = uint64(sendStartAt.UnixNano())
 	for i, requestID := range grp.req.RequestIds {
 		entry := grp.entries[i]
+		entry.batchState.Store(grp.state)
 		entry.requestID.Store(requestID)
 		c.batched.Store(requestID, entry)
 		c.sent.Add(1)
@@ -1008,7 +1026,6 @@ func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsReque
 		}
 	}
 
-	grp.req.ClientSendTimeNs = uint64(time.Now().UnixNano())
 	if err := client.Send(grp.req); err != nil {
 		logutil.BgLogger().Info(
 			"sending batch commands meets error",
@@ -1020,7 +1037,7 @@ func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsReque
 		c.failRequestsByIDs(err, grp.req.RequestIds) // fast fail requests.
 		return
 	}
-	grp.state.sentAfterBatchedNS.CompareAndSwap(0, max(time.Since(grp.state.batchedAt).Nanoseconds(), int64(1)))
+	grp.state.sentAfterSendStartNS.CompareAndSwap(0, max(time.Since(sendStartAt).Nanoseconds(), int64(1)))
 }
 
 // `failPendingRequests` must be called in locked contexts in order to avoid double closing channels.
@@ -1134,7 +1151,7 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 	stats := pendingBatchRequestStats{}
 	c.batched.Range(func(key, value interface{}) bool {
 		entry := value.(*batchCommandsEntry)
-		wait := checkTime.Sub(entry.start)
+		wait := checkTime.Sub(entry.reqArriveAt)
 		if wait < batchRequestSlowThreshold {
 			return true
 		}
@@ -1142,7 +1159,7 @@ func (c *batchCommandsClient) inspectPendingBatchRequests(checkTime time.Time) p
 		requestID := key.(uint64)
 		batchState := entry.batchState.Load()
 		unconfirmed := batchState == nil ||
-			(batchState.firstRespAfterBatchedNS.Load() == 0 && !batchRequestReceivedByTiKV(entry))
+			(batchState.firstRespAfterSendStartNS.Load() == 0 && !batchRequestReceivedByTiKV(entry))
 		if unconfirmed {
 			stats.slowUnconfirmedCount++
 		}
@@ -1266,9 +1283,9 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			completedRespCount.Inc()
 			entry := value.(*batchCommandsEntry)
 			batchState := entry.batchState.Load()
-			batchState.firstRespAfterBatchedNS.CompareAndSwap(0, max(respRecvTime.Sub(batchState.batchedAt).Nanoseconds(), int64(1)))
-			entry.recvAfterStartNS.CompareAndSwap(0, max(respRecvTime.Sub(entry.start).Nanoseconds(), int64(1)))
-			recvNS := entry.recvAfterStartNS.Load()
+			batchState.firstRespAfterSendStartNS.CompareAndSwap(0, max(respRecvTime.Sub(batchState.sendStartAt).Nanoseconds(), int64(1)))
+			entry.recvAfterReqArriveNS.CompareAndSwap(0, max(respRecvTime.Sub(entry.reqArriveAt).Nanoseconds(), int64(1)))
+			recvNS := entry.recvAfterReqArriveNS.Load()
 			if trace.IsEnabled() {
 				trace.Log(entry.ctx, "rpc", "received")
 			}
@@ -1419,7 +1436,7 @@ func sendBatchRequest(
 		canceled:            0,
 		err:                 nil,
 		pri:                 priority,
-		start:               time.Now(),
+		reqArriveAt:         time.Now(),
 	}
 	timer := time.NewTimer(timeout)
 	defer func() {
