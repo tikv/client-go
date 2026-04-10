@@ -15,8 +15,8 @@
 package client
 
 import (
+	"math/rand/v2"
 	"runtime"
-	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,10 +71,7 @@ func (a *batchConn) initMetrics(target string) {
 	a.metrics.sendLoopWaitHeadDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-head")
 	a.metrics.sendLoopWaitMoreDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-more")
 	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
-	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
-	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
 	a.metrics.batchSendTailLat = metrics.TiKVBatchSendTailLatency.WithLabelValues(target)
-	a.metrics.batchRecvTailLat = metrics.TiKVBatchRecvTailLatency.WithLabelValues(target)
 	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
 	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
 	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
@@ -84,10 +81,16 @@ func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
 }
 
+func (a *batchConn) inspectPendingRequests(checkTime time.Time) {
+	for _, client := range a.batchCommandsClients {
+		client.logPendingBatchRequests(checkTime)
+	}
+}
+
 // fetchAllPendingRequests fetches all pending requests from the channel.
 func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
-	latestReqStartTime := a.reqBuilder.latestReqStartTime
+	latestReqArriveTime := a.reqBuilder.latestReqArriveTime
 	var headEntry *batchCommandsEntry
 	select {
 	case headEntry = <-a.batchCommandsCh:
@@ -108,8 +111,8 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time
 		return time.Now(), 0
 	}
 	headRecvTime = time.Now()
-	if headEntry.start.After(latestReqStartTime) && !latestReqStartTime.IsZero() {
-		headArrivalInterval = headEntry.start.Sub(latestReqStartTime)
+	if headEntry.reqArriveAt.After(latestReqArriveTime) && !latestReqArriveTime.IsZero() {
+		headArrivalInterval = headEntry.reqArriveAt.Sub(latestReqArriveTime)
 	}
 	a.reqBuilder.push(headEntry)
 
@@ -209,6 +212,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	turboBatchWaitTime := trigger.turboWaitTime()
 
 	avgBatchWaitSize := float64(cfg.BatchWaitSize)
+	lastPendingInspectAt := time.Now().Add(-time.Duration(rand.Int64N(int64(batchRequestInspectInterval))))
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
@@ -216,6 +220,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
 		if a.reqBuilder.len() == 0 {
 			// the conn is closed or recycled.
+			a.inspectPendingRequests(headRecvTime)
 			return
 		}
 
@@ -251,6 +256,10 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
 		if dur := sendLoopEndTime.Sub(headRecvTime); dur > batchSendTailLatThreshold {
 			a.metrics.batchSendTailLat.Observe(dur.Seconds())
+		}
+		if sendLoopEndTime.Sub(lastPendingInspectAt) >= batchRequestInspectInterval {
+			a.inspectPendingRequests(sendLoopEndTime)
+			lastPendingInspectAt = sendLoopEndTime
 		}
 	}
 }
@@ -303,22 +312,14 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 	available := cli.available()
-	reqSendTime := time.Now()
 	batch := 0
-	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
-		cli.batched.Store(id, e)
-		cli.sent.Add(1)
-		atomic.StoreInt64(&e.sendLat, int64(reqSendTime.Sub(e.start)))
-		if trace.IsEnabled() {
-			trace.Log(e.ctx, "rpc", "send")
-		}
-	})
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, nil)
 	if req != nil {
-		batch += len(req.RequestIds)
+		batch += len(req.req.RequestIds)
 		cli.send("", req)
 	}
 	for forwardedHost, req := range forwardingReqs {
-		batch += len(req.RequestIds)
+		batch += len(req.req.RequestIds)
 		cli.send(forwardedHost, req)
 	}
 	if batch > 0 {
