@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -37,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -61,6 +63,7 @@ type storage interface {
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
 	store                    storage
+	asyncResolveSemaphore    chan struct{}
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
@@ -97,6 +100,7 @@ type ResolvingLock struct {
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
 		store:                    store,
+		asyncResolveSemaphore:    globalAsyncResolveLockSemaphore,
 		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
@@ -613,10 +617,11 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolvePessimisticLock(bo, l, false, nil)
 			}
 		} else {
+			asyncResolve := false
 			if forRead {
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
-				go func() {
+				asyncResolve = lr.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
 					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
@@ -624,8 +629,12 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 					}
-				}()
-			} else {
+				}, metrics.LockResolverAsyncRunningTasksForReadResolve)
+				if !asyncResolve {
+					metrics.LockResolverAsyncFallbackCounterForReadResolve.Inc()
+				}
+			}
+			if !asyncResolve {
 				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
 			}
 		}
@@ -678,6 +687,63 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		IgnoreLocks: canIgnore,
 		AccessLocks: canAccess,
 	}, nil
+}
+
+// AsyncResolveLockSemaphoreLimit is the max concurrency of async resolve lock.
+// It is set to a very large value to make sure it won't introduce some performance drawback in most cases,
+// and for some extreme cases it can also provide some protection to avoid OOM
+// by too many async resolve lock goroutines.
+const AsyncResolveLockSemaphoreLimit = 10000
+
+// createAsyncResolveLockSemaphore creates a `chan struct{}` with the specified limit.
+func createAsyncResolveLockSemaphore(limit int) chan struct{} {
+	ch := make(chan struct{}, limit)
+	for i := 0; i < limit; i++ {
+		select {
+		case ch <- struct{}{}:
+		default:
+			panic("asyncResolveLockSemaphore channel should never be full")
+		}
+	}
+	return ch
+}
+
+// globalAsyncResolveLockSemaphore provides the global limits of the concurrency for async resolve lock
+// by using a counting semaphore pattern.
+var globalAsyncResolveLockSemaphore = createAsyncResolveLockSemaphore(AsyncResolveLockSemaphoreLimit)
+
+// tryAsyncResolve tries to resolve a lock asynchronously.
+// It returns `true` if the async resolving process is launched successfully,
+// otherwise returns `false` which means the async resolving process is not accepted
+// because of too many concurrent async resolving processes.
+func (lr *LockResolver) tryAsyncResolve(
+	resolveFn func(),
+	runningTasksMetric prometheus.Gauge,
+) bool {
+	select {
+	case <-lr.asyncResolveSemaphore:
+		// acquired a permit, the async resolve is accepted.
+	default:
+		// the semaphore is used up, the async resolve is not accepted.
+		return false
+	}
+
+	go func() {
+		runningTasksMetric.Inc()
+		defer func() {
+			runningTasksMetric.Dec()
+			select {
+			case lr.asyncResolveSemaphore <- struct{}{}:
+			default:
+				logutil.BgLogger().Error("asyncResolveLockSemaphore channel should never be full when releasing")
+				if intest.InTest {
+					panic("asyncResolveLockSemaphore channel should never be full when releasing")
+				}
+			}
+		}()
+		resolveFn()
+	}()
+	return true
 }
 
 // Resolving returns the locks' information we are resolving currently.

@@ -112,6 +112,10 @@ var (
 	LockResolverCountWithResolveLocks             prometheus.Counter
 	LockResolverCountWithResolveLockLite          prometheus.Counter
 
+	LockResolverAsyncRunningTasksForReadResolve prometheus.Gauge
+
+	LockResolverAsyncFallbackCounterForReadResolve prometheus.Counter
+
 	RegionCacheCounterWithInvalidateRegionFromCacheOK prometheus.Counter
 	RegionCacheCounterWithSendFail                    prometheus.Counter
 	RegionCacheCounterWithGetRegionByIDOK             prometheus.Counter
@@ -274,6 +278,10 @@ func initShortcuts() {
 	LockResolverCountWithQueryCheckSecondaryLocks = TiKVLockResolverCounter.WithLabelValues("query_check_secondary_locks")
 	LockResolverCountWithResolveLocks = TiKVLockResolverCounter.WithLabelValues("query_resolve_locks")
 	LockResolverCountWithResolveLockLite = TiKVLockResolverCounter.WithLabelValues("query_resolve_lock_lite")
+
+	LockResolverAsyncRunningTasksForReadResolve = TiKVLockResolverAsyncRunningTasks.WithLabelValues("read_resolve")
+
+	LockResolverAsyncFallbackCounterForReadResolve = TiKVLockResolverAsyncFallbackCounter.WithLabelValues("read_resolve")
 
 	RegionCacheCounterWithInvalidateRegionFromCacheOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_region_from_cache", "ok")
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")
