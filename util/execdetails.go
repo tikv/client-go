@@ -130,14 +130,6 @@ func (ed *TiKVExecDetails) String() string {
 	return buf.String()
 }
 
-// ReqDetailInfo contains diagnose information about `TiKVExecDetails`, region, store and backoff.
-type ReqDetailInfo struct {
-	ReqTotalTime time.Duration
-	Region       uint64
-	StoreAddr    string
-	ExecDetails  TiKVExecDetails
-}
-
 func cloneRUV2(ru *kvrpcpb.RUV2) *kvrpcpb.RUV2 {
 	if ru == nil {
 		return nil
@@ -150,24 +142,10 @@ func cloneRUV2(ru *kvrpcpb.RUV2) *kvrpcpb.RUV2 {
 	return &cloned
 }
 
-func mergeCommitDetailsRUV2(dst, src *kvrpcpb.RUV2, extraWriteRPCCount uint64) *kvrpcpb.RUV2 {
-	if dst == nil && src == nil && extraWriteRPCCount == 0 {
-		return nil
-	}
-	merged := cloneRUV2(dst)
-	if merged == nil {
-		merged = &kvrpcpb.RUV2{}
-	}
-	if src != nil {
-		mergeRUV2(merged, src)
-	}
-	if extraWriteRPCCount != 0 {
-		merged.WriteRpcCount += extraWriteRPCCount
-	}
-	return merged
-}
-
 func mergeRUV2(dst, src *kvrpcpb.RUV2) {
+	if dst == nil || src == nil {
+		return
+	}
 	dst.KvEngineCacheMiss += src.KvEngineCacheMiss
 	dst.CoprocessorExecutorIterations += src.CoprocessorExecutorIterations
 	dst.CoprocessorResponseBytes += src.CoprocessorResponseBytes
@@ -188,6 +166,14 @@ func mergeRUV2(dst, src *kvrpcpb.RUV2) {
 		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr
 		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr
 	}
+}
+
+// ReqDetailInfo contains diagnose information about `TiKVExecDetails`, region, store and backoff.
+type ReqDetailInfo struct {
+	ReqTotalTime time.Duration
+	Region       uint64
+	StoreAddr    string
+	ExecDetails  TiKVExecDetails
 }
 
 // CommitTSLagDetails contain the detail when the commit timestamp
@@ -235,8 +221,6 @@ type CommitDetails struct {
 		SlowestPrewrite ReqDetailInfo
 		// It's recorded only when the commit mode is 2pc.
 		CommitPrimary ReqDetailInfo
-		// Aggregated prewrite/commit request RUv2 details.
-		WriteRUV2 *kvrpcpb.RUV2
 	}
 	WriteKeys         int
 	WriteSize         int
@@ -271,7 +255,6 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	if cd.Mu.CommitPrimary.ReqTotalTime < other.Mu.CommitPrimary.ReqTotalTime {
 		cd.Mu.CommitPrimary = other.Mu.CommitPrimary
 	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, other.Mu.WriteRUV2, 0)
 }
 
 // MergePrewriteReqDetails merges prewrite related ExecDetailsV2 into the current CommitDetails.
@@ -281,11 +264,6 @@ func (cd *CommitDetails) MergePrewriteReqDetails(reqDuration time.Duration, regi
 	}
 	cd.Mu.Lock()
 	defer cd.Mu.Unlock()
-	var writeRUV2 *kvrpcpb.RUV2
-	if execDetails != nil {
-		writeRUV2 = execDetails.RuV2
-	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, writeRUV2, 1)
 	if reqDuration > cd.Mu.SlowestPrewrite.ReqTotalTime {
 		cd.Mu.SlowestPrewrite.ReqTotalTime = reqDuration
 		cd.Mu.SlowestPrewrite.Region = regionID
@@ -301,11 +279,6 @@ func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, region
 	}
 	cd.Mu.Lock()
 	defer cd.Mu.Unlock()
-	var writeRUV2 *kvrpcpb.RUV2
-	if execDetails != nil {
-		writeRUV2 = execDetails.RuV2
-	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, writeRUV2, 1)
 	if reqDuration > cd.Mu.CommitPrimary.ReqTotalTime {
 		cd.Mu.CommitPrimary.ReqTotalTime = reqDuration
 		cd.Mu.CommitPrimary.Region = regionID
@@ -316,16 +289,6 @@ func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, region
 
 func (cd *CommitDetails) MergeFlushReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
 	// leave it empty for now
-}
-
-// GetWriteRUV2 returns a copy of aggregated prewrite/commit request RUv2 details.
-func (cd *CommitDetails) GetWriteRUV2() *kvrpcpb.RUV2 {
-	if cd == nil {
-		return nil
-	}
-	cd.Mu.Lock()
-	defer cd.Mu.Unlock()
-	return cloneRUV2(cd.Mu.WriteRUV2)
 }
 
 // Clone returns a deep copy of itself.
@@ -349,7 +312,6 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 	commit.Mu.CommitBackoffTypes = append([]string{}, cd.Mu.CommitBackoffTypes...)
 	commit.Mu.SlowestPrewrite = cd.Mu.SlowestPrewrite
 	commit.Mu.CommitPrimary = cd.Mu.CommitPrimary
-	commit.Mu.WriteRUV2 = cloneRUV2(cd.Mu.WriteRUV2)
 	return commit
 }
 
@@ -892,6 +854,11 @@ type RUDetails struct {
 	tiflashRU *uatomic.Float64
 	// tikvRUV2 stores TiKV RU v2 value in scaled units.
 	tikvRUV2 *uatomic.Float64
+	// rawRUV2Mu protects rawRUV2, which accumulates raw TiKV RU v2 counters
+	// for TiDB to drain incrementally into statement-level RUV2 metrics.
+	rawRUV2Mu sync.Mutex
+	// rawRUV2 stores pending raw TiKV RU v2 counters since the last DrainRUV2 call.
+	rawRUV2 *kvrpcpb.RUV2
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -919,13 +886,17 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
-	return &RUDetails{
+	cloned := &RUDetails{
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 		tiflashRU:      uatomic.NewFloat64(rd.tiflashRU.Load()),
 		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
 	}
+	rd.rawRUV2Mu.Lock()
+	cloned.rawRUV2 = cloneRUV2(rd.rawRUV2)
+	rd.rawRUV2Mu.Unlock()
+	return cloned
 }
 
 // Merge implements the RuntimeStats interface.
@@ -935,6 +906,7 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
+	rd.AddRUV2(other.getRawRUV2())
 }
 
 // String implements fmt.Stringer interface.
@@ -978,6 +950,41 @@ func (rd *RUDetails) AddTiKVRUV2(delta float64) {
 		return
 	}
 	rd.tikvRUV2.Add(delta)
+}
+
+func (rd *RUDetails) getRawRUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	return cloneRUV2(rd.rawRUV2)
+}
+
+// AddRUV2 accumulates raw TiKV RU v2 counters in RUDetails.
+func (rd *RUDetails) AddRUV2(delta *kvrpcpb.RUV2) {
+	if rd == nil || delta == nil {
+		return
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	if rd.rawRUV2 == nil {
+		rd.rawRUV2 = cloneRUV2(delta)
+		return
+	}
+	mergeRUV2(rd.rawRUV2, delta)
+}
+
+// DrainRUV2 returns the accumulated raw TiKV RU v2 counters and clears them.
+func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	drained := cloneRUV2(rd.rawRUV2)
+	rd.rawRUV2 = nil
+	return drained
 }
 
 // Update updates the RU runtime stats with the given consumption info.

@@ -126,6 +126,49 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 	assert.Equal(t, errors.Cause(err), context.DeadlineExceeded)
 }
 
+func TestCompletedTiKVRUV2RPCCount(t *testing.T) {
+	testCases := []struct {
+		name       string
+		req        *tikvrpc.Request
+		readCount  int64
+		writeCount int64
+	}{
+		{
+			name:       "get",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}),
+			readCount:  1,
+			writeCount: 0,
+		},
+		{
+			name:       "batch get",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{}),
+			readCount:  1,
+			writeCount: 0,
+		},
+		{
+			name:       "prewrite",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}),
+			readCount:  0,
+			writeCount: 1,
+		},
+		{
+			name:       "commit",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{}),
+			readCount:  0,
+			writeCount: 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.req.StoreTp = tikvrpc.TiKV
+			readCount, writeCount := completedTiKVRUV2RPCCount(tc.req)
+			require.Equal(t, tc.readCount, readCount)
+			require.Equal(t, tc.writeCount, writeCount)
+		})
+	}
+}
+
 func TestSendWhenReconnect(t *testing.T) {
 	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
