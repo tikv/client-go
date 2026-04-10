@@ -399,6 +399,7 @@ type batchGetLockInfo struct {
 }
 
 func collectBatchGetResponseData(
+	ctx context.Context,
 	resp *tikvrpc.Response,
 	onKvPair func([]byte, kv.ValueEntry),
 	onDetails func(*kvrpcpb.ExecDetailsV2),
@@ -447,6 +448,7 @@ func collectBatchGetResponseData(
 		}
 	}
 	if details != nil {
+		updateTiKVRUV2FromReadResponse(ctx, details)
 		readKeys := len(pairs)
 		var readTime float64
 		if timeDetail := details.GetTimeDetailV2(); timeDetail != nil {
@@ -459,6 +461,17 @@ func collectBatchGetResponseData(
 		onDetails(details)
 	}
 	return data, nil
+}
+
+func updateTiKVRUV2FromReadResponse(ctx context.Context, details *kvrpcpb.ExecDetailsV2) {
+	if details == nil {
+		return
+	}
+	var backfillRead int64
+	if details.GetRuV2().GetReadRpcCount() == 0 {
+		backfillRead = 1
+	}
+	config.UpdateTiKVRUV2FromExecDetailsV2(ctx, details, backfillRead, 0)
 }
 
 //go:noinline
@@ -674,7 +687,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			continue
 		}
 
-		lockInfo, err := collectBatchGetResponseData(resp, collectF, s.mergeExecDetail)
+		lockInfo, err := collectBatchGetResponseData(bo.GetCtx(), resp, collectF, s.mergeExecDetail)
 		if err != nil {
 			return err
 		}
@@ -877,6 +890,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 		}
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		if cmdGetResp.ExecDetailsV2 != nil {
+			updateTiKVRUV2FromReadResponse(bo.GetCtx(), cmdGetResp.ExecDetailsV2)
 			readKeys := len(cmdGetResp.Value)
 			var readTime float64
 			if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {

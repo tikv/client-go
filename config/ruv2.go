@@ -23,15 +23,12 @@ import (
 
 // UpdateTiKVRUV2FromExecDetailsV2 updates TiKV-side raw RPC counters in ExecDetailsV2.RuV2 and accumulates TiKV RU v2 into RUDetails in ctx.
 func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecDetailsV2, readRPCCount, writeRPCCount int64) {
-	if ctx == nil || details == nil || details.RuV2 == nil {
-		return
+	if details == nil {
+		details = &kvrpcpb.ExecDetailsV2{}
 	}
-	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
-	if ruDetails == nil {
-		return
+	if details.RuV2 == nil {
+		details.RuV2 = &kvrpcpb.RUV2{}
 	}
-
-	weights := GetGlobalConfig().TiKVClient.RUV2
 
 	ru := details.RuV2
 	if readRPCCount != 0 {
@@ -40,6 +37,29 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 	if writeRPCCount != 0 {
 		ru.WriteRpcCount += uint64(writeRPCCount)
 	}
+	UpdateTiKVRUV2FromRUV2(ctx, ru)
+}
+
+// UpdateTiKVRUV2FromRUV2 accumulates raw TiKV RU v2 counters into RUDetails in ctx.
+func UpdateTiKVRUV2FromRUV2(ctx context.Context, ru *kvrpcpb.RUV2) {
+	if ctx == nil || ru == nil {
+		return
+	}
+	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
+	if ruDetails == nil {
+		return
+	}
+	ruDetails.AddRUV2(ru)
+	if deltaFloat := calculateTiKVRUV2(ru); deltaFloat != 0 {
+		ruDetails.AddTiKVRUV2(deltaFloat)
+	}
+}
+
+func calculateTiKVRUV2(ru *kvrpcpb.RUV2) float64 {
+	if ru == nil {
+		return 0
+	}
+	weights := GetGlobalConfig().TiKVClient.RUV2
 	var execInputs uint64
 	if inputs := ru.ExecutorInputs; inputs != nil {
 		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan
@@ -58,8 +78,5 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 		float64(ru.StorageProcessedKeysBatchGet)*weights.TiKVStorageProcessedKeysBatchGet +
 		float64(ru.StorageProcessedKeysGet)*weights.TiKVStorageProcessedKeysGet +
 		float64(ru.WriteRpcCount)*weights.ResourceManagerWriteCntTiKV
-	if deltaFloat == 0 {
-		return
-	}
-	ruDetails.AddTiKVRUV2(deltaFloat * weights.RUScale)
+	return deltaFloat * weights.RUScale
 }

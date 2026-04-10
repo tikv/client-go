@@ -491,3 +491,79 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 	cloned := rd.Clone()
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
 }
+
+func TestRUDetailsRUV2(t *testing.T) {
+	rd := NewRUDetails()
+	rd.AddRUV2(newWriteRUV2(1, 2, 3, 4, 5, 6, 7))
+	rd.AddRUV2(&kvrpcpb.RUV2{
+		KvEngineCacheMiss:            10,
+		StorageProcessedKeysBatchGet: 20,
+		StorageProcessedKeysGet:      30,
+		ReadRpcCount:                 40,
+		WriteRpcCount:                50,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchSelection: 60,
+		},
+	})
+
+	raw := rd.RUV2()
+	assert.NotNil(t, raw)
+	assert.Equal(t, uint64(11), raw.KvEngineCacheMiss)
+	assert.Equal(t, uint64(22), raw.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(33), raw.StorageProcessedKeysGet)
+	assert.Equal(t, uint64(44), raw.ReadRpcCount)
+	assert.Equal(t, uint64(55), raw.WriteRpcCount)
+	assert.Equal(t, uint64(6), raw.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(7), raw.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan)
+	assert.Equal(t, uint64(60), raw.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+
+	cloned := rd.Clone()
+	assert.Equal(t, raw, cloned.RUV2())
+
+	other := NewRUDetails()
+	other.AddRUV2(newWriteRUV2(100, 200, 300, 400, 500, 600, 700))
+	rd.Merge(other)
+
+	merged := rd.RUV2()
+	assert.Equal(t, uint64(111), merged.KvEngineCacheMiss)
+	assert.Equal(t, uint64(222), merged.StorageProcessedKeysBatchGet)
+	assert.Equal(t, uint64(333), merged.StorageProcessedKeysGet)
+	assert.Equal(t, uint64(444), merged.ReadRpcCount)
+	assert.Equal(t, uint64(555), merged.WriteRpcCount)
+	assert.Equal(t, uint64(606), merged.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(707), merged.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan)
+	assert.Equal(t, uint64(60), merged.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+
+	merged.KvEngineCacheMiss = 999
+	assert.Equal(t, uint64(111), rd.RUV2().KvEngineCacheMiss)
+}
+
+func TestRUDetailsDrainRUV2(t *testing.T) {
+	rd := NewRUDetails()
+	rd.AddRUV2(&kvrpcpb.RUV2{
+		ReadRpcCount:                 5,
+		StorageProcessedKeysBatchGet: 10,
+	})
+
+	// First drain returns accumulated counters.
+	drained := rd.DrainRUV2()
+	assert.NotNil(t, drained)
+	assert.Equal(t, uint64(5), drained.ReadRpcCount)
+	assert.Equal(t, uint64(10), drained.StorageProcessedKeysBatchGet)
+
+	// Second drain returns nil (nothing new).
+	assert.Nil(t, rd.DrainRUV2())
+
+	// After adding more counters, drain returns only the new delta.
+	rd.AddRUV2(&kvrpcpb.RUV2{
+		WriteRpcCount: 3,
+	})
+	drained2 := rd.DrainRUV2()
+	assert.NotNil(t, drained2)
+	assert.Equal(t, uint64(3), drained2.WriteRpcCount)
+	assert.Equal(t, uint64(0), drained2.ReadRpcCount)
+
+	// Nil receiver is safe.
+	var nilRD *RUDetails
+	assert.Nil(t, nilRD.DrainRUV2())
+}

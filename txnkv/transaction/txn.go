@@ -878,6 +878,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		metrics.TiKVTxnCommitBackoffSeconds.Observe(float64(detail.Mu.CommitBackoffTime) / float64(time.Second))
 		metrics.TiKVTxnCommitBackoffCount.Observe(float64(len(detail.Mu.PrewriteBackoffTypes) + len(detail.Mu.CommitBackoffTypes)))
 		detail.Mu.Unlock()
+		config.UpdateTiKVRUV2FromRUV2(ctx, detail.GetWriteRUV2())
 
 		ctxValue := ctx.Value(util.CommitDetailCtxKey)
 		if ctxValue != nil {

@@ -892,6 +892,9 @@ type RUDetails struct {
 	tiflashRU *uatomic.Float64
 	// tikvRUV2 stores TiKV RU v2 value in scaled units.
 	tikvRUV2 *uatomic.Float64
+	mu       sync.Mutex
+	// rawRUV2 stores raw TiKV RU v2 counters accumulated across requests.
+	rawRUV2 *kvrpcpb.RUV2
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -919,12 +922,17 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
+	var rawRUV2 *kvrpcpb.RUV2
+	rd.mu.Lock()
+	rawRUV2 = cloneRUV2(rd.rawRUV2)
+	rd.mu.Unlock()
 	return &RUDetails{
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 		tiflashRU:      uatomic.NewFloat64(rd.tiflashRU.Load()),
 		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
+		rawRUV2:        rawRUV2,
 	}
 }
 
@@ -935,6 +943,7 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
+	rd.AddRUV2(other.RUV2())
 }
 
 // String implements fmt.Stringer interface.
@@ -978,6 +987,44 @@ func (rd *RUDetails) AddTiKVRUV2(delta float64) {
 		return
 	}
 	rd.tikvRUV2.Add(delta)
+}
+
+// RUV2 returns a copy of the raw TiKV RU v2 counters accumulated in the client.
+func (rd *RUDetails) RUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	return cloneRUV2(rd.rawRUV2)
+}
+
+// DrainRUV2 atomically returns the accumulated raw TiKV RU v2 counters and
+// resets them to zero. This allows callers to incrementally collect RUv2
+// metrics without double-counting.
+func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	result := rd.rawRUV2
+	rd.rawRUV2 = nil
+	return result
+}
+
+// AddRUV2 adds raw TiKV RU v2 counters to the accumulated client-side totals.
+func (rd *RUDetails) AddRUV2(delta *kvrpcpb.RUV2) {
+	if rd == nil || delta == nil {
+		return
+	}
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	if rd.rawRUV2 == nil {
+		rd.rawRUV2 = cloneRUV2(delta)
+		return
+	}
+	mergeRUV2(rd.rawRUV2, delta)
 }
 
 // Update updates the RU runtime stats with the given consumption info.

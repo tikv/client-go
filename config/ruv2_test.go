@@ -32,6 +32,7 @@ func TestUpdateTiKVRUV2FromExecDetailsV2(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TiKVClient.RUV2 = DefaultRUV2TiKVConfig()
 	StoreGlobalConfig(&cfg)
+	weights := cfg.TiKVClient.RUV2
 
 	ruDetails := util.NewRUDetails()
 	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
@@ -50,7 +51,80 @@ func TestUpdateTiKVRUV2FromExecDetailsV2(t *testing.T) {
 			StorageProcessedKeysGet:           79,
 			WriteRpcCount:                     31,
 		},
-	}, 0, 0)
+	}, 2, 3)
 
-	require.InDelta(t, 38.64481334, ruDetails.TiKVRUV2(), 1e-9)
+	expected := (43*weights.TiKVKVEngineCacheMiss +
+		float64(53+59)*weights.ExecutorInputs +
+		61*weights.TiKVCoprocessorExecutorIterations +
+		67*weights.TiKVCoprocessorResponseBytes +
+		71*weights.TiKVRaftstoreStoreWriteTriggerWB +
+		73*weights.TiKVStorageProcessedKeysBatchGet +
+		79*weights.TiKVStorageProcessedKeysGet +
+		34*weights.ResourceManagerWriteCntTiKV) * weights.RUScale
+	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
+	raw := ruDetails.RUV2()
+	require.NotNil(t, raw)
+	require.Equal(t, uint64(43), raw.GetKvEngineCacheMiss())
+	require.Equal(t, uint64(2), raw.GetReadRpcCount())
+	require.Equal(t, uint64(34), raw.GetWriteRpcCount())
+	require.Equal(t, uint64(73), raw.GetStorageProcessedKeysBatchGet())
+	require.Equal(t, uint64(79), raw.GetStorageProcessedKeysGet())
+}
+
+func TestUpdateTiKVRUV2FromExecDetailsV2WithoutResponseRUV2(t *testing.T) {
+	original := GetGlobalConfig()
+	t.Cleanup(func() {
+		StoreGlobalConfig(original)
+	})
+
+	cfg := DefaultConfig()
+	cfg.TiKVClient.RUV2 = DefaultRUV2TiKVConfig()
+	StoreGlobalConfig(&cfg)
+	weights := cfg.TiKVClient.RUV2
+
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	UpdateTiKVRUV2FromExecDetailsV2(ctx, nil, 2, 3)
+
+	require.InDelta(t, 3*weights.ResourceManagerWriteCntTiKV*weights.RUScale, ruDetails.TiKVRUV2(), 1e-9)
+	raw := ruDetails.RUV2()
+	require.NotNil(t, raw)
+	require.Equal(t, uint64(2), raw.GetReadRpcCount())
+	require.Equal(t, uint64(3), raw.GetWriteRpcCount())
+}
+
+func TestUpdateTiKVRUV2FromRUV2(t *testing.T) {
+	original := GetGlobalConfig()
+	t.Cleanup(func() {
+		StoreGlobalConfig(original)
+	})
+
+	cfg := DefaultConfig()
+	cfg.TiKVClient.RUV2 = DefaultRUV2TiKVConfig()
+	StoreGlobalConfig(&cfg)
+	weights := cfg.TiKVClient.RUV2
+
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+	ru := &kvrpcpb.RUV2{
+		KvEngineCacheMiss:            11,
+		StorageProcessedKeysBatchGet: 13,
+		StorageProcessedKeysGet:      17,
+		WriteRpcCount:                19,
+	}
+
+	UpdateTiKVRUV2FromRUV2(ctx, ru)
+
+	expected := (11*weights.TiKVKVEngineCacheMiss +
+		13*weights.TiKVStorageProcessedKeysBatchGet +
+		17*weights.TiKVStorageProcessedKeysGet +
+		19*weights.ResourceManagerWriteCntTiKV) * weights.RUScale
+	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
+	raw := ruDetails.RUV2()
+	require.NotNil(t, raw)
+	require.Equal(t, uint64(11), raw.GetKvEngineCacheMiss())
+	require.Equal(t, uint64(13), raw.GetStorageProcessedKeysBatchGet())
+	require.Equal(t, uint64(17), raw.GetStorageProcessedKeysGet())
+	require.Equal(t, uint64(19), raw.GetWriteRpcCount())
 }
