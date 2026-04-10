@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -174,6 +175,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
+		config.UpdateTiKVRUV2FromExecDetailsV2(bo.GetCtx(), commitResp.ExecDetailsV2, 0, 1)
 		// Here we can make sure tikv has processed the commit primary key request. So
 		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {

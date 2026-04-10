@@ -601,6 +601,7 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 		handler.sender.GetStoreAddr(),
 		prewriteResp.ExecDetailsV2,
 	)
+	config.UpdateTiKVRUV2FromExecDetailsV2(handler.bo.GetCtx(), prewriteResp.ExecDetailsV2, 0, 1)
 
 	if handler.batch.isPrimary {
 		// After writing the primary key, if the size of the transaction is larger than 32M,

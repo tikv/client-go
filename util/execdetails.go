@@ -150,23 +150,6 @@ func cloneRUV2(ru *kvrpcpb.RUV2) *kvrpcpb.RUV2 {
 	return &cloned
 }
 
-func mergeCommitDetailsRUV2(dst, src *kvrpcpb.RUV2, extraWriteRPCCount uint64) *kvrpcpb.RUV2 {
-	if dst == nil && src == nil && extraWriteRPCCount == 0 {
-		return nil
-	}
-	merged := cloneRUV2(dst)
-	if merged == nil {
-		merged = &kvrpcpb.RUV2{}
-	}
-	if src != nil {
-		mergeRUV2(merged, src)
-	}
-	if extraWriteRPCCount != 0 {
-		merged.WriteRpcCount += extraWriteRPCCount
-	}
-	return merged
-}
-
 func mergeRUV2(dst, src *kvrpcpb.RUV2) {
 	dst.KvEngineCacheMiss += src.KvEngineCacheMiss
 	dst.CoprocessorExecutorIterations += src.CoprocessorExecutorIterations
@@ -235,8 +218,6 @@ type CommitDetails struct {
 		SlowestPrewrite ReqDetailInfo
 		// It's recorded only when the commit mode is 2pc.
 		CommitPrimary ReqDetailInfo
-		// Aggregated prewrite/commit request RUv2 details.
-		WriteRUV2 *kvrpcpb.RUV2
 	}
 	WriteKeys         int
 	WriteSize         int
@@ -271,7 +252,6 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	if cd.Mu.CommitPrimary.ReqTotalTime < other.Mu.CommitPrimary.ReqTotalTime {
 		cd.Mu.CommitPrimary = other.Mu.CommitPrimary
 	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, other.Mu.WriteRUV2, 0)
 }
 
 // MergePrewriteReqDetails merges prewrite related ExecDetailsV2 into the current CommitDetails.
@@ -281,11 +261,6 @@ func (cd *CommitDetails) MergePrewriteReqDetails(reqDuration time.Duration, regi
 	}
 	cd.Mu.Lock()
 	defer cd.Mu.Unlock()
-	var writeRUV2 *kvrpcpb.RUV2
-	if execDetails != nil {
-		writeRUV2 = execDetails.RuV2
-	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, writeRUV2, 1)
 	if reqDuration > cd.Mu.SlowestPrewrite.ReqTotalTime {
 		cd.Mu.SlowestPrewrite.ReqTotalTime = reqDuration
 		cd.Mu.SlowestPrewrite.Region = regionID
@@ -301,11 +276,6 @@ func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, region
 	}
 	cd.Mu.Lock()
 	defer cd.Mu.Unlock()
-	var writeRUV2 *kvrpcpb.RUV2
-	if execDetails != nil {
-		writeRUV2 = execDetails.RuV2
-	}
-	cd.Mu.WriteRUV2 = mergeCommitDetailsRUV2(cd.Mu.WriteRUV2, writeRUV2, 1)
 	if reqDuration > cd.Mu.CommitPrimary.ReqTotalTime {
 		cd.Mu.CommitPrimary.ReqTotalTime = reqDuration
 		cd.Mu.CommitPrimary.Region = regionID
@@ -316,16 +286,6 @@ func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, region
 
 func (cd *CommitDetails) MergeFlushReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
 	// leave it empty for now
-}
-
-// GetWriteRUV2 returns a copy of aggregated prewrite/commit request RUv2 details.
-func (cd *CommitDetails) GetWriteRUV2() *kvrpcpb.RUV2 {
-	if cd == nil {
-		return nil
-	}
-	cd.Mu.Lock()
-	defer cd.Mu.Unlock()
-	return cloneRUV2(cd.Mu.WriteRUV2)
 }
 
 // Clone returns a deep copy of itself.
@@ -349,7 +309,6 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 	commit.Mu.CommitBackoffTypes = append([]string{}, cd.Mu.CommitBackoffTypes...)
 	commit.Mu.SlowestPrewrite = cd.Mu.SlowestPrewrite
 	commit.Mu.CommitPrimary = cd.Mu.CommitPrimary
-	commit.Mu.WriteRUV2 = cloneRUV2(cd.Mu.WriteRUV2)
 	return commit
 }
 
