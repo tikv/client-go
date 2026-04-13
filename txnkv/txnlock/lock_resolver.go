@@ -1192,14 +1192,19 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
 	if asyncResolveAll {
 		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
-		go func() {
+		asyncResolveAll = lr.tryAsyncResolve(func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
 				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
 					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 			}
-		}()
-	} else {
+		}, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommit)
+		if !asyncResolveAll {
+			metrics.LockResolverAsyncFallbackCounterForResolveAsyncCommit.Inc()
+		}
+	}
+
+	if !asyncResolveAll {
 		err := lr.resolveAsyncResolveData(bo, l, status, toResolveKeys)
 		if err != nil {
 			return TxnStatus{}, err
