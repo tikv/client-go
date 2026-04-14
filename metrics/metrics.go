@@ -51,7 +51,6 @@ var (
 	TiKVRPCNetLatencyHistogram                     *prometheus.HistogramVec
 	TiKVLockResolverCounter                        *prometheus.CounterVec
 	TiKVLockResolverAsyncRunningTasks              *prometheus.GaugeVec
-	TiKVLockResolverAsyncFallbackCounter           *prometheus.CounterVec
 	TiKVRegionErrorCounter                         *prometheus.CounterVec
 	TiKVRPCErrorCounter                            *prometheus.CounterVec
 	TiKVTxnWriteKVCountHistogram                   *prometheus.HistogramVec
@@ -241,15 +240,6 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "lock_resolver_async_running_tasks",
 			Help:        "The number of running async resolve lock tasks in lock resolver.",
-			ConstLabels: constLabels,
-		}, []string{LblType})
-
-	TiKVLockResolverAsyncFallbackCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "lock_resolver_async_fallback_total",
-			Help:        "The total count of fallback from async resolve lock in lock resolver.",
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
@@ -1027,7 +1017,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVLockResolverAsyncRunningTasks)
-	prometheus.MustRegister(TiKVLockResolverAsyncFallbackCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
 	prometheus.MustRegister(TiKVRPCErrorCounter)
 	prometheus.MustRegister(TiKVTxnWriteKVCountHistogram)

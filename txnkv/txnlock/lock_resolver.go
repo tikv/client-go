@@ -631,7 +631,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 					}
 				}, metrics.LockResolverAsyncRunningTasksForReadResolve)
 				if !asyncResolve {
-					metrics.LockResolverAsyncFallbackCounterForReadResolve.Inc()
+					metrics.LockResolverCountWithReadAsyncResolveFallback.Inc()
 				}
 			}
 			if !asyncResolve {
@@ -1197,7 +1197,7 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 			}
 		}, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommit)
 		if !doSyncResolve {
-			metrics.LockResolverAsyncFallbackCounterForResolveAsyncCommit.Inc()
+			metrics.LockResolverCountWithAsyncResolveAsyncCommitFallback.Inc()
 		}
 	}
 
