@@ -39,6 +39,11 @@ type RequestInfo struct {
 	requestSize     uint64
 	accessType      controller.AccessLocationType
 	pagingSizeBytes uint64
+	// predictedReadBytes is an optional learned estimate (e.g. from a
+	// per-logical-scan EMA in TiDB) of how many bytes this request will
+	// read. When > 0, PD's resource control prefers this over
+	// pagingSizeBytes as the pre-charge basis.
+	predictedReadBytes uint64
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -93,6 +98,10 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			bypass:      bypass,
 			requestSize: uint64(req.GetSize()),
 			accessType:  toPDAccessLocationType(req.AccessLocation),
+			// PredictedReadBytes is a client-go-internal hint set by the
+			// caller (e.g. TiDB) before the RPC is dispatched; it overrides
+			// pagingSizeBytes as the RC pre-charge basis when non-zero.
+			predictedReadBytes: req.PredictedReadBytes,
 		}
 		// Extract PagingSizeBytes from coprocessor request for RC paging.
 		if req.Type == tikvrpc.CmdCop || req.Type == tikvrpc.CmdCopStream {
@@ -166,6 +175,16 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 // PagingSizeBytes returns the byte budget per page for RC paging.
 func (req *RequestInfo) PagingSizeBytes() uint64 {
 	return req.pagingSizeBytes
+}
+
+// PredictedReadBytes returns an optional learned estimate of how many bytes
+// the request will read. When > 0, PD's resource control uses this as the
+// byte basis for RC paging pre-charge, overriding PagingSizeBytes.
+//
+// This satisfies the optional predictedReadBytesProvider interface on
+// PD's controller.RequestInfo side via duck-typing.
+func (req *RequestInfo) PredictedReadBytes() uint64 {
+	return req.predictedReadBytes
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
