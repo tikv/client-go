@@ -33,11 +33,12 @@ import (
 type RequestInfo struct {
 	// writeBytes is the actual write size if the request is a write request,
 	// or -1 if it's a read request.
-	writeBytes    int64
-	storeID       uint64
-	replicaNumber int64
-	requestSize   uint64
-	accessType    controller.AccessLocationType
+	writeBytes      int64
+	storeID         uint64
+	replicaNumber   int64
+	requestSize     uint64
+	accessType      controller.AccessLocationType
+	pagingSizeBytes uint64
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -86,13 +87,20 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	bypass := shouldBypass(req)
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{
+		ri := &RequestInfo{
 			writeBytes:  -1,
 			storeID:     storeID,
 			bypass:      bypass,
 			requestSize: uint64(req.GetSize()),
 			accessType:  toPDAccessLocationType(req.AccessLocation),
 		}
+		// Extract PagingSizeBytes from coprocessor request for RC paging.
+		if req.Type == tikvrpc.CmdCop || req.Type == tikvrpc.CmdCopStream {
+			if copReq := req.Cop(); copReq != nil {
+				ri.pagingSizeBytes = copReq.GetPagingSizeBytes()
+			}
+		}
+		return ri
 	}
 
 	var writeBytes int64
@@ -153,6 +161,11 @@ func (req *RequestInfo) RequestSize() uint64 {
 
 func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
+}
+
+// PagingSizeBytes returns the byte budget per page for RC paging.
+func (req *RequestInfo) PagingSizeBytes() uint64 {
+	return req.pagingSizeBytes
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
