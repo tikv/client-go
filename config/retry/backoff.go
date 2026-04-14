@@ -156,6 +156,10 @@ func (b *Backoffer) appendErr(err error) {
 	b.errorsNum++
 }
 
+// latestErrors is called when the backoff time exceeds the max sleep time,
+// and it returns the latest N (N <= MaxRecordBackoffErrCount) backoff errors for logging.
+// It should only be called when the backoff time exceeds the max sleep time to reduce the performance overhead,
+// because it may involve some array copy when the number of errors exceeds MaxRecordBackoffErrCount.
 func (b *Backoffer) latestErrors() []backoffErr {
 	if b.errorsNum <= len(b.errors) {
 		return b.errors[:b.errorsNum]

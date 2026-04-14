@@ -2,7 +2,6 @@ package txnlock
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,34 +65,21 @@ func TestTryAsyncResolve(t *testing.T) {
 		require.Equal(t, v, m.GetGauge().GetValue())
 	}
 
-	var enter atomic.Int32
-	var exit atomic.Int32
-	waitCounter := func(c *atomic.Int32, n int) {
-		assert.Eventually(t, func() bool {
-			return c.Load() == int32(n)
-		}, 10*time.Second, 10*time.Millisecond)
-		if c == &exit {
-			// wait the goroutine exit completely and related metrics updated.
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-
 	lockResolver := NewLockResolver(nil)
-	enterLatches := make([]chan struct{}, 0, 16)
+	assert.Equal(t, cap(lockResolver.asyncResolveSemaphore), cap(globalAsyncResolveLockSemaphore))
+	assert.Equal(t, len(lockResolver.asyncResolveSemaphore), len(globalAsyncResolveLockSemaphore))
+
 	exitLatches := make([]chan struct{}, 0, 16)
 	tryAsync := func() (isAsync bool) {
 		enterLatch := make(chan struct{})
 		exitLatch := make(chan struct{})
 
 		isAsync = lockResolver.tryAsyncResolve(func() {
-			enter.Add(1)
 			close(enterLatch)
 			<-exitLatch
-			exit.Add(1)
 		}, mockMetric)
 
 		if isAsync {
-			enterLatches = append(enterLatches, enterLatch)
 			exitLatches = append(exitLatches, exitLatch)
 		}
 
@@ -116,17 +102,22 @@ func TestTryAsyncResolve(t *testing.T) {
 
 	// mock a custom asyncResolveLockSemaphore with limit 5
 	lockResolver.asyncResolveSemaphore = createAsyncResolveLockSemaphore(5)
+	waitSemaphoreSize := func(cnt int) {
+		assert.Eventually(t, func() bool {
+			return len(lockResolver.asyncResolveSemaphore) == cnt
+		}, 10*time.Second, 10*time.Millisecond)
+	}
 
 	// try to async resolve 3 times
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
-	waitCounter(&enter, 3)
+	waitSemaphoreSize(2)
 	checkMetricVal(3)
 
 	// exit 1 async goroutine
 	exitTask(1)
-	waitCounter(&exit, 1)
+	waitSemaphoreSize(3)
 
 	// check 2 async goroutines are still running and related metrics updated
 	checkMetricVal(2)
@@ -135,25 +126,25 @@ func TestTryAsyncResolve(t *testing.T) {
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
-	waitCounter(&enter, 6)
+	waitSemaphoreSize(0)
 	checkMetricVal(5)
 
 	// more async task will be rejected
 	require.False(t, tryAsync())
 	require.False(t, tryAsync())
 	require.False(t, tryAsync())
-	checkMetricVal(5)
+	waitSemaphoreSize(0)
 	time.Sleep(time.Millisecond)
 	checkMetricVal(5)
 
 	// exit a task
 	exitTask(3)
-	waitCounter(&exit, 2)
+	waitSemaphoreSize(1)
 	checkMetricVal(4)
 
 	// a new task will be accepted again
 	require.True(t, tryAsync())
-	waitCounter(&enter, 7)
+	waitSemaphoreSize(0)
 	checkMetricVal(5)
 
 	// clean up
@@ -162,6 +153,6 @@ func TestTryAsyncResolve(t *testing.T) {
 			exitTask(i)
 		}
 	}
-	waitCounter(&exit, int(enter.Load()))
+	waitSemaphoreSize(5)
 	checkMetricVal(0)
 }

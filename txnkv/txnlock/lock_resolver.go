@@ -699,11 +699,7 @@ const AsyncResolveLockSemaphoreLimit = 10000
 func createAsyncResolveLockSemaphore(limit int) chan struct{} {
 	ch := make(chan struct{}, limit)
 	for i := 0; i < limit; i++ {
-		select {
-		case ch <- struct{}{}:
-		default:
-			panic("asyncResolveLockSemaphore channel should never be full")
-		}
+		ch <- struct{}{}
 	}
 	return ch
 }
@@ -1190,21 +1186,22 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 		return status, nil
 	}
 	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
+	doSyncResolve := false
 	if asyncResolveAll {
 		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
-		asyncResolveAll = lr.tryAsyncResolve(func() {
+		doSyncResolve = lr.tryAsyncResolve(func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
 				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
 					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 			}
 		}, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommit)
-		if !asyncResolveAll {
+		if !doSyncResolve {
 			metrics.LockResolverAsyncFallbackCounterForResolveAsyncCommit.Inc()
 		}
 	}
 
-	if !asyncResolveAll {
+	if !doSyncResolve {
 		err := lr.resolveAsyncResolveData(bo, l, status, toResolveKeys)
 		if err != nil {
 			return TxnStatus{}, err
