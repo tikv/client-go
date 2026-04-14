@@ -49,6 +49,37 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.StoreID())
 }
 
+func TestMakeRequestInfoCopHints(t *testing.T) {
+	// A cop request carries paging_size_bytes (from kvproto) and may
+	// additionally carry a PredictedReadBytes hint (client-go-internal
+	// field on tikvrpc.Request, not in the proto).
+	copReq := &coprocessor.Request{PagingSizeBytes: 4 * 1024 * 1024}
+	req := &tikvrpc.Request{
+		Type:               tikvrpc.CmdCop,
+		Req:                copReq,
+		Context:            kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+		PredictedReadBytes: 256 * 1024,
+	}
+	info := MakeRequestInfo(req)
+	assert.False(t, info.IsWrite())
+	assert.Equal(t, uint64(4*1024*1024), info.PagingSizeBytes(),
+		"pagingSizeBytes should come from coprocessor.Request (proto)")
+	assert.Equal(t, uint64(256*1024), info.PredictedReadBytes(),
+		"predictedReadBytes should come from tikvrpc.Request (internal)")
+
+	// Without a hint, PredictedReadBytes defaults to 0 so PD falls back to
+	// PagingSizeBytes as the pre-charge basis.
+	reqNoHint := &tikvrpc.Request{
+		Type:    tikvrpc.CmdCop,
+		Req:     &coprocessor.Request{PagingSizeBytes: 4 * 1024 * 1024},
+		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+	}
+	infoNoHint := MakeRequestInfo(reqNoHint)
+	assert.Equal(t, uint64(0), infoNoHint.PredictedReadBytes(),
+		"zero hint on the request means zero on RequestInfo")
+	assert.Equal(t, uint64(4*1024*1024), infoNoHint.PagingSizeBytes())
+}
+
 func TestResponseInfoReadBytes(t *testing.T) {
 	resp := &tikvrpc.Response{
 		Resp: &coprocessor.Response{
