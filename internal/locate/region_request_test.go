@@ -1194,7 +1194,7 @@ func TestGetErrMsg(t *testing.T) {
 func TestRPCContextString(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		var ctx *RPCContext
-		require.Equal(t, "<nil>", ctx.BackoffInfoString())
+		require.Equal(t, "<nil>", ctx.ToBackoffReasonString())
 		require.Equal(t, "<nil>", ctx.String())
 	})
 
@@ -1230,7 +1230,7 @@ func TestRPCContextString(t *testing.T) {
 				"region: %s, peerID: %d, storeID: %d, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
 				region.String(), peer.Id, peer.StoreId, "tikv-1", AccessIndex(4), tiKVOnly, tikvrpc.TiKV.Name(),
 			),
-			ctx.BackoffInfoString(),
+			ctx.ToBackoffReasonString(),
 		)
 	})
 
@@ -1246,7 +1246,7 @@ func TestRPCContextString(t *testing.T) {
 		}
 
 		require.Contains(t, ctx.String(), ", proxy store id: 2, proxy addr: tikv-2")
-		require.Contains(t, ctx.BackoffInfoString(), ", proxy store id: 2, proxy addr: tikv-2")
+		require.Contains(t, ctx.ToBackoffReasonString(), ", proxy store id: 2, proxy addr: tikv-2")
 	})
 }
 
@@ -1259,8 +1259,8 @@ func TestBackoffErrWithRPCContext(t *testing.T) {
 	}
 
 	err := newBackoffErrWithRPCContext("reason1", ctx)
-	require.Equal(t, "reason1, ctx: "+ctx.BackoffInfoString(), err.Error())
+	require.Equal(t, "reason1, ctx: "+ctx.ToBackoffReasonString(), err.Error())
 
 	err = newBackoffErrWithRPCContextAndAdvice("reason1", ctx, "advice1")
-	require.Equal(t, "reason1, ctx: "+ctx.BackoffInfoString()+", advice1", err.Error())
+	require.Equal(t, "reason1, ctx: "+ctx.ToBackoffReasonString()+", advice1", err.Error())
 }

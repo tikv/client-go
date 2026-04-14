@@ -856,8 +856,8 @@ func (c *RPCContext) String() string {
 	return res
 }
 
-// BackoffInfoString returns the string used for backoff error logs
-func (c *RPCContext) BackoffInfoString() string {
+// ToBackoffReasonString returns the reason string used for backoff error logs
+func (c *RPCContext) ToBackoffReasonString() string {
 	if c == nil {
 		return "<nil>"
 	}

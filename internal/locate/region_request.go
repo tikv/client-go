@@ -2426,11 +2426,11 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 func newBackoffErrWithRPCContext(reason string, ctx *RPCContext) error {
 	// use go errors instead of errors to avoid stack trace for this error,
 	// which is not used by backoff logic.
-	return fmt.Errorf("%s, ctx: %s", reason, ctx.BackoffInfoString())
+	return fmt.Errorf("%s, ctx: %s", reason, ctx.ToBackoffReasonString())
 }
 
 func newBackoffErrWithRPCContextAndAdvice(reason string, ctx *RPCContext, advice string) error {
 	// use go errors instead of errors to avoid stack trace for this error,
 	// which is not used by backoff logic.
-	return fmt.Errorf("%s, ctx: %s, %s", reason, ctx.BackoffInfoString(), advice)
+	return fmt.Errorf("%s, ctx: %s, %s", reason, ctx.ToBackoffReasonString(), advice)
 }
