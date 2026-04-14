@@ -53,4 +53,29 @@ func TestUpdateTiKVRUV2FromExecDetailsV2(t *testing.T) {
 	}, 0, 0)
 
 	require.InDelta(t, 38.64481334, ruDetails.TiKVRUV2(), 1e-9)
+	drained := ruDetails.DrainRUV2()
+	require.NotNil(t, drained)
+	require.Equal(t, uint64(43), drained.KvEngineCacheMiss)
+	require.Equal(t, uint64(53), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+	require.Equal(t, uint64(59), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTopN)
+	require.Equal(t, uint64(31), drained.WriteRpcCount)
+	require.Nil(t, ruDetails.DrainRUV2())
+}
+
+func TestUpdateTiKVRUV2FromExecDetailsV2PatchesReadRPCCountInRawRUV2(t *testing.T) {
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+	details := &kvrpcpb.ExecDetailsV2{
+		RuV2: &kvrpcpb.RUV2{
+			StorageProcessedKeysGet: 7,
+		},
+	}
+
+	UpdateTiKVRUV2FromExecDetailsV2(ctx, details, 1, 0)
+
+	require.Equal(t, uint64(1), details.GetRuV2().GetReadRpcCount())
+	drained := ruDetails.DrainRUV2()
+	require.NotNil(t, drained)
+	require.Equal(t, uint64(1), drained.ReadRpcCount)
+	require.Equal(t, uint64(7), drained.StorageProcessedKeysGet)
 }
