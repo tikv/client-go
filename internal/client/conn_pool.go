@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,8 +166,10 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		a.conns[i] = conn
 
 		if allowBatch {
+			connIdx := strconv.Itoa(i)
 			batchClient := &batchCommandsClient{
 				target:           a.target,
+				connIdx:          connIdx,
 				conn:             conn.ClientConn,
 				forwardedClients: make(map[string]*batchCommandsStream),
 				batched:          sync.Map{},
@@ -177,7 +180,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				eventListener:    eventListener,
-				metrics:          &a.batchConn.metrics,
+				metrics:          initBatchCommandsClientMetrics(a.target, connIdx),
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
@@ -214,9 +217,8 @@ func (a *connPool) Close() {
 	close(a.done)
 }
 
-func (a *connPool) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {
+func (a *connPool) getStoreMetrics(storeID uint64) *storeMetrics {
 	m := a.metrics.Load()
-	storeID := req.Context.GetPeer().GetStoreId()
 	if m == nil || m.storeID != storeID {
 		// The client selects a connPool by addr via RPCClient.getConnPool, so it's possible that the storeID of the
 		// selected connPool is not the same as the storeID in req.Context. We need to create a new storeMetrics for the
@@ -225,5 +227,5 @@ func (a *connPool) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response
 		m = newStoreMetrics(storeID)
 		a.metrics.Store(m)
 	}
-	m.updateRPCMetrics(req, resp, latency)
+	return m
 }

@@ -26,7 +26,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
-	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
@@ -89,15 +88,17 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	}
 
 	var (
-		entry = &batchCommandsEntry{
-			ctx:           ctx,
-			req:           batchReq,
-			cb:            cb,
-			forwardedHost: req.ForwardedHost,
-			canceled:      0,
-			err:           nil,
-			pri:           req.GetResourceControlContext().GetOverridePriority(),
-			start:         time.Now(),
+		storeMetrics = connPool.getStoreMetrics(req.Context.GetPeer().GetStoreId())
+		entry        = &batchCommandsEntry{
+			ctx:                 ctx,
+			req:                 batchReq,
+			cb:                  cb,
+			batchRequestMetrics: storeMetrics.batchReqStage,
+			forwardedHost:       req.ForwardedHost,
+			canceled:            0,
+			err:                 nil,
+			pri:                 req.GetResourceControlContext().GetOverridePriority(),
+			reqArriveAt:         time.Now(),
 		}
 		stop func() bool
 	)
@@ -108,19 +109,13 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			stop()
 		}
 
-		elapsed := time.Since(entry.start)
+		elapsed := time.Since(entry.reqArriveAt)
 
 		// batch client metrics
-		if sendLat := atomic.LoadInt64(&entry.sendLat); sendLat > 0 {
-			metrics.BatchRequestDurationSend.Observe(time.Duration(sendLat).Seconds())
-		}
-		if recvLat := atomic.LoadInt64(&entry.recvLat); recvLat > 0 {
-			metrics.BatchRequestDurationRecv.Observe(time.Duration(recvLat).Seconds())
-		}
-		metrics.BatchRequestDurationDone.Observe(elapsed.Seconds())
+		observeBatchRequestCompletion(entry, err)
 
 		// rpc metrics
-		connPool.updateRPCMetrics(req, resp, elapsed)
+		storeMetrics.updateRPCMetrics(req, resp, elapsed)
 		if resp != nil && !resourcecontrol.MakeRequestInfo(req).Bypass() {
 			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
 			config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
@@ -130,7 +125,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		if spanRPC != nil {
 			if util.TraceExecDetailsEnabled(ctx) {
 				if si := buildSpanInfoFromResp(resp); si != nil {
-					si.addTo(spanRPC, entry.start)
+					si.addTo(spanRPC, entry.reqArriveAt)
 				}
 			}
 			spanRPC.Finish()
@@ -148,6 +143,7 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	stop = context.AfterFunc(ctx, func() {
 		logutil.Logger(ctx).Debug("async send request cancelled (context done)", zap.String("to", addr), zap.Error(ctx.Err()))
 		entry.error(ctx.Err())
+		atomic.StoreInt32(&entry.canceled, 1)
 	})
 
 	batchConn := connPool.batchConn
