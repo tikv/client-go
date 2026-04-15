@@ -1223,6 +1223,8 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 	completedRespCount := c.metrics.completedResponseCounter(forwarded)
 	outdatedRespCount := c.metrics.outdatedResponseCounter(forwarded)
 
+	var lastCanceledEntryLogTime time.Time
+	logger := logutil.BgLogger().With(zap.String("target", c.target), zap.String("conn", c.connIdx), zap.String("forwardedHost", streamClient.forwardedHost))
 	epoch := atomic.LoadUint64(&c.epoch)
 	for {
 		recvLoopStartTime := time.Now()
@@ -1233,19 +1235,18 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		if recvDurVal > batchRecvTailLatThreshold {
 			recvDurTail.Observe(recvDurVal.Seconds())
 		}
-		if tidbRecvTimeNs, tikvSendTimeNs := respRecvTime.UnixNano(), int64(resp.GetTikvSendTimeNs()); tikvSendTimeNs > 0 && tidbRecvTimeNs-tikvSendTimeNs > batchRecvTailLatThreshold.Nanoseconds()/2 {
-			tikvSendTailLat.Observe(float64(tidbRecvTimeNs-tikvSendTimeNs) / 1e9)
+		estimatedOneWayDelay := time.Duration(0)
+		if tikvSendTimeNs := int64(resp.GetTikvSendTimeNs()); tikvSendTimeNs > 0 {
+			estimatedOneWayDelay = respRecvTime.Sub(time.Unix(0, tikvSendTimeNs))
+			if estimatedOneWayDelay > batchRecvTailLatThreshold/2 {
+				tikvSendTailLat.Observe(estimatedOneWayDelay.Seconds())
+			}
 		}
 		if err != nil {
 			if c.isStopped() {
 				return
 			}
-			logutil.BgLogger().Debug(
-				"batchRecvLoop fails when receiving, needs to reconnect",
-				zap.String("target", c.target),
-				zap.String("forwardedHost", streamClient.forwardedHost),
-				zap.Error(err),
-			)
+			logger.Debug("batchRecvLoop fails when receiving, needs to reconnect", zap.Error(err))
 
 			now := time.Now()
 			if stopped := c.recreateStreamingClient(err, streamClient, &epoch); stopped {
@@ -1277,7 +1278,10 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				// this maybe caused by batchCommandsClient#send meets ambiguous error that request has be sent to TiKV but still report a error.
 				// then TiKV will send response back though stream and reach here.
 				outdatedRespCount.Inc()
-				logutil.BgLogger().Warn("batchRecvLoop receives outdated response", zap.Uint64("requestID", requestID), zap.String("conn", c.connIdx), zap.String("forwardedHost", streamClient.forwardedHost))
+				logger.Warn("batchRecvLoop receives outdated response",
+					zap.Uint64("requestID", requestID),
+					zap.Duration("estimatedOneWayDelay", estimatedOneWayDelay),
+				)
 				continue
 			}
 			completedRespCount.Inc()
@@ -1285,7 +1289,6 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			batchState := entry.batchState.Load()
 			batchState.firstRespAfterSendStartNS.CompareAndSwap(0, max(respRecvTime.Sub(batchState.sendStartAt).Nanoseconds(), int64(1)))
 			entry.recvAfterReqArriveNS.CompareAndSwap(0, max(respRecvTime.Sub(entry.reqArriveAt).Nanoseconds(), int64(1)))
-			recvNS := entry.recvAfterReqArriveNS.Load()
 			if trace.IsEnabled() {
 				trace.Log(entry.ctx, "rpc", "received")
 			}
@@ -1294,8 +1297,23 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				// Put the response only if the request is not canceled.
 				entry.response(responses[i])
 			} else {
-				batchedNS, _, _, _ := loadBatchRequestProgress(entry)
+				batchedNS, _, _, recvNS := loadBatchRequestProgress(entry)
 				canceledEntryTailLat.Observe(float64(time.Duration(max(recvNS-batchedNS, int64(1)))) / 1e9)
+				if respRecvTime.Sub(lastCanceledEntryLogTime) > time.Second {
+					tidbDetails := writeBatchCommandsEntryProgress(nil, entry, respRecvTime).String()
+					tikvDetails := ""
+					resp, _ := tikvrpc.FromBatchCommandsResponse(responses[i])
+					if details := resp.GetExecDetailsV2().GetTimeDetailV2(); details != nil {
+						tikvDetails = details.String()
+					}
+					logger.Warn("batchRecvLoop receives response for canceled request",
+						zap.Uint64("requestID", requestID),
+						zap.Duration("estimatedOneWayDelay", estimatedOneWayDelay),
+						zap.String("tidbDetails", tidbDetails),
+						zap.String("tikvDetails", tikvDetails),
+					)
+					lastCanceledEntryLogTime = respRecvTime
+				}
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
