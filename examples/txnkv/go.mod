@@ -2,7 +2,14 @@ module txnkv
 
 go 1.23.0
 
+<<<<<<< HEAD
 require github.com/tikv/client-go/v2 v2.0.0
+=======
+require (
+	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
+	github.com/tikv/client-go/v2 v2.0.0
+)
+>>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 
 require (
 	github.com/VividCortex/ewma v1.2.0 // indirect
