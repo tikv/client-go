@@ -40,6 +40,7 @@ func UpdateTiKVRUV2FromExecDetailsV2(ctx context.Context, details *kvrpcpb.ExecD
 	if writeRPCCount != 0 {
 		ru.WriteRpcCount += uint64(writeRPCCount)
 	}
+	ruDetails.AddRUV2(ru)
 	var execInputs uint64
 	if inputs := ru.ExecutorInputs; inputs != nil {
 		execInputs += inputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan
