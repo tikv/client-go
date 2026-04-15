@@ -567,7 +567,7 @@ func batchRequestReceivedByTiKV(entry *batchCommandsEntry) bool {
 		return false
 	}
 	requestID := entry.requestID.Load()
-	return requestID > 0 && requestID < stream.maxRespReqID.Load()
+	return requestID > 0 && requestID <= stream.maxRespReqID.Load()
 }
 
 type batchConnMetrics struct {
