@@ -1267,6 +1267,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
+			zap.Stringer("lock", l),
 			zap.String("action", resolveAction),
 			zap.Uint64("txnStartTS", l.TxnID),
 			zap.Uint64("commitTS", status.CommitTS()),
@@ -1335,6 +1336,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			cleanRegions[loc.Region] = struct{}{}
 		}
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
+			zap.Stringer("lock", l),
 			zap.String("action", resolveAction),
 			zap.Uint64("txnStartTS", l.TxnID),
 			zap.Uint64("commitTS", lreq.CommitVersion),
