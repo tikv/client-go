@@ -334,6 +334,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	s.True(txn3.GetCommitter().IsTTLRunning(), "txn3's TTL manager should still be running after sleep")
 
 	lr := s.store.NewLockResolver()
+	defer lr.Close()
 	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
 	ttl, err := lr.ResolveLocks(bo, 0, locks)
 	s.Nil(err)
