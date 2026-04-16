@@ -39,6 +39,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // ResolvedCacheSize is max number of cached txn status.
@@ -47,6 +48,12 @@ const ResolvedCacheSize = 2048
 const (
 	getTxnStatusMaxBackoff     = 20000
 	asyncResolveLockMaxBackoff = 40000
+)
+
+var (
+	resolveLockLogBatchSize     = 20
+	resolveLockLogFlushInterval = 5 * time.Second
+	resolveLockLogChannelSize   = 1024
 )
 
 type storage interface {
@@ -79,10 +86,14 @@ type LockResolver struct {
 		meetLock func(locks []*Lock)
 	}
 
-	// LockResolver may have some goroutines resolving locks in the background.
+	// LockResolver may have some goroutines resolving locks or logging in the background.
 	// The Cancel function is to cancel these goroutines for passing goleak test.
-	asyncResolveCtx    context.Context
-	asyncResolveCancel func()
+	asyncCtx    context.Context
+	asyncCancel func()
+
+	asyncLogCh        chan resolveLockLogEntry
+	asyncLogRunning   sync.Once
+	missedResolveLogs atomic.Uint64
 }
 
 // ResolvingLock stands for current resolving locks' information
@@ -103,13 +114,14 @@ func NewLockResolver(store storage) *LockResolver {
 	r.mu.resolving = make(map[uint64][][]Lock)
 	r.mu.resolvingConcurrency = make(map[uint64]int)
 	r.mu.recentResolved = list.New()
-	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
+	r.asyncCtx, r.asyncCancel = context.WithCancel(context.Background())
+	r.asyncLogCh = make(chan resolveLockLogEntry, resolveLockLogChannelSize)
 	return r
 }
 
 // Close cancels all background goroutines.
 func (lr *LockResolver) Close() {
-	lr.asyncResolveCancel()
+	lr.asyncCancel()
 }
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
@@ -231,6 +243,156 @@ func NewLock(l *kvrpcpb.LockInfo) *Lock {
 		UseAsyncCommit:  l.UseAsyncCommit,
 		LockForUpdateTS: l.LockForUpdateTs,
 		MinCommitTS:     l.MinCommitTs,
+	}
+}
+
+type resolveLockLogEntry struct {
+	resolveType              string
+	lock                     Lock
+	action                   string
+	txnStartTS               uint64
+	commitTS                 uint64
+	forUpdateTS              uint64
+	regionID                 uint64
+	regionResolve            bool
+	resolvedByCheckTxnStatus bool
+}
+
+func (e resolveLockLogEntry) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddString("resolveType", e.resolveType)
+	enc.AddString("lock", e.lock.String())
+	enc.AddString("action", e.action)
+	enc.AddUint64("txnStartTS", e.txnStartTS)
+	if e.commitTS > 0 {
+		enc.AddUint64("commitTS", e.commitTS)
+	}
+	if e.forUpdateTS > 0 {
+		enc.AddUint64("forUpdateTS", e.forUpdateTS)
+	}
+	if e.regionID > 0 {
+		enc.AddUint64("regionID", e.regionID)
+	}
+	enc.AddBool("regionResolve", e.regionResolve)
+	enc.AddBool("resolvedByCheckTxnStatus", e.resolvedByCheckTxnStatus)
+	return nil
+}
+
+type resolveLockLogEntries []resolveLockLogEntry
+
+func (entries resolveLockLogEntries) MarshalLogArray(enc zapcore.ArrayEncoder) error {
+	for _, entry := range entries {
+		if err := enc.AppendObject(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (lr *LockResolver) recordResolveLockLogEntry(entry resolveLockLogEntry) {
+	if lr.asyncCtx.Err() != nil {
+		return
+	}
+
+	lr.asyncLogRunning.Do(func() {
+		go lr.collectResolveLockLogsLoop()
+	})
+
+	select {
+	case lr.asyncLogCh <- entry:
+	default:
+		lr.missedResolveLogs.Add(1)
+	}
+}
+
+func (lr *LockResolver) recordResolveLock(
+	l *Lock,
+	resolveAction string,
+	commitTS uint64,
+	regionID uint64,
+	resolveLite bool,
+	resolvedByCheckTxnStatus bool,
+) {
+	lr.recordResolveLockLogEntry(resolveLockLogEntry{
+		resolveType:              l.LockType.String(),
+		lock:                     *l,
+		action:                   resolveAction,
+		txnStartTS:               l.TxnID,
+		commitTS:                 commitTS,
+		regionID:                 regionID,
+		regionResolve:            !resolveLite,
+		resolvedByCheckTxnStatus: resolvedByCheckTxnStatus,
+	})
+}
+
+func (lr *LockResolver) recordResolvePessimisticLock(
+	l *Lock,
+	forUpdateTS uint64,
+	regionResolve bool,
+	resolvedByCheckTxnStatus bool,
+) {
+	lr.recordResolveLockLogEntry(resolveLockLogEntry{
+		resolveType:              l.LockType.String(),
+		lock:                     *l,
+		action:                   "rollback",
+		txnStartTS:               l.TxnID,
+		forUpdateTS:              forUpdateTS,
+		regionResolve:            regionResolve,
+		resolvedByCheckTxnStatus: resolvedByCheckTxnStatus,
+	})
+}
+
+func (lr *LockResolver) collectResolveLockLogsLoop() {
+	ticker := time.NewTicker(resolveLockLogFlushInterval)
+	defer ticker.Stop()
+
+	batch := make(resolveLockLogEntries, 0, resolveLockLogBatchSize)
+	flushLogs := func() {
+		if missed := lr.missedResolveLogs.Swap(0); missed > 0 {
+			logutil.BgLogger().Warn(
+				"missed resolve lock logs due to log channel full, some resolve lock operations may not be logged",
+				zap.Uint64("missed", missed),
+			)
+		}
+
+		if len(batch) > 0 {
+			logutil.BgLogger().Info(
+				"txn resolve locks",
+				zap.Int("count", len(batch)),
+				zap.Array("resolve", batch),
+			)
+			batch = batch[:0]
+		}
+	}
+
+	appendEntry := func(entry resolveLockLogEntry) {
+		batch = append(batch, entry)
+		if len(batch) >= cap(batch) {
+			flushLogs()
+		}
+	}
+
+	defer func() {
+		// flush channels
+		for {
+			select {
+			case entry := <-lr.asyncLogCh:
+				appendEntry(entry)
+			default:
+				flushLogs()
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-lr.asyncCtx.Done():
+			return
+		case entry := <-lr.asyncLogCh:
+			appendEntry(entry)
+		case <-ticker.C:
+			flushLogs()
+		}
 	}
 }
 
@@ -614,7 +776,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			}
 		} else {
 			if forRead {
-				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
+				asyncCtx := context.WithValue(lr.asyncCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
 				go func() {
 					// Pass an empty cleanRegions here to avoid data race and
@@ -1125,7 +1287,7 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 	}
 	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
 	if asyncResolveAll {
-		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
+		asyncBo := retry.NewBackoffer(lr.asyncCtx, asyncResolveLockMaxBackoff)
 		go func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
@@ -1266,14 +1428,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	resolveAction := resolveActionLabel(status)
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
-		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
-			zap.Stringer("lock", l),
-			zap.String("action", resolveAction),
-			zap.Uint64("txnStartTS", l.TxnID),
-			zap.Uint64("commitTS", status.CommitTS()),
-			zap.Bool("resolveLite", resolveLite),
-			zap.Bool("resolvedByCheckTxnStatus", true),
-		)
+		lr.recordResolveLock(l, resolveAction, status.CommitTS(), 0, resolveLite, true)
 		return nil
 	}
 	for {
@@ -1335,15 +1490,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if !resolveLite {
 			cleanRegions[loc.Region] = struct{}{}
 		}
-		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
-			zap.Stringer("lock", l),
-			zap.String("action", resolveAction),
-			zap.Uint64("txnStartTS", l.TxnID),
-			zap.Uint64("commitTS", lreq.CommitVersion),
-			zap.Uint64("regionID", loc.Region.GetID()),
-			zap.Bool("resolveLite", resolveLite),
-			zap.Bool("resolvedByCheckTxnStatus", false),
-		)
+		lr.recordResolveLock(l, resolveAction, lreq.CommitVersion, loc.Region.GetID(), resolveLite, false)
 		return nil
 	}
 }
@@ -1357,12 +1504,7 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if bytes.Equal(l.Key, l.Primary) {
-		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock skipped rpc (resolved by check txn status)",
-			zap.String("action", "rollback"),
-			zap.Uint64("txnStartTS", l.TxnID),
-			zap.Bool("regionResolve", pessimisticRegionResolve),
-			zap.Bool("resolvedByCheckTxnStatus", true),
-		)
+		lr.recordResolvePessimisticLock(l, l.LockForUpdateTS, pessimisticRegionResolve, true)
 		return nil
 	}
 	for {
@@ -1419,14 +1561,8 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 		if pessimisticRegionResolve && pessimisticCleanRegions != nil {
 			pessimisticCleanRegions[loc.Region] = struct{}{}
 		}
-		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock rpc finished",
-			zap.String("action", "rollback"),
-			zap.Uint64("txnStartTS", l.TxnID),
-			zap.Uint64("forUpdateTS", forUpdateTS),
-			zap.Uint64("regionID", loc.Region.GetID()),
-			zap.Bool("regionResolve", pessimisticRegionResolve),
-			zap.Bool("resolvedByCheckTxnStatus", false),
-		)
+
+		lr.recordResolvePessimisticLock(l, forUpdateTS, pessimisticRegionResolve, false)
 		return nil
 	}
 }

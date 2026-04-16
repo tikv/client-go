@@ -738,6 +738,7 @@ func (s *testCommitterSuite) TestPessimisticTTL() {
 	s.GreaterOrEqual(msBeforeLockExpired, int64(100))
 
 	lr := s.store.NewLockResolver()
+	defer lr.Close()
 	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 	status, err := lr.GetTxnStatus(bo, txn.StartTS(), key2, 0, txn.StartTS(), true, false, nil)
 	s.Nil(err)
