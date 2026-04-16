@@ -708,6 +708,8 @@ func createAsyncResolveLockSemaphore(limit int) chan struct{} {
 // by using a counting semaphore pattern.
 var globalAsyncResolveLockSemaphore = createAsyncResolveLockSemaphore(AsyncResolveLockSemaphoreLimit)
 
+var lastSemaphoreExhaustedLogTime atomic.Pointer[time.Time]
+
 // tryAsyncResolve tries to resolve a lock asynchronously.
 // It returns `true` if the async resolving process is launched successfully,
 // otherwise returns `false` which means the async resolving process is not accepted
@@ -721,6 +723,15 @@ func (lr *LockResolver) tryAsyncResolve(
 		// acquired a permit, the async resolve is accepted.
 	default:
 		// the semaphore is used up, the async resolve is not accepted.
+		// The WARN log is rate is limited to avoid flooding.
+		if tm := lastSemaphoreExhaustedLogTime.Load(); tm == nil || time.Since(*tm) > 10*time.Second {
+			now := time.Now()
+			if lastSemaphoreExhaustedLogTime.CompareAndSwap(tm, &now) {
+				logutil.BgLogger().Warn(
+					"too many concurrent async resolving locks, async resolve lock is rejected to avoid OOM",
+				)
+			}
+		}
 		return false
 	}
 
