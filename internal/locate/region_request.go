@@ -1014,6 +1014,17 @@ func (s *sendReqState) next() (done bool) {
 		}
 	}
 
+	if len(req.Context.TraceId) == 0 {
+		if trace.IsCategoryEnabled(trace.CategoryDevDebug) {
+			trace.TraceEvent(bo.GetCtx(), trace.CategoryDevDebug, "send request with trace_id missing",
+				zap.Stack("stack"))
+
+			// If trace ID is not set, it may indicate the caller is not using client-go properly.
+			// Print the stack trace to capture all those cases.
+			trace.CheckFlightRecorderDumpTrigger(bo.GetCtx(), "dump_trigger.suspicious_event.dev_debug", "send_request_trace_id_missing")
+		}
+	}
+
 	if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
 		if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
 			h := hook.(func(*tikvrpc.Request))
@@ -1164,7 +1175,6 @@ func (s *sendReqState) send() (canceled bool) {
 			fields := []zap.Field{
 				zap.Stringer("cmd", req.Type),
 				zap.Duration("latency", rpcDuration),
-				zap.Bool("success", s.vars.err == nil && s.vars.resp != nil),
 			}
 			if s.vars.err != nil {
 				fields = append(fields, zap.Error(s.vars.err))
