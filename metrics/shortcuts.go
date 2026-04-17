@@ -98,19 +98,28 @@ var (
 	TxnWriteSizeHistogramInternal    prometheus.Observer
 	TxnWriteSizeHistogramGeneral     prometheus.Observer
 
-	LockResolverCountWithBatchResolve             prometheus.Counter
-	LockResolverCountWithExpired                  prometheus.Counter
-	LockResolverCountWithNotExpired               prometheus.Counter
-	LockResolverCountWithWaitExpired              prometheus.Counter
-	LockResolverCountWithResolve                  prometheus.Counter
-	LockResolverCountWithResolveForWrite          prometheus.Counter
-	LockResolverCountWithResolveAsync             prometheus.Counter
-	LockResolverCountWithQueryTxnStatus           prometheus.Counter
-	LockResolverCountWithQueryTxnStatusCommitted  prometheus.Counter
-	LockResolverCountWithQueryTxnStatusRolledBack prometheus.Counter
-	LockResolverCountWithQueryCheckSecondaryLocks prometheus.Counter
-	LockResolverCountWithResolveLocks             prometheus.Counter
-	LockResolverCountWithResolveLockLite          prometheus.Counter
+	LockResolverCountWithBatchResolve                          prometheus.Counter
+	LockResolverCountWithExpired                               prometheus.Counter
+	LockResolverCountWithNotExpired                            prometheus.Counter
+	LockResolverCountWithWaitExpired                           prometheus.Counter
+	LockResolverCountWithResolve                               prometheus.Counter
+	LockResolverCountWithResolveForWrite                       prometheus.Counter
+	LockResolverCountWithResolveAsync                          prometheus.Counter
+	LockResolverCountWithQueryTxnStatus                        prometheus.Counter
+	LockResolverCountWithQueryTxnStatusCommitted               prometheus.Counter
+	LockResolverCountWithQueryTxnStatusRolledBack              prometheus.Counter
+	LockResolverCountWithQueryCheckSecondaryLocks              prometheus.Counter
+	LockResolverCountWithResolveLocks                          prometheus.Counter
+	LockResolverCountWithResolveLockLite                       prometheus.Counter
+	LockResolverCountWithAsyncResolveAsyncCommitFallback       prometheus.Counter
+	LockResolverCountWithReadAsyncResolveFallback              prometheus.Counter
+	LockResolverCountWithAsyncCheckSecondariesFallback         prometheus.Counter
+	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback prometheus.Counter
+
+	LockResolverAsyncRunningTasksForReadResolve              prometheus.Gauge
+	LockResolverAsyncRunningTasksForResolveAsyncCommit       prometheus.Gauge
+	LockResolverAsyncRunningTasksForCheckSecondaries         prometheus.Gauge
+	LockResolverAsyncRunningTasksForResolveAsyncCommitRegion prometheus.Gauge
 
 	RegionCacheCounterWithInvalidateRegionFromCacheOK prometheus.Counter
 	RegionCacheCounterWithSendFail                    prometheus.Counter
@@ -270,6 +279,15 @@ func initShortcuts() {
 	LockResolverCountWithQueryCheckSecondaryLocks = TiKVLockResolverCounter.WithLabelValues("query_check_secondary_locks")
 	LockResolverCountWithResolveLocks = TiKVLockResolverCounter.WithLabelValues("query_resolve_locks")
 	LockResolverCountWithResolveLockLite = TiKVLockResolverCounter.WithLabelValues("query_resolve_lock_lite")
+	LockResolverCountWithAsyncResolveAsyncCommitFallback = TiKVLockResolverCounter.WithLabelValues("async_resolve_async_commit_fallback")
+	LockResolverCountWithReadAsyncResolveFallback = TiKVLockResolverCounter.WithLabelValues("read_async_resolve_fallback")
+	LockResolverCountWithAsyncCheckSecondariesFallback = TiKVLockResolverCounter.WithLabelValues("async_check_secondaries_fallback")
+	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback = TiKVLockResolverCounter.WithLabelValues("async_resolve_async_commit_region_fallback")
+
+	LockResolverAsyncRunningTasksForReadResolve = TiKVLockResolverAsyncRunningTasks.WithLabelValues("read_resolve")
+	LockResolverAsyncRunningTasksForResolveAsyncCommit = TiKVLockResolverAsyncRunningTasks.WithLabelValues("resolve_async_commit")
+	LockResolverAsyncRunningTasksForCheckSecondaries = TiKVLockResolverAsyncRunningTasks.WithLabelValues("check_secondaries")
+	LockResolverAsyncRunningTasksForResolveAsyncCommitRegion = TiKVLockResolverAsyncRunningTasks.WithLabelValues("resolve_async_commit_region")
 
 	RegionCacheCounterWithInvalidateRegionFromCacheOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_region_from_cache", "ok")
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")

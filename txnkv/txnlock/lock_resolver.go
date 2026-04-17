@@ -26,6 +26,8 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -37,6 +39,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -61,6 +64,7 @@ type storage interface {
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
 	store                    storage
+	asyncResolvePool         *asyncResolveTaskPool
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
@@ -97,6 +101,7 @@ type ResolvingLock struct {
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
 		store:                    store,
+		asyncResolvePool:         newAsyncResolveTaskPool(globalAsyncResolveLockSemaphore),
 		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
@@ -110,6 +115,7 @@ func NewLockResolver(store storage) *LockResolver {
 // Close cancels all background goroutines.
 func (lr *LockResolver) Close() {
 	lr.asyncResolveCancel()
+	lr.asyncResolvePool.Close()
 }
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
@@ -613,10 +619,11 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolvePessimisticLock(bo, l, false, nil)
 			}
 		} else {
+			asyncResolve := false
 			if forRead {
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
-				go func() {
+				asyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
 					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
@@ -624,8 +631,12 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 					}
-				}()
-			} else {
+				}, metrics.LockResolverAsyncRunningTasksForReadResolve)
+				if !asyncResolve {
+					metrics.LockResolverCountWithReadAsyncResolveFallback.Inc()
+				}
+			}
+			if !asyncResolve {
 				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
 			}
 		}
@@ -698,6 +709,104 @@ func (lr *LockResolver) Resolving() []ResolvingLock {
 		}
 	}
 	return result
+}
+
+// AsyncResolveLockSemaphoreLimit is the max concurrency of async resolve lock.
+// It is set to a very large value to make sure it won't introduce some performance drawback in most cases,
+// and for some extreme cases it can also provide some protection to avoid OOM
+// by too many async resolve lock goroutines.
+const AsyncResolveLockSemaphoreLimit = 10000
+
+// globalAsyncResolveLockSemaphore provides the global limits of the concurrency for async resolve lock
+// by using a counting semaphore pattern.
+var globalAsyncResolveLockSemaphore = make(chan struct{}, AsyncResolveLockSemaphoreLimit)
+
+type asyncResolveTaskPool struct {
+	mu                            sync.RWMutex
+	semaphore                     chan struct{}
+	lastSemaphoreExhaustedLogTime atomic.Pointer[time.Time]
+	gp                            *gp.Pool
+	closed                        bool
+}
+
+func newAsyncResolveTaskPool(semaphore chan struct{}) *asyncResolveTaskPool {
+	return &asyncResolveTaskPool{
+		semaphore: semaphore,
+		gp:        gp.New(cap(semaphore), 10*time.Second),
+	}
+}
+
+// tryAsyncResolve tries to resolve a lock asynchronously.
+// It returns `true` if the async resolving process is launched successfully,
+// otherwise returns `false` which means the async resolving process is not accepted
+// because of too many concurrent async resolving processes.
+func (p *asyncResolveTaskPool) tryAsyncResolve(
+	resolveFn func(),
+	runningTasksMetric prometheus.Gauge,
+) bool {
+	if !p.acquirePermit() {
+		return false
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		p.releasePermit()
+		return false
+	}
+
+	p.gp.Go(func() {
+		runningTasksMetric.Inc()
+		defer func() {
+			runningTasksMetric.Dec()
+			p.releasePermit()
+			// stop holding resolveFn to release memory as soon as possible.
+			resolveFn = nil
+		}()
+		resolveFn()
+	})
+	return true
+}
+
+func (p *asyncResolveTaskPool) acquirePermit() bool {
+	select {
+	case p.semaphore <- struct{}{}:
+		// acquired a permit, the async resolve is accepted.
+		return true
+	default:
+		// the semaphore is used up, the async resolve is not accepted.
+		// The WARN log rate is limited to avoid flooding.
+		if tm := p.lastSemaphoreExhaustedLogTime.Load(); tm == nil || time.Since(*tm) > 10*time.Second {
+			now := time.Now()
+			if p.lastSemaphoreExhaustedLogTime.CompareAndSwap(tm, &now) {
+				logutil.BgLogger().Warn(
+					"too many concurrent async resolving locks, async resolve lock is rejected to avoid OOM",
+				)
+			}
+		}
+		return false
+	}
+}
+
+func (p *asyncResolveTaskPool) releasePermit() {
+	select {
+	case <-p.semaphore:
+	default:
+		logutil.BgLogger().Error("asyncResolveLockSemaphore channel should never be empty when releasing")
+		if intest.InTest {
+			panic("asyncResolveLockSemaphore channel should never be empty when releasing")
+		}
+	}
+}
+
+// Close closes the asyncResolveTaskPool
+func (p *asyncResolveTaskPool) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.closed {
+		p.closed = true
+		p.gp.Close()
+	}
 }
 
 type txnExpireTime struct {
@@ -1071,11 +1180,16 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		resolveBo, cancel := bo.Fork()
 		defer cancel()
 
-		go func() {
+		resolveFn := func() {
 			e := lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
 			lastForkedBo.Store(resolveBo)
 			errChan <- e
-		}()
+		}
+
+		if !lr.asyncResolvePool.tryAsyncResolve(resolveFn, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommitRegion) {
+			metrics.LockResolverCountWithAsyncResolveAsyncCommitRegionFallback.Inc()
+			resolveFn()
+		}
 	}
 
 	var errs []string
@@ -1124,16 +1238,22 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 		return status, nil
 	}
 	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
+	doSyncResolve := false
 	if asyncResolveAll {
 		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
-		go func() {
+		doSyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
 				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
 					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 			}
-		}()
-	} else {
+		}, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommit)
+		if !doSyncResolve {
+			metrics.LockResolverCountWithAsyncResolveAsyncCommitFallback.Inc()
+		}
+	}
+
+	if !doSyncResolve {
 		err := lr.resolveAsyncResolveData(bo, l, status, toResolveKeys)
 		if err != nil {
 			return TxnStatus{}, err
@@ -1165,11 +1285,16 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		checkBo, cancel := bo.Fork()
 		defer cancel()
 
-		go func() {
+		resolveFn := func() {
 			e := lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
 			lastForkedBo.Store(checkBo)
 			errChan <- e
-		}()
+		}
+
+		if !lr.asyncResolvePool.tryAsyncResolve(resolveFn, metrics.LockResolverAsyncRunningTasksForCheckSecondaries) {
+			metrics.LockResolverCountWithAsyncCheckSecondariesFallback.Inc()
+			resolveFn()
+		}
 	}
 
 	for range len(regions) {
