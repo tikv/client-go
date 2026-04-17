@@ -196,7 +196,6 @@ type KVTxn struct {
 	isPipelined     bool
 	pipelinedCancel context.CancelFunc
 
-<<<<<<< HEAD
 	// Used when this transaction is a replication transaction from upstream cluster.
 	// LWW (last write wins policy) is used to resolve conflicts between upstream and downstream.
 	// The commit TS of this transaction (downstream) must be greater than original CommitTS (upstream).
@@ -210,9 +209,8 @@ type KVTxn struct {
 		firstAttemptTS uint64
 		backoffCnt     int
 	}
-=======
+
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
->>>>>>> 743aec19 (Allow configuring the policy when prewrite encounters lock (#1501))
 }
 
 // NewTiKVTxn creates a new KVTxn.
