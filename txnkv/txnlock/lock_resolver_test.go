@@ -54,7 +54,7 @@ func TestLockResolverCache(t *testing.T) {
 }
 
 func TestTryAsyncResolve(t *testing.T) {
-	require.Equal(t, AsyncResolveLockSemaphoreLimit, len(globalAsyncResolveLockSemaphore))
+	require.Equal(t, AsyncResolveLockSemaphoreLimit, cap(globalAsyncResolveLockSemaphore))
 	mockMetric := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "test_try_async_resolve_running_tasks",
 		Help: "Test gauge for TestTryAsyncResolve",
@@ -65,16 +65,17 @@ func TestTryAsyncResolve(t *testing.T) {
 		require.Equal(t, v, m.GetGauge().GetValue())
 	}
 
+	// default lock resolver should use the global async resolve lock semaphore
 	lockResolver := NewLockResolver(nil)
-	assert.Equal(t, cap(lockResolver.asyncResolveSemaphore), cap(globalAsyncResolveLockSemaphore))
-	assert.Equal(t, len(lockResolver.asyncResolveSemaphore), len(globalAsyncResolveLockSemaphore))
+	assert.Equal(t, cap(lockResolver.asyncResolvePool.semaphore), cap(globalAsyncResolveLockSemaphore))
+	assert.Equal(t, 0, len(globalAsyncResolveLockSemaphore))
 
 	exitLatches := make([]chan struct{}, 0, 16)
 	tryAsync := func() (isAsync bool) {
 		enterLatch := make(chan struct{})
 		exitLatch := make(chan struct{})
 
-		isAsync = lockResolver.tryAsyncResolve(func() {
+		isAsync = lockResolver.asyncResolvePool.tryAsyncResolve(func() {
 			close(enterLatch)
 			<-exitLatch
 		}, mockMetric)
@@ -98,61 +99,62 @@ func TestTryAsyncResolve(t *testing.T) {
 				close(l)
 			}
 		}
+		lockResolver.Close()
 	}()
 
-	// mock a custom asyncResolveLockSemaphore with limit 5
-	lockResolver.asyncResolveSemaphore = createAsyncResolveLockSemaphore(5)
-	waitSemaphoreSize := func(cnt int) {
+	// close old pool and mock a custom asyncResolveLockSemaphore with limit 5
+	lockResolver.asyncResolvePool.Close()
+	lockResolver.asyncResolvePool = newAsyncResolveTaskPool(make(chan struct{}, 5))
+	waitSemaphoreSizeWithCheck := func(cnt int) {
 		assert.Eventually(t, func() bool {
-			return len(lockResolver.asyncResolveSemaphore) == cnt
+			return len(lockResolver.asyncResolvePool.semaphore) == cnt
 		}, 10*time.Second, 10*time.Millisecond)
+		checkMetricVal(float64(cnt))
 	}
 
 	// try to async resolve 3 times
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
-	waitSemaphoreSize(2)
-	checkMetricVal(3)
+	waitSemaphoreSizeWithCheck(3)
 
 	// exit 1 async goroutine
 	exitTask(1)
-	waitSemaphoreSize(3)
-
-	// check 2 async goroutines are still running and related metrics updated
-	checkMetricVal(2)
+	waitSemaphoreSizeWithCheck(2)
 
 	// try to async resolve 3 more times, semaphore is used up.
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
 	require.True(t, tryAsync())
-	waitSemaphoreSize(0)
-	checkMetricVal(5)
+	waitSemaphoreSizeWithCheck(5)
 
 	// more async task will be rejected
 	require.False(t, tryAsync())
 	require.False(t, tryAsync())
 	require.False(t, tryAsync())
-	waitSemaphoreSize(0)
-	time.Sleep(time.Millisecond)
+	waitSemaphoreSizeWithCheck(5)
+	// after some time, the metric should still be correct to test pending async tasks do not cause metric change.
+	time.Sleep(10 * time.Millisecond)
 	checkMetricVal(5)
 
 	// exit a task
 	exitTask(3)
-	waitSemaphoreSize(1)
-	checkMetricVal(4)
+	waitSemaphoreSizeWithCheck(4)
 
 	// a new task will be accepted again
 	require.True(t, tryAsync())
-	waitSemaphoreSize(0)
-	checkMetricVal(5)
+	waitSemaphoreSizeWithCheck(5)
 
-	// clean up
+	// exit all tasks
 	for i := range exitLatches {
 		if exitLatches[i] != nil {
 			exitTask(i)
 		}
 	}
-	waitSemaphoreSize(5)
-	checkMetricVal(0)
+	waitSemaphoreSizeWithCheck(0)
+
+	// close resolver, then all async tasks should be rejected
+	lockResolver.Close()
+	require.False(t, tryAsync())
+	waitSemaphoreSizeWithCheck(0)
 }
