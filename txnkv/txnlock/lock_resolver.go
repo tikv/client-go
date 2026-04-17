@@ -792,9 +792,9 @@ func (p *asyncResolveTaskPool) releasePermit() {
 	select {
 	case <-p.semaphore:
 	default:
-		logutil.BgLogger().Error("asyncResolveLockSemaphore channel should never be full when releasing")
+		logutil.BgLogger().Error("asyncResolveLockSemaphore channel should never be empty when releasing")
 		if intest.InTest {
-			panic("asyncResolveLockSemaphore channel should never be full when releasing")
+			panic("asyncResolveLockSemaphore channel should never be empty when releasing")
 		}
 	}
 }
