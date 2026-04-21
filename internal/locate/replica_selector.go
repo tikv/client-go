@@ -159,7 +159,9 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 		idleTarget := mixedStrategy.next(s)
 		if idleTarget != nil {
 			s.target = idleTarget
-			req.ReplicaRead = true
+			if !config.NextGen {
+				req.ReplicaRead = true
+			}
 		} else {
 			// No threshold if all peers are too busy, remove busy threshold and still use leader.
 			s.busyThreshold = 0
@@ -173,7 +175,9 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s)
 	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].hasFlag(deadlineErrUsingConfTimeoutFlag) {
-		req.ReplicaRead = true
+		if !config.NextGen {
+			req.ReplicaRead = true
+		}
 		req.StaleRead = false
 	}
 }
