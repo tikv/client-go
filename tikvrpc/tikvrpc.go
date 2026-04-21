@@ -267,16 +267,11 @@ type Request struct {
 	InputRequestSource string
 	// AccessLocationAttr indicates the request is sent to a different zone.
 	AccessLocation kv.AccessLocationType
-	// PredictedReadBytes is an optional hint (e.g. from a per-logical-scan
-	// EMA maintained in TiDB across multiple paging cop RPCs) predicting how
-	// many bytes this request will read. When non-zero, resource control
-	// uses it as the byte basis for RC paging pre-charge. Zero means the
-	// caller has no prediction (e.g. cold start) and the request is not
-	// pre-charged; it is still billed at settlement time by actual read
-	// bytes.
-	//
-	// This is a client-go-internal field, not carried in the proto; it is
-	// only consumed by the resource-control layer before the RPC is sent.
+	// PredictedReadBytes is an optional caller-supplied estimate of this
+	// request's read bytes (e.g. from a TiDB per-scan EMA). When > 0, the
+	// resource-control layer uses it as the RC paging pre-charge basis;
+	// when 0, the request is not pre-charged and is billed by actual read
+	// bytes at settlement.
 	PredictedReadBytes uint64
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32
