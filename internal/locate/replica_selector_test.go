@@ -205,6 +205,21 @@ func TestNextGenReadFeaturesDisabled(t *testing.T) {
 	s.Nil(err)
 	s.NotNil(ctx)
 	s.Equal(s.leaderPeer, ctx.Peer.Id)
+
+	// Configurable-timeout retry on the leader should not flip the request back to replica-read in nextgen.
+	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	region, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	selector, err = newReplicaSelector(s.cache, region.Region, req)
+	s.Nil(err)
+	leaderIdx := selector.region.getStore().workTiKVIdx
+	selector.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	ctx, err = selector.next(s.bo, req)
+	s.Nil(err)
+	s.NotNil(ctx)
+	s.False(req.ReplicaRead)
+	s.False(req.StaleRead)
 }
 
 func TestReplicaSelectorCalculateScore(t *testing.T) {
