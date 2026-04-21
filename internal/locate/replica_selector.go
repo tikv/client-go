@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/kv"
@@ -55,6 +56,25 @@ func newReplicaSelector(
 	}
 	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 		WithPerferLeader()(&option)
+	}
+	if config.NextGen && !req.StaleRead {
+		// NextGen does not support replica read (non-stale-read follower read). Force leader-only.
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
+		req.BusyThresholdMs = 0
+		return &replicaSelector{
+			baseReplicaSelector: baseReplicaSelector{
+				regionCache:   regionCache,
+				region:        cachedRegion,
+				replicas:      replicas,
+				busyThreshold: 0,
+			},
+			replicaReadType: kv.ReplicaReadLeader,
+			isStaleRead:     req.StaleRead,
+			isReadOnlyReq:   isReadReq(req.Type),
+			option:          option,
+			target:          nil,
+			attempts:        0,
+		}, nil
 	}
 	return &replicaSelector{
 		baseReplicaSelector: baseReplicaSelector{
@@ -146,7 +166,9 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 		idleTarget := mixedStrategy.next(s)
 		if idleTarget != nil {
 			s.target = idleTarget
-			req.ReplicaRead = true
+			if !config.NextGen {
+				req.ReplicaRead = true
+			}
 		} else {
 			// No threshold if all peers are too busy, remove busy threshold and still use leader.
 			s.busyThreshold = 0
@@ -160,12 +182,19 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s)
 	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].hasFlag(deadlineErrUsingConfTimeoutFlag) {
-		req.ReplicaRead = true
-		req.StaleRead = false
+		if !config.NextGen {
+			req.ReplicaRead = true
+			req.StaleRead = false
+		}
 	}
 }
 
 func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
+	if config.NextGen && !s.isStaleRead {
+		// NextGen does not support replica read. Fallback to leader-only selection.
+		s.nextForReplicaReadLeader(req)
+		return
+	}
 	leaderIdx := s.region.getStore().workTiKVIdx
 	if s.isStaleRead && s.attempts == 2 {
 		// For stale read second retry, try leader by leader read.
@@ -197,6 +226,11 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 					// use replica read.
 					isStaleRead = false
 				}
+			}
+			if config.NextGen {
+				// In nextgen, replica read is not supported, so stale read should never
+				// fall back to replica read.
+				isStaleRead = true
 			}
 			if isStaleRead {
 				req.StaleRead = true

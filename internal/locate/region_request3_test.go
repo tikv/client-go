@@ -375,6 +375,9 @@ func AssertRPCCtxEqual(s *testRegionRequestToThreeStoresSuite, rpcCtx *RPCContex
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -429,6 +432,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -931,6 +937,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -1005,6 +1014,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadWithFlashbackInProgress() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -1045,6 +1057,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadWithFlashbackInProg
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	var leaderAddr string
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		// Returns error when accesses non-leader.
@@ -1434,6 +1449,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	key := []byte("key")
 	bo := retry.NewBackoffer(context.Background(), -1)
 
@@ -1602,6 +1620,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	s.onClosed = func() { SetRegionCacheTTLWithJitter(600, 60) }
 	SetRegionCacheTTLWithJitter(2, 0)
 
@@ -1645,6 +1666,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	readMetric := func(col prometheus.Collector) int {
 		ch := make(chan prometheus.Metric, 1)
 		col.Collect(ch)

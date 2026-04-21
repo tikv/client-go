@@ -148,6 +148,36 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(ctx)
 }
 
+func TestNextGenReplicaReadDisabled(t *testing.T) {
+	if !config.NextGen {
+		t.Skip("only runs under NextGen")
+	}
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Even when the request is created with follower read, NextGen should force leader-only.
+	for _, readType := range []kv.ReplicaReadType{kv.ReplicaReadFollower, kv.ReplicaReadMixed, kv.ReplicaReadLearner, kv.ReplicaReadPreferLeader} {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, readType, nil, kvrpcpb.Context{})
+		req.BusyThresholdMs = 100 // set a non-zero busy threshold to ensure it's cleared
+		region, err := s.cache.LocateKey(s.bo, []byte("a"))
+		s.Nil(err)
+		selector, err := newReplicaSelector(s.cache, region.Region, req)
+		s.Nil(err)
+		s.Equal(kv.ReplicaReadLeader, selector.replicaReadType)
+		s.Equal(time.Duration(0), selector.busyThreshold)
+		s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+		s.False(req.ReplicaRead)
+		s.Equal(uint32(0), req.BusyThresholdMs)
+
+		ctx, err := selector.next(s.bo, req)
+		s.Nil(err)
+		s.NotNil(ctx)
+		s.Equal(s.leaderPeer, ctx.Peer.Id)
+		s.False(req.ReplicaRead)
+	}
+}
+
 func TestReplicaSelectorCalculateScore(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
@@ -324,6 +354,9 @@ func TestReplicaReadAccessPathByCaseUsingAsyncAPI(t *testing.T) {
 }
 
 func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
 	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
@@ -763,6 +796,9 @@ func TestReplicaReadAccessPathByCase2UsingAsyncAPI(t *testing.T) {
 }
 
 func testReplicaReadAccessPathByCase2(s *testReplicaSelectorSuite) {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	// Following cases are found by other test, careful.
 	ca := replicaSelectorAccessPathCase{
@@ -1042,6 +1078,9 @@ func TestReplicaReadAccessPathByBasicCaseUsingAsyncAPI(t *testing.T) {
 }
 
 func testReplicaReadAccessPathByBasicCase(s *testReplicaSelectorSuite) {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	retryableErrors := []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
 	noRetryErrors := []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RaftEntryTooLargeErr, RecoveryInProgressErr, FlashbackNotPreparedErr, IsWitnessErr, MismatchPeerIdErr, BucketVersionNotMatchErr}
 	for _, reqType := range []tikvrpc.CmdType{tikvrpc.CmdGet, tikvrpc.CmdPrewrite} {
@@ -1546,6 +1585,9 @@ func TestReplicaReadAccessPathByFollowerCaseUsingAsyncAPI(t *testing.T) {
 }
 
 func testReplicaReadAccessPathByFollowerCase(s *testReplicaSelectorSuite) {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
@@ -1661,6 +1703,9 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCaseUsingAsyncAPI(t *testing
 }
 
 func testReplicaReadAccessPathByMixedAndPreferLeaderCase(s *testReplicaSelectorSuite) {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	var ca replicaSelectorAccessPathCase
 	// since leader in store1, so ReplicaReadMixed and ReplicaReadPreferLeader will have the same access path.
@@ -1909,6 +1954,10 @@ func testReplicaReadAccessPathByMixedAndPreferLeaderCase(s *testReplicaSelectorS
 }
 
 func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
+	if config.NextGen {
+		// In nextgen, stale read never falls back to replica read, so access paths differ.
+		t.Skip("NextGen does not support replica read")
+	}
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -2257,6 +2306,9 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 }
 
 func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support replica read")
+	}
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -2368,6 +2420,9 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 }
 
 func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support replica read")
+	}
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -2629,6 +2684,9 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 }
 
 func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support replica read")
+	}
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -2660,6 +2718,9 @@ func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
 }
 
 func TestReplicaReadAvoidSlowStore(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support replica read")
+	}
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -3296,6 +3357,9 @@ func (s *testReplicaSelectorSuite) getRegion() *Region {
 }
 
 func TestTiKVClientReadTimeout(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support replica read")
+	}
 	if israce.RaceEnabled {
 		t.Skip("the test run with race will failed, so skip it")
 	}
