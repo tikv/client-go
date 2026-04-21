@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -569,7 +570,12 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 	_, successZone, successReadType := s.extractResp(resp)
 	find := false
 	if leaderZone {
-		s.Equal(r.leaderSuccessReadType, successReadType, msg)
+		expectedReadType := r.leaderSuccessReadType
+		if config.NextGen && expectedReadType == SuccessFollowerRead {
+			// In nextgen, stale read never falls back to replica read, so it stays as stale read.
+			expectedReadType = SuccessStaleRead
+		}
+		s.Equal(expectedReadType, successReadType, msg)
 		for _, z := range r.leaderSuccessReplica {
 			if z == successZone {
 				find = true
@@ -577,7 +583,12 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			}
 		}
 	} else {
-		s.Equal(r.followerSuccessReadType, successReadType)
+		expectedReadType := r.followerSuccessReadType
+		if config.NextGen && expectedReadType == SuccessFollowerRead {
+			// In nextgen, stale read never falls back to replica read, so it stays as stale read.
+			expectedReadType = SuccessStaleRead
+		}
+		s.Equal(expectedReadType, successReadType)
 		for _, z := range r.followerSuccessReplica {
 			if z == successZone {
 				find = true
