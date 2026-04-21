@@ -46,15 +46,26 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/errorpb"
-	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
+
+// MaxRecordBackoffErrCount is the maximum number of backoff errors to be recorded in the log.
+const MaxRecordBackoffErrCount = 3
+
+type backoffErr struct {
+	Reason string
+	Time   time.Time
+}
+
+// Error implements the error interface for backoffErr.
+func (e backoffErr) Error() string {
+	return fmt.Sprintf("%s at %s", e.Reason, e.Time.Format(time.RFC3339Nano))
+}
 
 // Backoffer is a utility for retrying queries.
 type Backoffer struct {
@@ -68,7 +79,14 @@ type Backoffer struct {
 	vars *kv.Variables
 	noop bool
 
-	errors         []error
+	// errors is a fixed-length array to record the backoff errors,
+	// and it records the last maximum MaxRecordBackoffErrCount errors.
+	// If errorsNum <= MaxRecordBackoffErrCount, only the errors[:errorsNum] are valid.
+	// Otherwise, if errorsNum > MaxRecordBackoffErrCount, errors can be regarded as a circular array,
+	// and errors[errorsNum % MaxRecordBackoffErrCount] is the first error located
+	errors    [MaxRecordBackoffErrCount]backoffErr
+	errorsNum int
+
 	configs        []*Config
 	backoffSleepMS map[string]int
 	backoffTimes   map[string]int
@@ -130,6 +148,30 @@ func (b *Backoffer) BackoffWithMaxSleepTxnLockFast(maxSleepMs int, err error) er
 	return b.BackoffWithCfgAndMaxSleep(cfg, maxSleepMs, err)
 }
 
+func (b *Backoffer) appendErr(err error) {
+	b.errors[b.errorsNum%MaxRecordBackoffErrCount] = backoffErr{
+		Reason: err.Error(),
+		Time:   time.Now(),
+	}
+	b.errorsNum++
+}
+
+// latestErrors is called when the backoff time exceeds the max sleep time,
+// and it returns the latest N (N <= MaxRecordBackoffErrCount) backoff errors for logging.
+// It should only be called when the backoff time exceeds the max sleep time to reduce the performance overhead,
+// because it may involve some array copy when the number of errors exceeds MaxRecordBackoffErrCount.
+func (b *Backoffer) latestErrors() []backoffErr {
+	if b.errorsNum <= len(b.errors) {
+		return b.errors[:b.errorsNum]
+	}
+	errs := make([]backoffErr, len(b.errors))
+	firstIndex := b.errorsNum % MaxRecordBackoffErrCount
+	for i := 0; i < len(b.errors); i++ {
+		errs[i] = b.errors[(firstIndex+i)%len(b.errors)]
+	}
+	return errs
+}
+
 // BackoffWithCfgAndMaxSleep sleeps a while base on the Config and records the error message
 // and never sleep more than maxSleepMs for each sleep.
 func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err error) error {
@@ -153,11 +195,8 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	if b.maxSleep > 0 && maxTimeExceeded {
 		longestSleepCfg, longestSleepTime := b.longestSleepCfg()
 		errMsg := fmt.Sprintf("%s backoffer.maxSleep %dms is exceeded, errors:", cfg.String(), b.maxSleep)
-		for i, err := range b.errors {
-			// Print only last 3 errors for non-DEBUG log levels.
-			if log.GetLevel() == zapcore.DebugLevel || i >= len(b.errors)-3 {
-				errMsg += "\n" + err.Error()
-			}
+		for _, err := range b.latestErrors() {
+			errMsg += "\n" + err.Error()
 		}
 		var backoffDetail bytes.Buffer
 		totalTimes := 0
@@ -181,7 +220,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		// Use the backoff type that contributes most to the timeout to generate a MySQL error.
 		return errors.WithStack(returnedErr)
 	}
-	b.errors = append(b.errors, errors.Errorf("%s at %s", err.Error(), time.Now().Format(time.RFC3339Nano)))
+	b.appendErr(err)
 	b.configs = append(b.configs, cfg)
 
 	// Lazy initialize.
@@ -264,7 +303,8 @@ func (b *Backoffer) Clone() *Backoffer {
 		totalSleep:     b.totalSleep,
 		excludedSleep:  b.excludedSleep,
 		vars:           b.vars,
-		errors:         append([]error{}, b.errors...),
+		errors:         b.errors,
+		errorsNum:      b.errorsNum,
 		configs:        append([]*Config{}, b.configs...),
 		backoffSleepMS: copyMapWithoutRecursive(b.backoffSleepMS),
 		backoffTimes:   copyMapWithoutRecursive(b.backoffTimes),
@@ -283,7 +323,8 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 		maxSleep:       b.maxSleep,
 		totalSleep:     b.totalSleep,
 		excludedSleep:  b.excludedSleep,
-		errors:         append([]error{}, b.errors...),
+		errors:         b.errors,
+		errorsNum:      b.errorsNum,
 		configs:        append([]*Config{}, b.configs...),
 		backoffSleepMS: copyMapWithoutRecursive(b.backoffSleepMS),
 		backoffTimes:   copyMapWithoutRecursive(b.backoffTimes),
@@ -303,6 +344,7 @@ func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
 			b.totalSleep = forked.totalSleep
 			b.excludedSleep = forked.excludedSleep
 			b.errors = forked.errors
+			b.errorsNum = forked.errorsNum
 			b.backoffSleepMS = forked.backoffSleepMS
 			b.backoffTimes = forked.backoffTimes
 			break
@@ -363,7 +405,7 @@ func (b *Backoffer) GetBackoffSleepMS() map[string]int {
 
 // ErrorsNum returns the number of errors.
 func (b *Backoffer) ErrorsNum() int {
-	return len(b.errors)
+	return b.errorsNum
 }
 
 // Reset resets the sleep state of the backoffer, so that following backoff
