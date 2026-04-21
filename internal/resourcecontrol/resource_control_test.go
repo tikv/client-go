@@ -49,6 +49,30 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.StoreID())
 }
 
+func TestMakeRequestInfoPredictedReadBytes(t *testing.T) {
+	// A read request may carry an optional PredictedReadBytes hint on
+	// tikvrpc.Request; MakeRequestInfo should propagate it to RequestInfo.
+	req := &tikvrpc.Request{
+		Req:                &kvrpcpb.BatchGetRequest{},
+		Context:            kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+		PredictedReadBytes: 256 * 1024,
+	}
+	info := MakeRequestInfo(req)
+	assert.False(t, info.IsWrite())
+	assert.Equal(t, uint64(256*1024), info.PredictedReadBytes(),
+		"predictedReadBytes should propagate from tikvrpc.Request")
+
+	// Without a hint, PredictedReadBytes defaults to 0 so PD skips
+	// pre-charge and bills at settlement time by actual read bytes only.
+	reqNoHint := &tikvrpc.Request{
+		Req:     &kvrpcpb.BatchGetRequest{},
+		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+	}
+	infoNoHint := MakeRequestInfo(reqNoHint)
+	assert.Equal(t, uint64(0), infoNoHint.PredictedReadBytes(),
+		"zero hint on the request means zero on RequestInfo")
+}
+
 func TestResponseInfoReadBytes(t *testing.T) {
 	resp := &tikvrpc.Response{
 		Resp: &coprocessor.Response{
