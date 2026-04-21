@@ -254,6 +254,9 @@ func (s *testRegionCacheStaleReadSuite) setTimeout(id uint64) { //nolint: unused
 }
 
 func TestRegionCacheStaleRead(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support stale-read feature")
+	}
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	defer func() {
 		retry.BoTiKVServerBusy = originBoTiKVServerBusy
@@ -262,6 +265,9 @@ func TestRegionCacheStaleRead(t *testing.T) {
 }
 
 func TestRegionCacheStaleReadUsingAsyncAPI(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support stale-read feature")
+	}
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
 	defer func() {
@@ -570,12 +576,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 	_, successZone, successReadType := s.extractResp(resp)
 	find := false
 	if leaderZone {
-		expectedReadType := r.leaderSuccessReadType
-		if config.NextGen && expectedReadType == SuccessFollowerRead {
-			// In nextgen, stale read never falls back to replica read, so it stays as stale read.
-			expectedReadType = SuccessStaleRead
-		}
-		s.Equal(expectedReadType, successReadType, msg)
+		s.Equal(r.leaderSuccessReadType, successReadType, msg)
 		for _, z := range r.leaderSuccessReplica {
 			if z == successZone {
 				find = true
@@ -583,12 +584,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			}
 		}
 	} else {
-		expectedReadType := r.followerSuccessReadType
-		if config.NextGen && expectedReadType == SuccessFollowerRead {
-			// In nextgen, stale read never falls back to replica read, so it stays as stale read.
-			expectedReadType = SuccessStaleRead
-		}
-		s.Equal(expectedReadType, successReadType)
+		s.Equal(r.followerSuccessReadType, successReadType)
 		for _, z := range r.followerSuccessReplica {
 			if z == successZone {
 				find = true
