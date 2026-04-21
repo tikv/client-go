@@ -428,17 +428,17 @@ func (s *KVStore) runTxnSafePointUpdater() {
 	if _, e := util.EvalFailpoint("noBuiltInTxnSafePointUpdater"); e == nil {
 		return
 	}
-	d := pollTxnSafePointInterval
 	for {
 		select {
-		case now := <-time.After(d):
+		case now := <-time.After(pollTxnSafePointInterval):
 			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
-			if err == nil {
-				s.UpdateTxnSafePointCache(txnSafePoint, now)
-				d = pollTxnSafePointInterval
-			} else {
-				d = pollTxnSafePointQuickRepeatInterval
+			if err != nil {
+				// Intentionally ignore the error here. loadTxnSafePoint already logs it,
+				// and the updater retries on the next fixed poll interval to avoid
+				// potentially adding unnecessary load to PD.
+				continue
 			}
+			s.UpdateTxnSafePointCache(txnSafePoint, now)
 		case <-s.ctx.Done():
 			return
 		}
@@ -456,9 +456,7 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
-	var (
-		startTS uint64
-	)
+	var startTS uint64
 	if options.StartTS != nil {
 		startTS = *options.StartTS
 	} else {
