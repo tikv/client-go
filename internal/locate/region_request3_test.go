@@ -1138,6 +1138,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica-read or stale-read feature")
+	}
 	leaderAddr := ""
 	reqTargetAddrs := make(map[string]struct{})
 	s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
@@ -1227,6 +1230,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderRegionError() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica-read or stale-read feature")
+	}
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -1304,6 +1310,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestLogging() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica-read or stale-read feature")
+	}
 	leaderStore, _ := s.loadAndGetLeaderStore()
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
@@ -1383,6 +1392,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeout() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support stale-read feature")
+	}
 	var (
 		leaderAddr  string
 		leaderLabel []*metapb.StoreLabel

@@ -129,10 +129,20 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	selector, err = newReplicaSelector(s.cache, rc.VerID(), req)
 	s.Nil(err)
 	s.NotNil(selector)
-	for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
-		_, err := selector.next(s.bo, req)
-		s.Nil(err)
-		s.Equal(reqSource, selector.replicaType())
+	if config.NextGen {
+		s.False(req.StaleRead)
+		s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+		for i := 0; i < 4; i++ {
+			_, err := selector.next(s.bo, req)
+			s.Nil(err)
+			s.Equal("leader", selector.replicaType())
+		}
+	} else {
+		for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
+			_, err := selector.next(s.bo, req)
+			s.Nil(err)
+			s.Equal(reqSource, selector.replicaType())
+		}
 	}
 
 	rc = s.getRegion()
@@ -148,7 +158,7 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(ctx)
 }
 
-func TestNextGenReplicaReadDisabled(t *testing.T) {
+func TestNextGenReadFeaturesDisabled(t *testing.T) {
 	if !config.NextGen {
 		t.Skip("only runs under NextGen")
 	}
@@ -156,7 +166,7 @@ func TestNextGenReplicaReadDisabled(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
-	// Even when the request is created with follower read, NextGen should force leader-only.
+	// Even when the request is created with replica-read mode, NextGen should force leader-only.
 	for _, readType := range []kv.ReplicaReadType{kv.ReplicaReadFollower, kv.ReplicaReadMixed, kv.ReplicaReadLearner, kv.ReplicaReadPreferLeader} {
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, readType, nil, kvrpcpb.Context{})
 		req.BusyThresholdMs = 100 // set a non-zero busy threshold to ensure it's cleared
@@ -176,6 +186,25 @@ func TestNextGenReplicaReadDisabled(t *testing.T) {
 		s.Equal(s.leaderPeer, ctx.Peer.Id)
 		s.False(req.ReplicaRead)
 	}
+
+	// Stale-read feature should also be downgraded to ordinary leader read.
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
+	req.EnableStaleWithMixedReplicaRead()
+	req.BusyThresholdMs = 100
+	region, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	selector, err := newReplicaSelector(s.cache, region.Region, req)
+	s.Nil(err)
+	s.False(req.StaleRead)
+	s.Equal(kv.ReplicaReadLeader, selector.replicaReadType)
+	s.Equal(time.Duration(0), selector.busyThreshold)
+	s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+	s.False(req.ReplicaRead)
+	s.Equal(uint32(0), req.BusyThresholdMs)
+	ctx, err := selector.next(s.bo, req)
+	s.Nil(err)
+	s.NotNil(ctx)
+	s.Equal(s.leaderPeer, ctx.Peer.Id)
 }
 
 func TestReplicaSelectorCalculateScore(t *testing.T) {
@@ -273,7 +302,11 @@ func TestCanFastRetry(t *testing.T) {
 		_, err = selector.next(s.bo, req)
 		s.Nil(err)
 		selector.canFastRetry()
-		s.True(selector.canFastRetry())
+		if config.NextGen {
+			s.False(selector.canFastRetry())
+		} else {
+			s.True(selector.canFastRetry())
+		}
 	}
 
 	// Test for leader read.
