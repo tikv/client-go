@@ -1794,12 +1794,12 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	if ctx.Store != nil && ctx.Store.StoreType().IsTiFlashRelatedType() {
 		err = bo.Backoff(
 			retry.BoTiFlashRPC,
-			errors.Errorf("send tiflash request error: %v, ctx: %v, try next peer later", err, ctx),
+			newBackoffErrWithRPCContextAndAdvice(fmt.Sprintf("send tiflash request error: %v", err), ctx, "try next peer later"),
 		)
 	} else {
 		err = bo.Backoff(
 			retry.BoTiKVRPC,
-			errors.Errorf("send tikv request error: %v, ctx: %v, try next peer later", err, ctx),
+			newBackoffErrWithRPCContextAndAdvice(fmt.Sprintf("send tikv request error: %v", err), ctx, "try next peer later"),
 		)
 	}
 	return err
@@ -1961,7 +1961,7 @@ func (s *RegionRequestSender) onRegionError(
 			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
 			if err = bo.Backoff(
 				retry.BoRegionScheduling,
-				errors.Errorf("not leader: %v, ctx: %v", notLeader, ctx),
+				newBackoffErrWithRPCContext(fmt.Sprintf("not leader: %v", notLeader), ctx),
 			); err != nil {
 				return false, err
 			}
@@ -1977,7 +1977,7 @@ func (s *RegionRequestSender) onRegionError(
 	if diskFull := regionErr.GetDiskFull(); diskFull != nil {
 		if err = bo.Backoff(
 			retry.BoTiKVDiskFull,
-			errors.Errorf("tikv disk full: %v ctx: %v", diskFull.String(), ctx.String()),
+			newBackoffErrWithRPCContext(fmt.Sprintf("tikv disk full: %v", diskFull.String()), ctx),
 		); err != nil {
 			return false, nil
 		}
@@ -1987,7 +1987,7 @@ func (s *RegionRequestSender) onRegionError(
 	if regionErr.GetRecoveryInProgress() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `RecoveryInProgress`", zap.Stringer("ctx", ctx))
-		err = bo.Backoff(retry.BoRegionRecoveryInProgress, errors.Errorf("region recovery in progress, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoRegionRecoveryInProgress, newBackoffErrWithRPCContext("region recovery in progress", ctx))
 		if err != nil {
 			return false, err
 		}
@@ -1997,7 +1997,7 @@ func (s *RegionRequestSender) onRegionError(
 	if regionErr.GetIsWitness() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `IsWitness`", zap.Stringer("ctx", ctx))
-		err = bo.Backoff(retry.BoIsWitness, errors.Errorf("is witness, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoIsWitness, newBackoffErrWithRPCContext("is witness", ctx))
 		if err != nil {
 			return false, err
 		}
@@ -2093,9 +2093,9 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("ctx", ctx),
 		)
 		if ctx != nil && ctx.Store != nil && ctx.Store.StoreType().IsTiFlashRelatedType() {
-			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
+			err = bo.Backoff(retry.BoTiFlashServerBusy, newBackoffErrWithRPCContext("server is busy", ctx))
 		} else {
-			err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
+			err = bo.Backoff(retry.BoTiKVServerBusy, newBackoffErrWithRPCContext("server is busy", ctx))
 		}
 		if err != nil {
 			return false, err
@@ -2112,7 +2112,7 @@ func (s *RegionRequestSender) onRegionError(
 			// Needn't backoff because the new leader should be elected soon
 			// and the replicaSelector will try the next peer.
 		} else {
-			err = bo.Backoff(retry.BoStaleCmd, errors.Errorf("stale command, ctx: %v", ctx))
+			err = bo.Backoff(retry.BoStaleCmd, newBackoffErrWithRPCContext("stale command", ctx))
 			if err != nil {
 				return false, err
 			}
@@ -2142,7 +2142,7 @@ func (s *RegionRequestSender) onRegionError(
 
 	if regionErr.GetMaxTimestampNotSynced() != nil {
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `MaxTimestampNotSynced`", zap.Stringer("ctx", ctx))
-		err = bo.Backoff(retry.BoMaxTsNotSynced, errors.Errorf("max timestamp not synced, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoMaxTsNotSynced, newBackoffErrWithRPCContext("max timestamp not synced", ctx))
 		if err != nil {
 			return false, err
 		}
@@ -2173,7 +2173,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("ctx", ctx),
 		)
 		// The region can't provide service until split or merge finished, so backoff.
-		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("read index not ready, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("read index not ready", ctx))
 		if err != nil {
 			return false, err
 		}
@@ -2183,7 +2183,7 @@ func (s *RegionRequestSender) onRegionError(
 	if regionErr.GetProposalInMergingMode() != nil {
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `ProposalInMergingMode`", zap.Stringer("ctx", ctx))
 		// The region is merging and it can't provide service until merge finished, so backoff.
-		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("region is merging, ctx: %v", ctx))
+		err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("region is merging", ctx))
 		if err != nil {
 			return false, err
 		}
@@ -2427,4 +2427,16 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 		}
 	}
 	return
+}
+
+func newBackoffErrWithRPCContext(reason string, ctx *RPCContext) error {
+	// use go errors instead of errors to avoid stack trace for this error,
+	// which is not used by backoff logic.
+	return fmt.Errorf("%s, ctx: %s", reason, ctx.ToBackoffReasonString())
+}
+
+func newBackoffErrWithRPCContextAndAdvice(reason string, ctx *RPCContext, advice string) error {
+	// use go errors instead of errors to avoid stack trace for this error,
+	// which is not used by backoff logic.
+	return fmt.Errorf("%s, ctx: %s, %s", reason, ctx.ToBackoffReasonString(), advice)
 }
