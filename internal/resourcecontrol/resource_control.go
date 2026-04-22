@@ -38,10 +38,8 @@ type RequestInfo struct {
 	replicaNumber int64
 	requestSize   uint64
 	accessType    controller.AccessLocationType
-	// predictedReadBytes is an optional learned estimate (e.g. from a
-	// per-logical-scan EMA in TiDB) of how many bytes this request will
-	// read. When > 0, PD's resource control uses it as the byte basis for
-	// RC paging pre-charge.
+	// predictedReadBytes is an optional caller-supplied read-bytes
+	// estimate; when > 0 it is the basis for RC paging pre-charge.
 	predictedReadBytes uint64
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
@@ -92,15 +90,11 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
 		return &RequestInfo{
-			writeBytes:  -1,
-			storeID:     storeID,
-			bypass:      bypass,
-			requestSize: uint64(req.GetSize()),
-			accessType:  toPDAccessLocationType(req.AccessLocation),
-			// PredictedReadBytes is a client-go-internal hint set by the
-			// caller (e.g. TiDB) before the RPC is dispatched; the resource
-			// control layer uses it as the byte basis for RC paging
-			// pre-charge when non-zero.
+			writeBytes:         -1,
+			storeID:            storeID,
+			bypass:             bypass,
+			requestSize:        uint64(req.GetSize()),
+			accessType:         toPDAccessLocationType(req.AccessLocation),
 			predictedReadBytes: req.PredictedReadBytes,
 		}
 	}
@@ -165,13 +159,8 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
 }
 
-// PredictedReadBytes returns an optional learned estimate of how many bytes
-// the request will read. When > 0, PD's resource control uses this as the
-// byte basis for RC paging pre-charge; when zero the request is not
-// pre-charged and is billed at settlement time by actual read bytes only.
-//
-// This satisfies the optional predictedReadBytesProvider interface on
-// PD's controller.RequestInfo side via duck-typing.
+// PredictedReadBytes satisfies PD's optional predictedReadBytesProvider
+// interface via duck-typing.
 func (req *RequestInfo) PredictedReadBytes() uint64 {
 	return req.predictedReadBytes
 }
