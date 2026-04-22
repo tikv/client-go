@@ -159,8 +159,8 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
 }
 
-// PredictedReadBytes satisfies PD's optional predictedReadBytesProvider
-// interface via duck-typing.
+// PredictedReadBytes implements PD's controller.RequestInfo interface,
+// supplying the read-bytes hint used for RC paging pre-charge.
 func (req *RequestInfo) PredictedReadBytes() uint64 {
 	return req.predictedReadBytes
 }
