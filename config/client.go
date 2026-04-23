@@ -145,7 +145,7 @@ type RUV2TiKVConfig struct {
 // Keep RUScale and the per-counter weights in sync with that fitting procedure when updating them.
 func DefaultRUV2TiKVConfig() RUV2TiKVConfig {
 	return RUV2TiKVConfig{
-		RUScale: 1.40,
+		RUScale: 2.10,
 
 		TiKVKVEngineCacheMiss:             0.45975389,
 		ResourceManagerWriteCntTiKV:       0.09642181,
