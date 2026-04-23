@@ -58,6 +58,51 @@ import (
 	"go.uber.org/zap"
 )
 
+// MaxExecTimeExceededSignal represents the signal value for max_execution_time exceeded errors.
+// This must match the value of MaxExecTimeExceeded in TiDB's sqlkiller package.
+const MaxExecTimeExceededSignal uint32 = 2
+
+// checkMaxExecutionTimeExceeded checks if the max_execution_time deadline has been exceeded.
+// Returns an error if exceeded, nil otherwise.
+func checkMaxExecutionTimeExceeded(lockCtx *kv.LockCtx, now time.Time) error {
+	if !lockCtx.MaxExecutionDeadline.IsZero() && now.After(lockCtx.MaxExecutionDeadline) {
+		return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: MaxExecTimeExceededSignal})
+	}
+	return nil
+}
+
+// calculateEffectiveWaitTime calculates the effective timeout considering both lockWaitTime and max_execution_time.
+// Returns the minimum timeout that should be applied, or kv.LockAlwaysWait if no timeout constraints apply.
+func calculateEffectiveWaitTime(lockCtx *kv.LockCtx, lockWaitTime int64, lockWaitStartTime time.Time, now time.Time) int64 {
+	if lockWaitTime == kv.LockNoWait || lockWaitTime <= 0 {
+		return kv.LockNoWait
+	}
+
+	effectiveTimeout := lockWaitTime
+
+	// Consider lockWaitTime if set
+	if lockWaitTime > 0 && lockWaitTime != kv.LockAlwaysWait {
+		lockTimeLeft := lockWaitTime - (now.Sub(lockWaitStartTime)).Milliseconds()
+		if lockTimeLeft <= 0 {
+			return kv.LockNoWait
+		}
+		effectiveTimeout = lockTimeLeft
+	}
+
+	// Consider max_execution_time deadline
+	if !lockCtx.MaxExecutionDeadline.IsZero() {
+		maxExecTimeLeft := lockCtx.MaxExecutionDeadline.Sub(now).Milliseconds()
+		if maxExecTimeLeft <= 0 {
+			return kv.LockNoWait
+		}
+		if effectiveTimeout == kv.LockAlwaysWait || maxExecTimeLeft < effectiveTimeout {
+			effectiveTimeout = maxExecTimeLeft
+		}
+	}
+
+	return effectiveTimeout
+}
+
 type actionPessimisticLock struct {
 	*kv.LockCtx
 	wakeUpMode kvrpcpb.PessimisticLockWakeUpMode
@@ -105,10 +150,14 @@ func (action actionPessimisticLock) handleSingleBatch(
 ) error {
 	convertMutationsToPb := func(committerMutations CommitterMutations) []*kvrpcpb.Mutation {
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
+		op := kvrpcpb.Op_PessimisticLock
+		if action.InShareMode {
+			op = kvrpcpb.Op_SharedPessimisticLock
+		}
 		c.txn.GetMemBuffer().RLock()
 		for i := 0; i < committerMutations.Len(); i++ {
 			mut := &kvrpcpb.Mutation{
-				Op:  kvrpcpb.Op_PessimisticLock,
+				Op:  op,
 				Key: committerMutations.GetKey(i),
 			}
 			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) {
@@ -138,7 +187,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		}, kvrpcpb.Context{
 			Priority:               c.priority,
 			SyncLog:                c.syncLog,
-			ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
+			ResourceGroupTag:       action.ResourceGroupTag,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			RequestSource:          c.txn.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -146,8 +195,8 @@ func (action actionPessimisticLock) handleSingleBatch(
 			},
 		},
 	)
-	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
-		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
+	if action.ResourceGroupTag == nil && action.ResourceGroupTagger != nil {
+		req.ResourceGroupTag = action.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
 	lockWaitStartTime := action.WaitStartTime
 	diagCtx := diagnosticContext{}
@@ -157,15 +206,11 @@ func (action actionPessimisticLock) handleSingleBatch(
 		}
 	}()
 	for {
-		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
-		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
-			timeLeft := action.LockWaitTime() - (time.Since(lockWaitStartTime)).Milliseconds()
-			if timeLeft <= 0 {
-				req.PessimisticLock().WaitTimeout = kv.LockNoWait
-			} else {
-				req.PessimisticLock().WaitTimeout = timeLeft
-			}
+		now := time.Now()
+		if err := checkMaxExecutionTimeExceeded(action.LockCtx, now); err != nil {
+			return err
 		}
+		req.PessimisticLock().WaitTimeout = calculateEffectiveWaitTime(action.LockCtx, action.LockWaitTime(), lockWaitStartTime, now)
 		elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
 		ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
 		if _, err := util.EvalFailpoint("shortPessimisticLockTTL"); err == nil {
@@ -189,15 +234,16 @@ func (action actionPessimisticLock) handleSingleBatch(
 		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)
 		diagCtx.sender = sender
-		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(diagCtx.reqDuration))
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
+		if action.Stats != nil {
+			atomic.AddInt64(&action.Stats.LockRPCTime, int64(diagCtx.reqDuration))
+			atomic.AddInt64(&action.Stats.LockRPCCount, 1)
 		}
 		if err != nil {
 			return err
 		}
 
-		if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+		switch action.wakeUpMode {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal:
 			finished, err := action.handlePessimisticLockResponseNormalMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -205,7 +251,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			if finished {
 				return nil
 			}
-		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock:
 			finished, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -254,10 +300,24 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		// Do not resolve the lock if the lock was recently updated which indicates the txn holding the lock is
 		// much likely alive.
 		// This should only happen for wait timeout.
-		if lockInfo := keyErr.GetLocked(); lockInfo != nil &&
-			lockInfo.DurationToLastUpdateMs > 0 &&
-			lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
-			continue
+		lockInfo := keyErr.GetLocked()
+		if lockInfo != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+				for _, sharedLockInfo := range sharedLockInfos {
+					if sharedLockInfo.DurationToLastUpdateMs > 0 &&
+						sharedLockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+						continue
+					}
+					lock := txnlock.NewLock(sharedLockInfo)
+					locks = append(locks, lock)
+				}
+				// If there are shared locks, the wrapper lock is meaningless.
+				continue
+			}
+			if lockInfo.DurationToLastUpdateMs > 0 &&
+				lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+				continue
+			}
 		}
 
 		// Extract lock from key error
@@ -295,8 +355,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	keyErrs := lockResp.GetErrors()
 	if len(keyErrs) == 0 {
 
-		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(
+		if action.Stats != nil {
+			action.Stats.MergeReqDetails(
 				diagCtx.reqDuration,
 				batch.region.GetID(),
 				diagCtx.sender.GetStoreAddr(),
@@ -340,6 +400,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	if len(locks) == 0 {
 		return false, nil
 	}
+	if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+		return true, err
+	}
 
 	// Because we already waited on tikv, no need to Backoff here.
 	// tikv default will wait 3s(also the maximum wait value) when lock error occurs
@@ -354,8 +417,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		Locks:                    locks,
 		PessimisticRegionResolve: true,
 	}
-	if action.LockCtx.Stats != nil {
-		resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
+	if action.Stats != nil {
+		resolveLockOpts.Detail = &action.Stats.ResolveLock
 	}
 	resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 	if err != nil {
@@ -365,6 +428,11 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 	// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 	if resolveLockRes.TTL > 0 {
+		// Check max_execution_time deadline first
+		if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+			return true, err
+		}
+
 		if action.LockWaitTime() == kv.LockNoWait {
 			return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 		} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -394,6 +462,16 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
 	isMutationFailed := false
 	keyErrs := lockResp.GetErrors()
+
+	// the mutation will fail when it meets a shared lock
+	for _, keyErr := range keyErrs {
+		if lockInfo := keyErr.GetLocked(); lockInfo != nil {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+				isMutationFailed = true
+				break
+			}
+		}
+	}
 
 	// We only allow single key in ForceLock mode now.
 	if len(mutationsPb) > 1 || len(lockResp.Results) > 1 {
@@ -446,8 +524,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	}
 
 	if len(lockResp.Results) > 0 && !isMutationFailed {
-		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(
+		if action.Stats != nil {
+			action.Stats.MergeReqDetails(
 				diagCtx.reqDuration,
 				batch.region.GetID(),
 				diagCtx.sender.GetStoreAddr(),
@@ -467,6 +545,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 
 	if isMutationFailed {
 		if len(locks) > 0 {
+			if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+				return true, err
+			}
+
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 			if diagCtx.resolvingRecordToken == nil {
@@ -480,8 +562,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 				Locks:                    locks,
 				PessimisticRegionResolve: true,
 			}
-			if action.LockCtx.Stats != nil {
-				resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
+			if action.Stats != nil {
+				resolveLockOpts.Detail = &action.Stats.ResolveLock
 			}
 			resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 			if err != nil {
@@ -491,6 +573,11 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 			// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 			// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 			if resolveLockRes.TTL > 0 {
+				// Check max_execution_time deadline first
+				if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
+					return true, err
+				}
+
 				if action.LockWaitTime() == kv.LockNoWait {
 					return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 				} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -561,6 +648,12 @@ func (actionPessimisticRollback) handleSingleBatch(
 		}
 		return c.pessimisticRollbackMutations(bo, batch.mutations)
 	}
+	logutil.Logger(bo.GetCtx()).Debug("2PC pessimistic-rollback rpc finished",
+		zap.Uint64("txnStartTS", c.startTS),
+		zap.Uint64("forUpdateTS", forUpdateTS),
+		zap.Uint64("regionID", batch.region.GetID()),
+		zap.Int("keyCount", batch.mutations.Len()),
+	)
 	return nil
 }
 
@@ -578,14 +671,15 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(
 			// `return("delay,fail")`. Then they will be executed sequentially at once.
 			if v, ok := val.(string); ok {
 				for _, action := range strings.Split(v, ",") {
-					if action == "delay" {
+					switch action {
+					case "delay":
 						duration := time.Duration(rand.Int63n(int64(time.Second) * 5))
 						logutil.Logger(bo.GetCtx()).Info(
 							"[failpoint] injected delay at pessimistic lock",
 							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration),
 						)
 						time.Sleep(duration)
-					} else if action == "fail" {
+					case "fail":
 						logutil.Logger(bo.GetCtx()).Info(
 							"[failpoint] injected failure at pessimistic lock",
 							zap.Uint64("txnStartTS", c.startTS),

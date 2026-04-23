@@ -26,6 +26,8 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -35,7 +37,9 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/trace"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
@@ -60,6 +64,7 @@ type storage interface {
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
 	store                    storage
+	asyncResolvePool         *asyncResolveTaskPool
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
@@ -96,6 +101,7 @@ type ResolvingLock struct {
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
 		store:                    store,
+		asyncResolvePool:         newAsyncResolveTaskPool(globalAsyncResolveLockSemaphore),
 		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
@@ -109,6 +115,7 @@ func NewLockResolver(store storage) *LockResolver {
 // Close cancels all background goroutines.
 func (lr *LockResolver) Close() {
 	lr.asyncResolveCancel()
+	lr.asyncResolvePool.Close()
 }
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
@@ -198,6 +205,16 @@ type Lock struct {
 	MinCommitTS     uint64
 }
 
+func (l *Lock) IsPessimistic() bool {
+	return l.LockType == kvrpcpb.Op_PessimisticLock || l.LockType == kvrpcpb.Op_SharedPessimisticLock
+}
+
+// IsShared returns true if the lock is a shared lock wrapper.
+// Note that embedded locks can only be either pessimistic or prewrite locks.
+func (l *Lock) IsShared() bool {
+	return l.LockType == kvrpcpb.Op_SharedLock
+}
+
 func (l *Lock) String() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	buf.WriteString("key: ")
@@ -278,6 +295,11 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	for _, l := range expiredLocks {
 		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
 
+		if l.IsShared() {
+			logutil.Logger(bo.GetCtx()).Warn("cannot resolve a shared lock directly, should extract the inner locks and resolve them one by one", zap.Stack("stack"))
+			return false, errors.New("misuse of BatchResolveLocks: trying to resolve a shared lock directly")
+		}
+
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
 		}
@@ -289,7 +311,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			return false, err
 		}
 
-		if l.LockType == kvrpcpb.Op_PessimisticLock {
+		if l.IsPessimistic() {
 			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
 			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
 			// correctness if we always roll back them.
@@ -485,8 +507,9 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Unlock()
 }
 
-func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
+func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (result ResolveLockResult, err error) {
 	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve
+	util.EvalFailpoint("tryResolveLock")
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
 	}
@@ -496,6 +519,31 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			TTL: msBeforeTxnExpired.value(),
 		}, nil
 	}
+	if trace.IsCategoryEnabled(trace.CategoryTxnLockResolve) {
+		trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.start",
+			zap.Uint64("callerStartTS", callerStartTS),
+			zap.Int("lockCount", len(locks)),
+			zap.Bool("forRead", forRead),
+			zap.Bool("lite", lite))
+	}
+
+	// trace the results
+	defer func() {
+		if trace.IsCategoryEnabled(trace.CategoryTxnLockResolve) {
+			fields := []zap.Field{
+				zap.Uint64("callerStartTS", callerStartTS),
+				zap.Int("lockCount", len(locks)),
+				zap.Int64("ttl", result.TTL),
+				zap.Int("ignoredLocks", len(result.IgnoreLocks)),
+				zap.Int("accessibleLocks", len(result.AccessLocks)),
+			}
+			if err != nil {
+				fields = append(fields, zap.Error(err))
+			}
+			trace.TraceEvent(bo.GetCtx(), trace.CategoryTxnLockResolve, "resolve_locks.finish", fields...)
+		}
+	}()
+
 	metrics.LockResolverCountWithResolve.Inc()
 	// This is the origin resolve lock time.
 	// TODO(you06): record the more details and calculate the total time by calculating the sum of details.
@@ -515,7 +563,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
 
 		if _, ok := errors.Cause(err).(primaryMismatch); ok {
-			if l.LockType != kvrpcpb.Op_PessimisticLock {
+			if !l.IsPessimistic() {
 				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
 				return TxnStatus{}, err
 			}
@@ -558,7 +606,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			}
 			return status, err
 		}
-		if l.LockType == kvrpcpb.Op_PessimisticLock {
+		if l.IsPessimistic() {
 			// pessimistic locks don't block read so it needn't be async.
 			if pessimisticRegionResolve {
 				pessimisticCleanRegions, exists := pessimisticCleanTxns[l.TxnID]
@@ -571,10 +619,11 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolvePessimisticLock(bo, l, false, nil)
 			}
 		} else {
+			asyncResolve := false
 			if forRead {
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
-				go func() {
+				asyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
 					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
@@ -582,8 +631,12 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 					}
-				}()
-			} else {
+				}, metrics.LockResolverAsyncRunningTasksForReadResolve)
+				if !asyncResolve {
+					metrics.LockResolverCountWithReadAsyncResolveFallback.Inc()
+				}
+			}
+			if !asyncResolve {
 				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
 			}
 		}
@@ -592,6 +645,10 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 
 	var canIgnore, canAccess []uint64
 	for _, l := range locks {
+		if l.IsShared() {
+			logutil.Logger(bo.GetCtx()).Warn("cannot resolve a shared lock directly, should extract the inner locks and resolve them one by one", zap.Stack("stack"))
+			return ResolveLockResult{}, errors.New("misuse of resolveLocks: trying to resolve a shared lock directly")
+		}
 		status, err := resolve(l, false)
 		if err != nil {
 			msBeforeTxnExpired.update(0)
@@ -652,6 +709,104 @@ func (lr *LockResolver) Resolving() []ResolvingLock {
 		}
 	}
 	return result
+}
+
+// AsyncResolveLockSemaphoreLimit is the max concurrency of async resolve lock.
+// It is set to a very large value to make sure it won't introduce some performance drawback in most cases,
+// and for some extreme cases it can also provide some protection to avoid OOM
+// by too many async resolve lock goroutines.
+const AsyncResolveLockSemaphoreLimit = 10000
+
+// globalAsyncResolveLockSemaphore provides the global limits of the concurrency for async resolve lock
+// by using a counting semaphore pattern.
+var globalAsyncResolveLockSemaphore = make(chan struct{}, AsyncResolveLockSemaphoreLimit)
+
+type asyncResolveTaskPool struct {
+	mu                            sync.RWMutex
+	semaphore                     chan struct{}
+	lastSemaphoreExhaustedLogTime atomic.Pointer[time.Time]
+	gp                            *gp.Pool
+	closed                        bool
+}
+
+func newAsyncResolveTaskPool(semaphore chan struct{}) *asyncResolveTaskPool {
+	return &asyncResolveTaskPool{
+		semaphore: semaphore,
+		gp:        gp.New(cap(semaphore), 10*time.Second),
+	}
+}
+
+// tryAsyncResolve tries to resolve a lock asynchronously.
+// It returns `true` if the async resolving process is launched successfully,
+// otherwise returns `false` which means the async resolving process is not accepted
+// because of too many concurrent async resolving processes.
+func (p *asyncResolveTaskPool) tryAsyncResolve(
+	resolveFn func(),
+	runningTasksMetric prometheus.Gauge,
+) bool {
+	if !p.acquirePermit() {
+		return false
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		p.releasePermit()
+		return false
+	}
+
+	p.gp.Go(func() {
+		runningTasksMetric.Inc()
+		defer func() {
+			runningTasksMetric.Dec()
+			p.releasePermit()
+			// stop holding resolveFn to release memory as soon as possible.
+			resolveFn = nil
+		}()
+		resolveFn()
+	})
+	return true
+}
+
+func (p *asyncResolveTaskPool) acquirePermit() bool {
+	select {
+	case p.semaphore <- struct{}{}:
+		// acquired a permit, the async resolve is accepted.
+		return true
+	default:
+		// the semaphore is used up, the async resolve is not accepted.
+		// The WARN log rate is limited to avoid flooding.
+		if tm := p.lastSemaphoreExhaustedLogTime.Load(); tm == nil || time.Since(*tm) > 10*time.Second {
+			now := time.Now()
+			if p.lastSemaphoreExhaustedLogTime.CompareAndSwap(tm, &now) {
+				logutil.BgLogger().Warn(
+					"too many concurrent async resolving locks, async resolve lock is rejected to avoid OOM",
+				)
+			}
+		}
+		return false
+	}
+}
+
+func (p *asyncResolveTaskPool) releasePermit() {
+	select {
+	case <-p.semaphore:
+	default:
+		logutil.BgLogger().Error("asyncResolveLockSemaphore channel should never be empty when releasing")
+		if intest.InTest {
+			panic("asyncResolveLockSemaphore channel should never be empty when releasing")
+		}
+	}
+}
+
+// Close closes the asyncResolveTaskPool
+func (p *asyncResolveTaskPool) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.closed {
+		p.closed = true
+		p.gp.Close()
+	}
 }
 
 type txnExpireTime struct {
@@ -736,7 +891,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 				zap.Uint64("CallerStartTs", callerStartTS),
 				zap.Stringer("lock str", l),
 				zap.Stringer("status", status))
-			if l.LockType == kvrpcpb.Op_PessimisticLock {
+			if l.IsPessimistic() {
 				if _, err := util.EvalFailpoint("txnExpireRetTTL"); err == nil {
 					return TxnStatus{action: kvrpcpb.Action_LockNotExistDoNothing},
 						errors.New("error txn not found and lock expired")
@@ -751,7 +906,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 			// has no related information. There are possibilities that some other transactions do checkTxnStatus on these
 			// locks and they will be blocked ttl time, so let the transaction retries to do pessimistic lock if txn not found
 			// and the lock does not expire yet.
-			if l.LockType == kvrpcpb.Op_PessimisticLock {
+			if l.IsPessimistic() {
 				return TxnStatus{ttl: l.TTL}, nil
 			}
 		}
@@ -772,7 +927,7 @@ type txnNotFoundErr struct {
 }
 
 func (e txnNotFoundErr) Error() string {
-	return e.TxnNotFound.String()
+	return e.String()
 }
 
 type primaryMismatch struct {
@@ -803,7 +958,8 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	// 2.3 No lock -- pessimistic lock rollback, concurrence prewrite.
 
 	var status TxnStatus
-	resolvingPessimisticLock := lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_PessimisticLock
+
+	resolvingPessimisticLock := lockInfo != nil && lockInfo.IsPessimistic()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
 		LockTs:                   txnID,
@@ -1024,11 +1180,16 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		resolveBo, cancel := bo.Fork()
 		defer cancel()
 
-		go func() {
+		resolveFn := func() {
 			e := lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
 			lastForkedBo.Store(resolveBo)
 			errChan <- e
-		}()
+		}
+
+		if !lr.asyncResolvePool.tryAsyncResolve(resolveFn, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommitRegion) {
+			metrics.LockResolverCountWithAsyncResolveAsyncCommitRegionFallback.Inc()
+			resolveFn()
+		}
 	}
 
 	var errs []string
@@ -1077,16 +1238,22 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 		return status, nil
 	}
 	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
+	doSyncResolve := false
 	if asyncResolveAll {
 		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
-		go func() {
+		doSyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
 				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
 					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 			}
-		}()
-	} else {
+		}, metrics.LockResolverAsyncRunningTasksForResolveAsyncCommit)
+		if !doSyncResolve {
+			metrics.LockResolverCountWithAsyncResolveAsyncCommitFallback.Inc()
+		}
+	}
+
+	if !doSyncResolve {
 		err := lr.resolveAsyncResolveData(bo, l, status, toResolveKeys)
 		if err != nil {
 			return TxnStatus{}, err
@@ -1118,11 +1285,16 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		checkBo, cancel := bo.Fork()
 		defer cancel()
 
-		go func() {
+		resolveFn := func() {
 			e := lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
 			lastForkedBo.Store(checkBo)
 			errChan <- e
-		}()
+		}
+
+		if !lr.asyncResolvePool.tryAsyncResolve(resolveFn, metrics.LockResolverAsyncRunningTasksForCheckSecondaries) {
+			metrics.LockResolverCountWithAsyncCheckSecondariesFallback.Inc()
+			resolveFn()
+		}
 	}
 
 	for range len(regions) {
@@ -1191,8 +1363,24 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
 		)
 	}
+	if err == nil {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-region rpc finished",
+			zap.String("action", resolveActionLabel(status)),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", lreq.CommitVersion),
+			zap.Uint64("regionID", region.GetID()),
+			zap.Int("keyCount", len(keys)),
+		)
+	}
 
 	return err
+}
+
+func resolveActionLabel(status TxnStatus) string {
+	if status.IsCommitted() {
+		return "commit"
+	}
+	return "rollback"
 }
 
 func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
@@ -1200,8 +1388,16 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
+	resolveAction := resolveActionLabel(status)
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
+			zap.String("action", resolveAction),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", status.CommitTS()),
+			zap.Bool("resolveLite", resolveLite),
+			zap.Bool("resolvedByCheckTxnStatus", true),
+		)
 		return nil
 	}
 	for {
@@ -1217,8 +1413,6 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()
-		} else {
-			logutil.BgLogger().Info("resolveLock rollback", zap.String("lock", l.String()))
 		}
 
 		if resolveLite {
@@ -1265,6 +1459,14 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if !resolveLite {
 			cleanRegions[loc.Region] = struct{}{}
 		}
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
+			zap.String("action", resolveAction),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("commitTS", lreq.CommitVersion),
+			zap.Uint64("regionID", loc.Region.GetID()),
+			zap.Bool("resolveLite", resolveLite),
+			zap.Bool("resolvedByCheckTxnStatus", false),
+		)
 		return nil
 	}
 }
@@ -1278,6 +1480,12 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if bytes.Equal(l.Key, l.Primary) {
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock skipped rpc (resolved by check txn status)",
+			zap.String("action", "rollback"),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Bool("regionResolve", pessimisticRegionResolve),
+			zap.Bool("resolvedByCheckTxnStatus", true),
+		)
 		return nil
 	}
 	for {
@@ -1334,6 +1542,14 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 		if pessimisticRegionResolve && pessimisticCleanRegions != nil {
 			pessimisticCleanRegions[loc.Region] = struct{}{}
 		}
+		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-pessimistic-lock rpc finished",
+			zap.String("action", "rollback"),
+			zap.Uint64("txnStartTS", l.TxnID),
+			zap.Uint64("forUpdateTS", forUpdateTS),
+			zap.Uint64("regionID", loc.Region.GetID()),
+			zap.Bool("regionResolve", pessimisticRegionResolve),
+			zap.Bool("resolvedByCheckTxnStatus", false),
+		)
 		return nil
 	}
 }

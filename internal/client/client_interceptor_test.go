@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util/async"
@@ -100,4 +102,16 @@ func TestAppendChainedInterceptor(t *testing.T) {
 	// add duplciated
 	chain = interceptor.ChainRPCInterceptors(chain, mkInterceptorFn(1))
 	checkChained(chain, 5, []int{0, 2, 3, 4, 1})
+}
+
+func TestBypassRUV2FollowsRequestInfoBypass(t *testing.T) {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
+	req.RequestSource = "xxx_internal_others"
+	assert.True(t, resourcecontrol.MakeRequestInfo(req).Bypass())
+	assert.False(t, resourcecontrol.MakeRequestInfo(tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})).Bypass())
+
+	backgroundReq := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
+	backgroundReq.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "rg"}
+	backgroundReq.RequestSource = "background-task"
+	assert.False(t, resourcecontrol.MakeRequestInfo(backgroundReq).Bypass())
 }

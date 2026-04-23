@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 )
 
@@ -138,13 +139,101 @@ func TestSendRequestAsyncAttachContext(t *testing.T) {
 	})
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("foo"), Version: math.MaxUint64})
 
-	require.Zero(t, req.Context.RegionId)
+	require.Zero(t, req.RegionId)
 	tikvrpc.AttachContext(req, req.Context)
 	tikvrpc.SetContextNoAttach(req, &metapb.Region{Id: 1}, &metapb.Peer{})
 
 	cli.SendRequestAsync(ctx, addr, req, cb)
 	rl.Exec(ctx)
 	require.True(t, called)
+}
+
+func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
+	ctx := context.Background()
+	original := config.GetGlobalConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalConfig(original)
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
+	config.StoreGlobalConfig(&cfg)
+	weights := cfg.TiKVClient.RUV2
+
+	srv, port := mockserver.StartMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, srv.IsRunning())
+	addr := srv.Addr()
+
+	cli := NewRPCClient()
+	defer func() {
+		cli.Close()
+		srv.Stop()
+	}()
+
+	handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
+		ids := req.GetRequestIds()
+		require.Len(t, ids, 1)
+		prewriteResp := &kvrpcpb.PrewriteResponse{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				RuV2: &kvrpcpb.RUV2{
+					KvEngineCacheMiss: 1,
+				},
+			},
+		}
+		return &tikvpb.BatchCommandsResponse{
+			RequestIds: ids,
+			Responses: []*tikvpb.BatchCommandsResponse_Response{{
+				Cmd: &tikvpb.BatchCommandsResponse_Response_Prewrite{Prewrite: prewriteResp},
+			}},
+		}, nil
+	}
+	srv.OnBatchCommandsRequest.Store(&handle)
+
+	ruDetails := util.NewRUDetails()
+	sendCtx := context.WithValue(ctx, util.RUDetailsCtxKey, ruDetails)
+	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+
+	rl := async.NewRunLoop()
+	called := false
+	cb := async.NewCallback(rl, func(resp *tikvrpc.Response, err error) {
+		called = true
+		require.NoError(t, err)
+		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
+	})
+
+	cli.SendRequestAsync(sendCtx, addr, req, cb)
+	rl.Exec(ctx)
+	require.True(t, called)
+
+	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
+	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
+	drained := ruDetails.DrainRUV2()
+	require.NotNil(t, drained)
+	require.Equal(t, uint64(1), drained.GetWriteRpcCount())
+	require.Equal(t, uint64(1), drained.GetKvEngineCacheMiss())
+	require.Nil(t, ruDetails.DrainRUV2())
+
+	bypassDetails := util.NewRUDetails()
+	bypassCtx := context.WithValue(ctx, util.RUDetailsCtxKey, bypassDetails)
+	bypassReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+	bypassReq.RequestSource = "xxx_internal_others"
+
+	rl = async.NewRunLoop()
+	called = false
+	cb = async.NewCallback(rl, func(resp *tikvrpc.Response, err error) {
+		called = true
+		require.NoError(t, err)
+		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
+		require.Zero(t, resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
+	})
+
+	cli.SendRequestAsync(bypassCtx, addr, bypassReq, cb)
+	rl.Exec(ctx)
+	require.True(t, called)
+	require.Zero(t, bypassDetails.TiKVRUV2())
+	require.Nil(t, bypassDetails.DrainRUV2())
 }
 
 func TestSendRequestAsyncTimeout(t *testing.T) {
@@ -270,11 +359,20 @@ func TestSendRequestAsyncAndCloseClientOnHandle(t *testing.T) {
 	defer srv.Stop()
 	addr := srv.Addr()
 	cli := NewRPCClient()
+	defer cli.Close()
+
+	handleCtx, releaseHandle := context.WithCancel(context.Background())
+	defer releaseHandle()
 
 	var received atomic.Bool
+	handleEntered := make(chan struct{}, 1)
 	handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
 		received.Store(true)
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case handleEntered <- struct{}{}:
+		default:
+		}
+		<-handleCtx.Done()
 		return nil, errors.New("mock server error")
 	}
 	srv.OnBatchCommandsRequest.Store(&handle)
@@ -287,8 +385,20 @@ func TestSendRequestAsyncAndCloseClientOnHandle(t *testing.T) {
 		require.ErrorContains(t, err, "batch client closed")
 	})
 	cli.SendRequestAsync(ctx, addr, req, cb)
-	time.AfterFunc(10*time.Millisecond, func() { cli.Close() })
-	rl.Exec(ctx)
+
+	select {
+	case <-handleEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request is not sent to mock server")
+	}
+
+	cli.Close()
+	releaseHandle()
+
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := rl.Exec(execCtx)
+	require.NoError(t, err)
 	require.True(t, received.Load())
 	require.True(t, called)
 }

@@ -42,9 +42,11 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -144,90 +146,96 @@ func TestBackgroundRunner(t *testing.T) {
 	})
 
 	t.Run("Schedule", func(t *testing.T) {
-		var (
-			done     = make(chan struct{})
-			interval = 20 * time.Millisecond
-			history  = make([]int64, 0, 3)
-			start    = time.Now().UnixMilli()
-		)
-		r := newBackgroundRunner(context.Background())
-		r.schedule(func(_ context.Context, t time.Time) bool {
-			history = append(history, t.UnixMilli())
-			if len(history) == 3 {
-				close(done)
-				return true
+		synctest.Test(t, func(t *testing.T) {
+			var (
+				done     = make(chan struct{})
+				interval = 20 * time.Millisecond
+				history  = make([]time.Time, 0, 3)
+				start    = time.Now()
+			)
+			r := newBackgroundRunner(context.Background())
+			r.schedule(func(_ context.Context, t time.Time) bool {
+				history = append(history, t)
+				if len(history) == 3 {
+					close(done)
+					return true
+				}
+				return false
+			}, interval)
+			<-done
+			require.Equal(t, 3, len(history))
+			for i := range history {
+				require.Equal(t, interval*time.Duration(i+1), history[i].Sub(start))
 			}
-			return false
-		}, interval)
-		<-done
-		require.Equal(t, 3, len(history))
-		for i := range history {
-			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
-		}
 
-		history = history[:0]
-		start = time.Now().UnixMilli()
-		r.schedule(func(ctx context.Context, t time.Time) bool {
-			history = append(history, t.UnixMilli())
-			return false
-		}, interval)
-		time.Sleep(interval*3 + interval/2)
-		r.shutdown(true)
-		require.Equal(t, 3, len(history))
-		for i := range history {
-			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
-		}
+			history = history[:0]
+			start = time.Now()
+			r.schedule(func(ctx context.Context, t time.Time) bool {
+				history = append(history, t)
+				return false
+			}, interval)
+			time.Sleep(interval * 3)
+			synctest.Wait()
+			r.shutdown(true)
+			require.Equal(t, 3, len(history))
+			for i := range history {
+				require.Equal(t, interval*time.Duration(i+1), history[i].Sub(start))
+			}
+		})
 	})
 
 	t.Run("ScheduleWithTrigger", func(t *testing.T) {
-		var (
-			done     = make(chan struct{})
-			trigger  = make(chan struct{})
-			interval = 20 * time.Millisecond
-			history  = make([]int64, 0, 3)
-			start    = time.Now().UnixMilli()
-		)
-		r := newBackgroundRunner(context.Background())
-		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
-			if t.IsZero() {
-				history = append(history, -1)
-			} else {
-				history = append(history, t.UnixMilli())
-			}
-			if len(history) == 3 {
-				close(done)
-				return true
-			}
-			return false
-		}, interval, trigger)
-		trigger <- struct{}{}
-		time.Sleep(interval + interval/2)
-		trigger <- struct{}{}
-		<-done
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[2])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[1]-start)
+		synctest.Test(t, func(t *testing.T) {
+			const interval = 20 * time.Millisecond
+			trigger := make(chan struct{})
+			r := newBackgroundRunner(context.Background())
 
-		history = history[:0]
-		start = time.Now().UnixMilli()
-		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
-			if t.IsZero() {
-				history = append(history, -1)
-			} else {
-				history = append(history, t.UnixMilli())
-			}
-			return false
-		}, interval, trigger)
-		trigger <- struct{}{}
-		trigger <- struct{}{}
-		close(trigger)
-		time.Sleep(interval + interval/2)
-		r.shutdown(true)
-		require.Equal(t, 3, len(history))
-		require.Equal(t, int64(-1), history[0])
-		require.Equal(t, int64(-1), history[1])
-		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[2]-start)
+			var (
+				done    = make(chan struct{})
+				history = make([]time.Time, 0, 3)
+				start   = time.Now()
+			)
+
+			r.scheduleWithTrigger(func(ctx context.Context, at time.Time) bool {
+				history = append(history, at)
+				if len(history) == 3 {
+					close(done)
+					return true
+				}
+				return false
+			}, interval, trigger)
+
+			trigger <- struct{}{}
+			synctest.Wait()
+			time.Sleep(interval + interval/2)
+			synctest.Wait()
+			trigger <- struct{}{}
+			<-done
+
+			require.Len(t, history, 3)
+			require.True(t, history[0].IsZero())
+			require.Equal(t, interval, history[1].Sub(start))
+			require.True(t, history[2].IsZero())
+
+			history = history[:0]
+			start = time.Now()
+			r.scheduleWithTrigger(func(ctx context.Context, at time.Time) bool {
+				history = append(history, at)
+				return false
+			}, interval, trigger)
+
+			trigger <- struct{}{}
+			trigger <- struct{}{}
+			close(trigger)
+			time.Sleep(interval + interval/2)
+			synctest.Wait()
+			r.shutdown(true)
+
+			require.Len(t, history, 3)
+			require.True(t, history[0].IsZero())
+			require.True(t, history[1].IsZero())
+			require.Equal(t, interval, history[2].Sub(start))
+		})
 	})
 }
 
@@ -341,6 +349,10 @@ func (s *testRegionCacheSuite) getAddr(key []byte, replicaRead kv.ReplicaReadTyp
 }
 
 func (s *testRegionCacheSuite) TestStoreLabels() {
+	s.NoError(failpoint.Enable("tikvclient/mustLeader", `return`))
+	s.T().Cleanup(func() {
+		s.NoError(failpoint.Disable("tikvclient/mustLeader"))
+	})
 	testcases := []struct {
 		storeID uint64
 	}{
@@ -364,7 +376,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 		}
 		stores := s.cache.stores.filter(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
 		s.Equal(len(stores), 1)
-		s.Equal(stores[0].labels, labels)
+		s.Equal(stores[0].GetLabels(), labels)
 	}
 }
 
@@ -437,19 +449,19 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
 
 	// Mark the store needCheck and its address and labels are changed.
-	// The resolve state should be deleted and a new store is added to the cache.
+	// The resolve state should be updated and the store pointer should be the same.
 	cache.clear()
 	store = cache.stores.getOrInsertDefault(s.store1)
 	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
-	s.cluster.UpdateStoreAddr(s.store1, store.addr+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
+	newAddr := store.GetAddr() + "0"
+	s.cluster.UpdateStoreAddr(s.store1, newAddr, &metapb.StoreLabel{Key: "k", Value: "v"})
 	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
-	s.Equal(store.getResolveState(), deleted)
 	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
-	s.Equal(newStore.addr, store.addr+"0")
-	s.Equal(newStore.labels, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
+	s.Equal(newStore, store)
+	s.Equal(newStore.GetAddr(), newAddr, "the store address should be updated")
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
@@ -1850,7 +1862,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 
 	cachedRegion = s.getRegion([]byte("a"))
 	buckets = cachedRegion.getStore().buckets
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), buckets.GetVersion()-1)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, buckets.GetVersion()-1)
 	// don't update bucket if the new one's version is stale.
 	waitUpdateBuckets(buckets, []byte("a"))
 
@@ -1859,7 +1871,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	// we should replace the version of `cacheRegion` because of stale.
 	s.cluster.PutRegion(r.GetId(), newMeta.RegionEpoch.ConfVer, newMeta.RegionEpoch.Version, []uint64{s.store1, s.store2}, []uint64{s.peer1, s.peer2}, s.peer1)
 	s.cluster.SplitRegionBuckets(cachedRegion.GetID(), defaultBuckets.Keys, defaultBuckets.Version)
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), defaultBuckets.GetVersion())
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, defaultBuckets.GetVersion())
 	waitUpdateBuckets(defaultBuckets, []byte("a"))
 
 	// update buckets if the new one's version is greater than old one's.
@@ -1870,7 +1882,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), nilToEmtpyBytes(r.GetEndKey())},
 	}
 	s.cluster.SplitRegionBuckets(newBuckets.RegionId, newBuckets.Keys, newBuckets.Version)
-	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), newBuckets.GetVersion())
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), 0, newBuckets.GetVersion())
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
 
@@ -1903,7 +1915,7 @@ func (s *testRegionCacheSuite) TestLocateBucket() {
 	bucketKeys = [][]byte{[]byte("a"), []byte("b")}
 	bucketVersion := uint64(time.Now().Nanosecond())
 	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, bucketVersion)
-	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), bucketVersion)
+	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), 0, bucketVersion)
 	// wait for region update
 	time.Sleep(300 * time.Millisecond)
 	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
@@ -1916,6 +1928,207 @@ func (s *testRegionCacheSuite) TestLocateBucket() {
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
+}
+
+// TestBucketClampingToRegion tests that bucket boundaries exceeding region
+// boundaries are clamped correctly.
+func TestBucketClampingToRegion(t *testing.T) {
+	tests := []struct {
+		name            string
+		regionStart     []byte
+		regionEnd       []byte
+		bucketStart     []byte
+		bucketEnd       []byte
+		wantStart       []byte
+		wantEnd         []byte
+		shouldBeClamped bool
+	}{
+		{
+			name:            "bucket within region - no clamping",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"),
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket start before region - clamp start",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("a"), // Before region start
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket end after region - clamp end",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte("z"), // After region end
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket exceeds both boundaries - clamp both",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("a"), // Before region start
+			bucketEnd:       []byte("z"), // After region end
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "empty region start - bucket start not clamped",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("a"),
+			wantEnd:         []byte("m"), // Only end clamped
+			shouldBeClamped: true,
+		},
+		{
+			name:            "empty region end - bucket end not clamped",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("f"), // Only start clamped
+			wantEnd:         []byte("z"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket completely before region - fallback to region",
+			regionStart:     []byte("m"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("f"), // Ends before region starts
+			wantStart:       []byte("m"), // Falls back to region boundaries
+			wantEnd:         []byte("z"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty startKey - clamp to region start",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"),
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty endKey - clamp to region end",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "bucket with empty startKey and region with empty startKey - no start clamping",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte("z"),
+			bucketStart:     []byte{}, // Beginning of keyspace
+			bucketEnd:       []byte("m"),
+			wantStart:       []byte{}, // No clamping needed
+			wantEnd:         []byte("m"),
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket with empty endKey and region with empty endKey - no end clamping",
+			regionStart:     []byte("a"),
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("f"),
+			bucketEnd:       []byte{}, // End of keyspace (infinity)
+			wantStart:       []byte("f"),
+			wantEnd:         []byte{}, // No clamping needed
+			shouldBeClamped: false,
+		},
+		{
+			name:            "bucket spanning full keyspace - clamp to region",
+			regionStart:     []byte("f"),
+			regionEnd:       []byte("m"),
+			bucketStart:     []byte{},    // Beginning of keyspace
+			bucketEnd:       []byte{},    // End of keyspace (infinity)
+			wantStart:       []byte("f"), // Clamped to region start
+			wantEnd:         []byte("m"), // Clamped to region end
+			shouldBeClamped: true,
+		},
+		{
+			name:            "infinity region - no clamping needed",
+			regionStart:     []byte{}, // Beginning of keyspace
+			regionEnd:       []byte{}, // End of keyspace (infinity)
+			bucketStart:     []byte("a"),
+			bucketEnd:       []byte("z"),
+			wantStart:       []byte("a"),
+			wantEnd:         []byte("z"),
+			shouldBeClamped: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loc := &KeyLocation{
+				Region:   RegionVerID{id: 1},
+				StartKey: tt.regionStart,
+				EndKey:   tt.regionEnd,
+			}
+			bucket := &Bucket{
+				StartKey: tt.bucketStart,
+				EndKey:   tt.bucketEnd,
+			}
+
+			result := loc.clampBucketToRegion(bucket)
+
+			if !bytes.Equal(result.StartKey, tt.wantStart) {
+				t.Errorf("StartKey = %q, want %q", result.StartKey, tt.wantStart)
+			}
+			if !bytes.Equal(result.EndKey, tt.wantEnd) {
+				t.Errorf("EndKey = %q, want %q", result.EndKey, tt.wantEnd)
+			}
+
+			// Verify that clamped bucket is different from original if clamping was expected
+			isSameBucket := result == bucket
+			if tt.shouldBeClamped && isSameBucket {
+				t.Error("Expected bucket to be clamped (new object), but got same object")
+			}
+			if !tt.shouldBeClamped && !isSameBucket {
+				t.Error("Expected no clamping (same object), but got new object")
+			}
+		})
+	}
+}
+
+func (s *testRegionCacheSuite) TestLoadRegionsWithLeader() {
+	// Split at "b", "c", "d", "e"
+	regions := s.cluster.AllocIDs(4)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 4; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 4; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'b' + byte(i)}, peers[i+1], peers[i+1][0])
+	}
+	// retry load region should redirect to leader and succeed instead of returning stale region error.
+	s.NoError(failpoint.Enable("tikvclient/mustLeader", `return`))
+	s.T().Cleanup(func() {
+		s.NoError(failpoint.Disable("tikvclient/mustLeader"))
+	})
+	region, err := s.cache.loadRegion(s.bo, []byte("a"), false, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
+	s.Nil(err)
+	s.Equal(region.GetID(), regions[0])
 }
 
 func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
@@ -2101,7 +2314,7 @@ func (s *testRegionCacheSuite) TestSlowScoreStat() {
 	s.True(slowScore.isSlow())
 }
 
-func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
+func (s *testRegionCacheSuite) TestHealthCheckWithAddressChange() {
 	// init region cache
 	s.cache.LocateKey(s.bo, []byte("a"))
 
@@ -2123,23 +2336,21 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, livenessState(store1Liveness), time.Second)
 
 	// update store meta
-	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
+	newAddr := store1.GetAddr() + "0"
+	s.cluster.UpdateStoreAddr(store1.storeID, newAddr, store1.GetLabels()...)
 
-	// assert that the old store should be deleted and it's not reachable
-	s.Eventually(func() bool {
-		return store1.getResolveState() == deleted && store1.getLivenessState() != reachable
-	}, 3*time.Second, time.Second)
-
-	// assert that the new store should be added and it's also not reachable
 	newStore1, _ := s.cache.stores.get(store1.storeID)
-	s.Require().NotEqual(reachable, newStore1.getLivenessState())
+	// assert that the store pointer should be the same.
+	s.Require().Equal(store1, newStore1)
+	// assert that the store in replica should be unreachable
+	s.Require().NotEqual(reachable, store1.getLivenessState())
 
 	// recover store1
 	atomic.StoreUint32(&store1Liveness, uint32(reachable))
 
-	// assert that the new store should be reachable
+	// assert that the store should be resolved and reachable
 	s.Eventually(func() bool {
-		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable && store1.GetAddr() == newAddr
 	}, 3*time.Second, time.Second)
 }
 
@@ -2556,7 +2767,7 @@ func generateKeyForSimulator(id int, keyLen int) []byte {
 
 func BenchmarkInsertRegionToCache(b *testing.B) {
 	b.StopTimer()
-	cache := newTestRegionCache()
+	cache := NewTestRegionCache()
 	r := &Region{
 		meta: &metapb.Region{
 			Id:          1,
@@ -2593,7 +2804,7 @@ func BenchmarkInsertRegionToCache(b *testing.B) {
 
 func BenchmarkInsertRegionToCache2(b *testing.B) {
 	b.StopTimer()
-	cache := newTestRegionCache()
+	cache := NewTestRegionCache()
 	r := &Region{
 		meta: &metapb.Region{
 			Id:          1,
@@ -2941,9 +3152,9 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	s.Require().NotNil(store1)
 	s.Require().Equal(resolved, store1.getResolveState())
 	// change store1 label.
-	labels := store1.labels
+	labels := slices.Clone(store1.GetLabels())
 	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
-	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr, labels...)
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), labels...)
 
 	// mark the store is unreachable and need check.
 	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
@@ -2962,16 +3173,108 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return s.getResolveState() == needCheck
 	})
 
-	// assert that the old store should be deleted.
-	s.Eventually(func() bool {
-		return store1.getResolveState() == deleted
-	}, 3*time.Second, time.Second)
-	// assert the new store should be added and it should be resolved and reachable.
+	// assert the store in replica should be updated and the pointer should be the same.
 	newStore1, _ := s.cache.stores.get(s.store1)
+	s.Equal(newStore1, store1)
 	s.Eventually(func() bool {
-		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+		return store1.getResolveState() == resolved && store1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
-	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+	s.Require().True(isStoreContainLabel(newStore1.GetLabels(), "host", "0.0.0.0:20161"))
+}
+
+// TestStoreRestartWithNewLabels verifies that the store in replica selector
+// continue to reference the same store instance when the store is restarted with new labels.
+func (s *testRegionCacheSuite) TestStoreRestartWithNewLabels() {
+	// Initialize region cache
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Require().NoError(err)
+	s.Require().NotNil(loc)
+
+	// Get the leader store (store1 is typically the leader)
+	store1, exists := s.cache.stores.get(s.store1)
+	s.Require().True(exists)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+
+	// Step 1: Store starts as reachable (up)
+	atomic.StoreUint32(&store1.livenessState, uint32(reachable))
+	s.Require().Equal(reachable, store1.getLivenessState())
+
+	// Step 2: Store becomes unreachable (down)
+	store1Liveness := uint32(unreachable)
+	s.cache.stores.setMockRequestLiveness(func(ctx context.Context, st *Store) livenessState {
+		if st.storeID == store1.storeID {
+			return livenessState(atomic.LoadUint32(&store1Liveness))
+		}
+		return reachable
+	})
+	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
+	s.Require().Equal(unreachable, store1.getLivenessState())
+
+	// Start health check loop to monitor store
+	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, unreachable, time.Second)
+
+	// Create replica selector BEFORE store is restarted with new labels
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.Require().NotNil(region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	replicaSelector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Require().NoError(err)
+	s.Require().NotNil(replicaSelector)
+
+	// Find the replica with store1 to keep reference to the same store instance
+	var replicaFromStore1 *replica
+	var leaderPeer *metapb.Peer
+	for _, replica := range replicaSelector.replicas {
+		if replica.store.storeID == s.store1 {
+			replicaFromStore1 = replica
+			// Find the peer for this store
+			for _, peer := range region.GetMeta().Peers {
+				if peer.StoreId == s.store1 {
+					leaderPeer = peer
+					break
+				}
+			}
+			s.Require().NotNil(leaderPeer, "should find peer for store1")
+			s.Require().Equal(store1, replica.store, "replica should reference the same store instance before replacement")
+			s.Require().Equal(unreachable, replica.store.getLivenessState(), "the store in replica should be unreachable")
+			break
+		}
+	}
+	s.Require().NotNil(replicaFromStore1, "should find replica with store1")
+
+	// Step 3: Same store_id changes label and restarts
+	// Change store1's label (address stays the same)
+	oldLabels := slices.Clone(store1.GetLabels())
+	newLabels := append(oldLabels, &metapb.StoreLabel{Key: "zone", Value: "zone1"})
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.GetAddr(), newLabels...)
+
+	// Recover store1 (simulate restart) - set liveness back to reachable for the store in replica
+	atomic.StoreUint32(&store1Liveness, uint32(reachable))
+
+	// Trigger store metadata update by marking the store as needCheck and resolving
+	// This should trigger logic: updating store metadata and resolving the store
+	store1.setResolveState(needCheck)
+	s.cache.checkAndResolve(nil, func(st *Store) bool {
+		return st.getResolveState() == needCheck
+	})
+
+	// reResolve is synchronous, but add a small wait for robustness (max 500ms like TestResolveStateTransition)
+	s.Eventually(func() bool {
+		return store1.getResolveState() == resolved
+	}, 500*time.Millisecond, 50*time.Millisecond, "the store should be resolved")
+
+	// The store's labels should be updated
+	s.Require().True(isStoreContainLabel(store1.GetLabels(), "zone", "zone1"), "the store should have updated labels")
+	// Wait for the store in replica to become reachable after restart
+	s.Eventually(func() bool {
+		return store1.getLivenessState() == reachable
+	}, 3*time.Second, 200*time.Millisecond, "the store should become reachable after restart")
+
+	// Step 4: Test the replica selector still has reference to the same store instance
+	s.Require().Equal(store1, replicaFromStore1.store, "replica should still reference the same store instance")
+	// The store in replica should still be reachable
+	s.Require().Equal(reachable, replicaFromStore1.store.getLivenessState(), "the store in replica should still be reachable")
 }
 
 func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
@@ -3145,16 +3448,50 @@ func (s *testRegionCacheSuite) TestUpdateBucketsConcurrently() {
 	}
 
 	// update buckets twice concurrently
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
+	// don't update if the request bucket version is not greater than the current bucket version
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1, bucketsVer+1)
 	s.Equal(uint64(0), atomic.LoadUint64(&count))
 	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 0 }, 3*time.Second, 100*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	s.Equal(uint64(1), atomic.LoadUint64(&count))
 
 	// update buckets again after the previous update is done
-	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, 0, bucketsVer+1)
 	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 1 }, 3*time.Second, 100*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	s.Equal(uint64(2), atomic.LoadUint64(&count))
+}
+
+func (s *testRegionCacheSuite) TestLocateRegionByIDFromPD() {
+	// Create a new region that's not in cache yet
+	region2 := s.cluster.AllocID()
+	newPeers := s.cluster.AllocIDs(2)
+	s.cluster.Split(s.region1, region2, []byte("b"), newPeers, newPeers[0])
+
+	// Verify region2 is not in cache initially
+	cachedRegion := s.cache.GetCachedRegionWithRLock(RegionVerID{region2, 0, 0})
+	s.Nil(cachedRegion)
+
+	// Call LocateRegionByIDFromPD
+	loc, err := s.cache.LocateRegionByIDFromPD(s.bo, region2)
+	s.NoError(err)
+	s.NotNil(loc)
+	s.Equal(region2, loc.Region.id)
+
+	// Verify region2 is still NOT in cache (key difference from LocateRegionByID)
+	cachedRegion = s.cache.GetCachedRegionWithRLock(RegionVerID{region2, 0, 0})
+	s.Nil(cachedRegion)
+
+	// Compare with LocateRegionByID which DOES insert into cache
+	loc2, err := s.cache.LocateRegionByID(s.bo, region2)
+	s.NoError(err)
+	s.NotNil(loc2)
+
+	// Now region2 should be in cache
+	cachedRegion = s.cache.GetCachedRegionWithRLock(loc2.Region)
+	s.NotNil(cachedRegion)
+	s.Equal(region2, cachedRegion.GetID())
 }

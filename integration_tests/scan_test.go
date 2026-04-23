@@ -143,7 +143,7 @@ func (s *testScanSuite) TestScan() {
 		txn2 := s.beginTxn()
 		val, err := txn2.Get(context.TODO(), s.makeKey(0))
 		s.Nil(err)
-		s.Equal(val, s.makeValue(0))
+		s.Equal(val.Value, s.makeValue(0))
 		// Test scan without upperBound
 		scan, err := txn2.Iter(s.recordPrefix, nil)
 		s.Nil(err)

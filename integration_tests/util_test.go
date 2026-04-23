@@ -57,6 +57,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/constants"
 	"github.com/tikv/pd/client/pkg/caller"
 )
 
@@ -93,7 +94,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 	if *withTiKV {
 		return newTiKVStore(t)
 	}
-	client, pdClient, cluster, err := unistore.New("", nil, nil)
+	client, pdClient, cluster, err := unistore.New("", nil, constants.NullKeyspaceID, nil)
 	require.Nil(t, err)
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(&unistoreClientWrapper{client}, pdClient, nil, nil, 0)

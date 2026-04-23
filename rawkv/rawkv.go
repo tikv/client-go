@@ -489,7 +489,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 	}()
 
 	// Process each affected region respectively
-	for !bytes.Equal(startKey, endKey) {
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
 		opts := c.getRawKVOptions(options...)
 		var resp *tikvrpc.Response
 		var actualEndKey []byte
@@ -503,6 +503,9 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 		cmdResp := resp.Resp.(*kvrpcpb.RawDeleteRangeResponse)
 		if cmdResp.GetError() != "" {
 			return errors.New(cmdResp.GetError())
+		}
+		if len(actualEndKey) == 0 {
+			break
 		}
 		startKey = actualEndKey
 	}
@@ -850,7 +853,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		}
 
 		actualEndKey := endKey
-		if len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, endKey) < 0 {
+		if len(loc.EndKey) > 0 && (len(endKey) == 0 || bytes.Compare(loc.EndKey, endKey) < 0) {
 			actualEndKey = loc.EndKey
 		}
 

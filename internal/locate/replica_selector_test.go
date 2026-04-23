@@ -67,8 +67,8 @@ func (s *testReplicaSelectorSuite) SetupTest(t *testing.T) {
 	s.Equal(r.GetLeaderStoreID(), uint64(1)) // region's leader in store1.
 	s.Equal(len(r.getStore().stores), 3)     // region has 3 peer(stores).
 	for _, store := range r.getStore().stores {
-		s.Equal(store.labels[0].Key, "id") // Each store has a label "id", and the value is the store's ID.
-		s.Equal(store.labels[0].Value, fmt.Sprintf("%v", store.storeID))
+		s.Equal(store.GetLabels()[0].Key, "id") // Each store has a label "id", and the value is the store's ID.
+		s.Equal(store.GetLabels()[0].Value, fmt.Sprintf("%v", store.storeID))
 	}
 }
 
@@ -1149,12 +1149,26 @@ func testReplicaReadAccessPathByBasicCase(s *testReplicaSelectorSuite) {
 						respErr = "region 0 is not prepared for the flashback"
 						respRegionError = nil
 						regionIsValid = true
+					case RegionNotFoundErr:
+						regionIsValid = false
 					}
 					switch readType {
 					case kv.ReplicaReadLeader:
 						accessPath = []string{"{addr: store1, replica-read: false, stale-read: false}"}
 					case kv.ReplicaReadFollower:
-						accessPath = []string{"{addr: store2, replica-read: true, stale-read: false}"}
+						// For RegionNotFoundErr from follower, it will retry on leader.
+						// The region is hard-invalidated to stop concurrent requests,
+						// but the current selector bypasses the validity check.
+						if tp == RegionNotFoundErr {
+							accessPath = []string{
+								"{addr: store2, replica-read: true, stale-read: false}",
+								"{addr: store1, replica-read: false, stale-read: false}",
+							}
+							respRegionError = nil
+							regionIsValid = false
+						} else {
+							accessPath = []string{"{addr: store2, replica-read: true, stale-read: false}"}
+						}
 					case kv.ReplicaReadMixed:
 						if staleRead {
 							accessPath = []string{"{addr: store1, replica-read: false, stale-read: true}"}

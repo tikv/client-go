@@ -35,6 +35,9 @@
 package metrics
 
 import (
+	"strconv"
+	"sync/atomic"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -44,9 +47,10 @@ var (
 	TiKVTxnCmdHistogram                            *prometheus.HistogramVec
 	TiKVBackoffHistogram                           *prometheus.HistogramVec
 	TiKVSendReqHistogram                           *prometheus.HistogramVec
-	TiKVSendReqSummary                             *prometheus.SummaryVec
+	TiKVSendReqBySourceSummary                     *prometheus.SummaryVec
 	TiKVRPCNetLatencyHistogram                     *prometheus.HistogramVec
 	TiKVLockResolverCounter                        *prometheus.CounterVec
+	TiKVLockResolverAsyncRunningTasks              *prometheus.GaugeVec
 	TiKVRegionErrorCounter                         *prometheus.CounterVec
 	TiKVRPCErrorCounter                            *prometheus.CounterVec
 	TiKVTxnWriteKVCountHistogram                   *prometheus.HistogramVec
@@ -64,15 +68,21 @@ var (
 	TiKVStatusCounter                              *prometheus.CounterVec
 	TiKVBatchSendTailLatency                       *prometheus.HistogramVec
 	TiKVBatchSendLoopDuration                      *prometheus.SummaryVec
-	TiKVBatchRecvTailLatency                       *prometheus.HistogramVec
-	TiKVBatchRecvLoopDuration                      *prometheus.SummaryVec
+	TiKVBatchStreamRecvLoopDuration                *prometheus.SummaryVec
+	TiKVBatchStreamRecvTailLatency                 *prometheus.HistogramVec
+	TiKVBatchStreamTiKVSendTailLatency             *prometheus.HistogramVec
+	TiKVBatchStreamCanceledEntryTailLatency        *prometheus.HistogramVec
+	TiKVBatchStreamTrackedRequestCount             *prometheus.CounterVec
+	TiKVBatchStreamRetiredRequestCount             *prometheus.CounterVec
+	TiKVBatchStreamCompletedResponseCount          *prometheus.CounterVec
+	TiKVBatchStreamOutdatedResponseCount           *prometheus.CounterVec
 	TiKVBatchHeadArrivalInterval                   *prometheus.SummaryVec
 	TiKVBatchBestSize                              *prometheus.SummaryVec
 	TiKVBatchMoreRequests                          *prometheus.SummaryVec
 	TiKVBatchWaitOverLoad                          prometheus.Counter
 	TiKVBatchPendingRequests                       *prometheus.HistogramVec
 	TiKVBatchRequests                              *prometheus.HistogramVec
-	TiKVBatchRequestDuration                       *prometheus.SummaryVec
+	TiKVBatchRequestStageDuration                  *prometheus.SummaryVec
 	TiKVBatchClientUnavailable                     prometheus.Histogram
 	TiKVBatchClientWaitEstablish                   prometheus.Histogram
 	TiKVBatchClientRecycle                         prometheus.Histogram
@@ -104,6 +114,7 @@ var (
 	TiKVPrewriteAssertionUsageCounter              *prometheus.CounterVec
 	TiKVGrpcConnectionState                        *prometheus.GaugeVec
 	TiKVAggressiveLockedKeysCounter                *prometheus.CounterVec
+	TiKVStoreLivenessGauge                         *prometheus.GaugeVec
 	TiKVStoreSlowScoreGauge                        *prometheus.GaugeVec
 	TiKVFeedbackSlowScoreGauge                     *prometheus.GaugeVec
 	TiKVHealthFeedbackOpsCounter                   *prometheus.CounterVec
@@ -117,11 +128,15 @@ var (
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
+	TiKVBucketClampedCounter                       prometheus.Counter
+	TiKVStaleBucketFromPDCounter                   prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 	TiKVTxnWriteConflictCounter                    prometheus.Counter
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
 	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
+	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
+	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -129,12 +144,16 @@ const (
 	LblType            = "type"
 	LblResult          = "result"
 	LblStore           = "store"
+	LblTarget          = "target"
+	LblConn            = "conn"
+	LblForward         = "forward"
 	LblCommit          = "commit"
 	LblAbort           = "abort"
 	LblRollback        = "rollback"
 	LblBatchGet        = "batch_get"
 	LblGet             = "get"
 	LblLockKeys        = "lock_keys"
+	LblSharedLockKeys  = "shared_lock_keys"
 	LabelBatchRecvLoop = "batch-recv-loop"
 	LabelBatchSendLoop = "batch-send-loop"
 	LblAddress         = "address"
@@ -147,9 +166,22 @@ const (
 	LblGeneral         = "general"
 	LblDirection       = "direction"
 	LblReason          = "reason"
+	LblStage           = "stage"
 )
 
+var storeMetricVecList atomic.Pointer[[]MetricVec]
+
+func GetStoreMetricVecList() []MetricVec {
+	lst := storeMetricVecList.Load()
+	if lst == nil {
+		return nil
+	}
+	return *lst
+}
+
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
+	var storeMetrics []MetricVec
+
 	TiKVTxnCmdHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
@@ -179,8 +211,9 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 24), // 0.5ms ~ 1.2h
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
+	storeMetrics = append(storeMetrics, TiKVSendReqHistogram)
 
-	TiKVSendReqSummary = prometheus.NewSummaryVec(
+	TiKVSendReqBySourceSummary = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
@@ -188,6 +221,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Summary of sending request with multi dimensions.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope, LblSource})
+	storeMetrics = append(storeMetrics, TiKVSendReqBySourceSummary)
 
 	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -198,6 +232,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
+	storeMetrics = append(storeMetrics, TiKVRPCNetLatencyHistogram)
 
 	TiKVLockResolverCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -205,6 +240,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "lock_resolver_actions_total",
 			Help:        "Counter of lock resolver actions.",
+			ConstLabels: constLabels,
+		}, []string{LblType})
+
+	TiKVLockResolverAsyncRunningTasks = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "lock_resolver_async_running_tasks",
+			Help:        "The number of running async resolve lock tasks in lock resolver.",
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
@@ -216,6 +260,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of region errors.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVRegionErrorCounter)
 
 	TiKVRPCErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -225,6 +270,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of rpc errors.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVRPCErrorCounter)
 
 	TiKVTxnWriteKVCountHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -340,6 +386,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 20), // 0.5ms ~ 262s
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStatusDuration)
 
 	TiKVStatusCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -358,7 +405,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
 			Help:        "batch send tail latency",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
 	TiKVBatchSendLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -367,26 +414,82 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_send_loop_duration_seconds",
 			Help:        "batch send loop duration breakdown by steps",
 			ConstLabels: constLabels,
-		}, []string{LblStore, "step"})
+		}, []string{LblTarget, "step"})
 
-	TiKVBatchRecvTailLatency = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "batch_recv_tail_latency_seconds",
-			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
-			Help:        "batch recv tail latency",
-			ConstLabels: constLabels,
-		}, []string{LblStore})
-
-	TiKVBatchRecvLoopDuration = prometheus.NewSummaryVec(
+	TiKVBatchStreamRecvLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "batch_recv_loop_duration_seconds",
-			Help:        "batch recv loop duration breakdown by steps",
+			Name:        "batch_stream_recv_loop_duration_seconds",
+			Help:        "batch stream recv loop duration breakdown by steps",
 			ConstLabels: constLabels,
-		}, []string{LblStore, "step"})
+		}, []string{LblTarget, LblConn, LblForward, "step"})
+
+	TiKVBatchStreamRecvTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_recv_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
+			Help:        "batch stream recv tail latency",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamTiKVSendTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_tikv_send_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(0.01, 2, 8), // 10ms ~ 1.28s
+			Help:        "tail latency from TiKV sending a batch response until the client receives it",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamCanceledEntryTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_canceled_entry_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 8), // 1s ~ 128s
+			Help:        "tail latency of canceled entries that later receive responses on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamTrackedRequestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_tracked_request_count",
+			Help:        "count of requests tracked by each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamRetiredRequestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_retired_request_count",
+			Help:        "count of requests retired from each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamCompletedResponseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_completed_response_count",
+			Help:        "count of matched responses completed on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
+
+	TiKVBatchStreamOutdatedResponseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_stream_outdated_response_count",
+			Help:        "count of outdated responses received on each batch stream",
+			ConstLabels: constLabels,
+		}, []string{LblTarget, LblConn, LblForward})
 
 	TiKVBatchHeadArrivalInterval = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -395,7 +498,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_head_arrival_interval_seconds",
 			Help:        "arrival interval of the head request in batch",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
 	TiKVBatchBestSize = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -404,7 +507,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_best_size",
 			Help:        "best batch size estimated by the batch client",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
 	TiKVBatchMoreRequests = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -413,7 +516,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_more_requests_total",
 			Help:        "number of requests batched by extra fetch",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
 	TiKVBatchWaitOverLoad = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -432,7 +535,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:        "number of requests pending in the batch channel",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
 	TiKVBatchRequests = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -442,16 +545,17 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:        "number of requests in one batch",
 			ConstLabels: constLabels,
-		}, []string{LblStore})
+		}, []string{LblTarget})
 
-	TiKVBatchRequestDuration = prometheus.NewSummaryVec(
+	TiKVBatchRequestStageDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "batch_request_duration_seconds",
-			Help:        "batch request duration breakdown by steps",
+			Name:        "batch_request_stage_duration_seconds",
+			Help:        "batch request stage duration breakdown by store and outcome",
 			ConstLabels: constLabels,
-		}, []string{"step"})
+		}, []string{LblStore, LblStage, LblResult})
+	storeMetrics = append(storeMetrics, TiKVBatchRequestStageDuration)
 
 	TiKVBatchClientUnavailable = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -585,6 +689,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "store token is up to the limit, probably because one of the stores is the hotspot or unavailable",
 			ConstLabels: constLabels,
 		}, []string{LblAddress, LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreLimitErrorCounter)
 
 	TiKVGRPCConnTransientFailureCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -594,6 +699,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of gRPC connection transient failure",
 			ConstLabels: constLabels,
 		}, []string{LblAddress, LblStore})
+	storeMetrics = append(storeMetrics, TiKVGRPCConnTransientFailureCounter)
 
 	TiKVPanicCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -631,6 +737,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of tikv safe_ts being updated.",
 			ConstLabels: constLabels,
 		}, []string{LblResult, LblStore})
+	storeMetrics = append(storeMetrics, TiKVSafeTSUpdateCounter)
 
 	TiKVMinSafeTSGapSeconds = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -640,6 +747,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "The minimal (non-zero) SafeTS gap for each store.",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVMinSafeTSGapSeconds)
 
 	TiKVReplicaSelectorFailureCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -735,6 +843,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
+	TiKVStoreLivenessGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "store_liveness_state",
+			Help:        "Liveness state of each tikv",
+			ConstLabels: constLabels,
+		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreLivenessGauge)
+
 	TiKVStoreSlowScoreGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -743,6 +861,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Slow scores of each tikv node based on RPC timecosts",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVStoreSlowScoreGauge)
 
 	TiKVFeedbackSlowScoreGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -752,6 +871,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Slow scores of each tikv node that is calculated by TiKV and sent to the client by health feedback",
 			ConstLabels: constLabels,
 		}, []string{LblStore})
+	storeMetrics = append(storeMetrics, TiKVFeedbackSlowScoreGauge)
 
 	TiKVHealthFeedbackOpsCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -770,6 +890,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of flows under PreferLeader mode.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
+	storeMetrics = append(storeMetrics, TiKVPreferLeaderFlowsGauge)
 
 	TiKVStaleReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -853,6 +974,22 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Counter of stale region from PD",
 			ConstLabels: constLabels,
 		})
+	TiKVStaleBucketFromPDCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_bucket_from_pd",
+			Help:        "Counter of stale bucket from PD",
+			ConstLabels: constLabels,
+		})
+	TiKVBucketClampedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "bucket_clamped",
+			Help:        "Counter of bucket boundaries clamped to region boundaries",
+			ConstLabels: constLabels,
+		})
 	TiKVPipelinedFlushThrottleSecondsHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
@@ -898,7 +1035,28 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Summary of read requests bytes",
 		}, []string{LblType, LblResult})
 
+	TiKVTxnLagCommitTSWaitHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_wait_seconds",
+			Help:        "Bucketed histogram of seconds waiting commit TSO lag.",
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 16), // 0.5ms ~ 16s
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
+	TiKVTxnLagCommitTSAttemptHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_lag_commit_ts_attempt_count",
+			Help:        "Bucketed histogram of attempts to get the lagging TSO in one commit",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 6), // 1 ~ 32
+			ConstLabels: constLabels,
+		}, []string{LblResult})
+
 	initShortcuts()
+	storeMetricVecList.Store(&storeMetrics)
 }
 
 func init() {
@@ -921,9 +1079,10 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCmdHistogram)
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
-	prometheus.MustRegister(TiKVSendReqSummary)
+	prometheus.MustRegister(TiKVSendReqBySourceSummary)
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
+	prometheus.MustRegister(TiKVLockResolverAsyncRunningTasks)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
 	prometheus.MustRegister(TiKVRPCErrorCounter)
 	prometheus.MustRegister(TiKVTxnWriteKVCountHistogram)
@@ -940,16 +1099,22 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)
 	prometheus.MustRegister(TiKVBatchSendTailLatency)
-	prometheus.MustRegister(TiKVBatchRecvTailLatency)
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
-	prometheus.MustRegister(TiKVBatchRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchStreamRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchStreamRecvTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamTiKVSendTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamCanceledEntryTailLatency)
+	prometheus.MustRegister(TiKVBatchStreamTrackedRequestCount)
+	prometheus.MustRegister(TiKVBatchStreamRetiredRequestCount)
+	prometheus.MustRegister(TiKVBatchStreamCompletedResponseCount)
+	prometheus.MustRegister(TiKVBatchStreamOutdatedResponseCount)
 	prometheus.MustRegister(TiKVBatchHeadArrivalInterval)
 	prometheus.MustRegister(TiKVBatchBestSize)
 	prometheus.MustRegister(TiKVBatchMoreRequests)
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
 	prometheus.MustRegister(TiKVBatchPendingRequests)
 	prometheus.MustRegister(TiKVBatchRequests)
-	prometheus.MustRegister(TiKVBatchRequestDuration)
+	prometheus.MustRegister(TiKVBatchRequestStageDuration)
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
 	prometheus.MustRegister(TiKVBatchClientRecycle)
@@ -980,6 +1145,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVGrpcConnectionState)
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
+	prometheus.MustRegister(TiKVStoreLivenessGauge)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVFeedbackSlowScoreGauge)
 	prometheus.MustRegister(TiKVHealthFeedbackOpsCounter)
@@ -993,11 +1159,15 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
 	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVBucketClampedCounter)
 	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
 	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
 	prometheus.MustRegister(TiKVAsyncSendReqCounter)
 	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
 	prometheus.MustRegister(TiKVReadRequestBytes)
+	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
+	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
+	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
@@ -1053,4 +1223,46 @@ func ObserveReadSLI(readKeys uint64, readTime float64, readSize float64) {
 			TiKVReadThroughput.Observe(readSize / readTime)
 		}
 	}
+}
+
+type LabelPair = dto.LabelPair
+
+type MetricVec interface {
+	prometheus.Collector
+	DeletePartialMatch(labels prometheus.Labels) int
+}
+
+// FindNextStaleStoreID finds a stale store ID which is not in validStoreIDs but may still be tracked by the collector.
+func FindNextStaleStoreID(collector prometheus.Collector, validStoreIDs map[uint64]struct{}) uint64 {
+	if collector == nil {
+		return 0
+	}
+	ch := make(chan prometheus.Metric, 8)
+	go func() {
+		collector.Collect(ch)
+		close(ch)
+	}()
+	var (
+		data dto.Metric
+		id   uint64
+	)
+	for m := range ch {
+		if id != 0 {
+			continue
+		}
+		if err := m.Write(&data); err != nil {
+			continue
+		}
+		var thisID uint64
+		for _, l := range data.Label {
+			if l.GetName() == LblStore {
+				thisID, _ = strconv.ParseUint(l.GetValue(), 10, 64)
+				break
+			}
+		}
+		if _, ok := validStoreIDs[thisID]; !ok && thisID != 0 {
+			id = thisID
+		}
+	}
+	return id
 }

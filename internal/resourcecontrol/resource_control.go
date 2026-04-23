@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -53,15 +54,36 @@ func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessL
 	}
 }
 
-// MakeRequestInfo extracts the relevant information from a BatchRequest.
-func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
-	var bypass bool
-	requestSource := req.Context.GetRequestSource()
-	if len(requestSource) > 0 {
-		if strings.Contains(requestSource, util.InternalRequestPrefix+util.InternalTxnOthers) {
-			bypass = true
+// reqTypeAnalyze is the type of analyze coprocessor request.
+// ref: https://github.com/pingcap/tidb/blob/ee4eac2ccb83e1ea653b8131d9a43495019cb5ac/pkg/kv/kv.go#L340
+const reqTypeAnalyze = 104
+
+func shouldBypass(req *tikvrpc.Request) bool {
+	requestSource := req.GetRequestSource()
+	// Check both coprocessor request type and the request source to ensure the request is an internal analyze request.
+	// Internal analyze request may consume a lot of resources, bypass it to avoid affecting the user experience.
+	// This bypass currently only works with NextGen.
+	if config.NextGen && strings.Contains(requestSource, util.InternalTxnStats) {
+		var tp int64
+		switch req.Type {
+		case tikvrpc.CmdBatchCop:
+			tp = req.BatchCop().GetTp()
+		case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+			tp = req.Cop().GetTp()
+		}
+		if tp == reqTypeAnalyze {
+			return true
 		}
 	}
+	// Some internal requests should be bypassed, which may affect the user experience.
+	// For example, the `alter user password` request completely bypasses resource control.
+	// Although it does not consume many resources, it can still impact the user experience.
+	return strings.Contains(requestSource, util.InternalRequestPrefix+util.InternalTxnOthers)
+}
+
+// MakeRequestInfo extracts the relevant information from a BatchRequest.
+func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
+	bypass := shouldBypass(req)
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
 		return &RequestInfo{
@@ -162,8 +184,8 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
-			detailsV2 = r.Response.GetExecDetailsV2()
-			details = r.Response.GetExecDetails()
+			detailsV2 = r.GetExecDetailsV2()
+			details = r.GetExecDetails()
 		}
 		readBytes = uint64(r.Data.Size())
 	case *kvrpcpb.GetResponse:
@@ -179,7 +201,27 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	// Try to get read bytes from the `detailsV2`.
 	// TODO: clarify whether we should count the underlying storage engine read bytes or not.
 	if scanDetail := detailsV2.GetScanDetailV2(); scanDetail != nil {
-		readBytes = scanDetail.GetProcessedVersionsSize()
+		if config.NextGen {
+			// Using the total versions size as the read bytes, which includes not
+			// only processed versions size, but also skipped MVCC versions size.
+			// It can reflect the actual read bytes more accurately, especially for
+			// the request with a large number of MVCC versions.
+			//
+			// For compatibility with older versions of TiKV, if the
+			// processed versions size is greater than the total versions size,
+			// we use the processed versions size as the read bytes.
+			readBytes = max(scanDetail.GetTotalVersionsSize(), scanDetail.GetProcessedVersionsSize())
+		} else {
+			// NOTE: The original design intended to account for all MVCC read
+			// overhead, but TotalVersionsSize did not exist at the time, so
+			// ProcessedVersionsSize was used instead, which only counts the
+			// versions that are actually processed and excludes skipped MVCC
+			// versions. Since this behavior has already been released, switching
+			// to TotalVersionsSize would change the RU calculation. To avoid
+			// unexpected impact on existing users, we only fix this in NextGen
+			// and keep the legacy behavior here for now.
+			readBytes = scanDetail.GetProcessedVersionsSize()
+		}
 	}
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPU := getKVCPU(detailsV2, details)

@@ -82,7 +82,7 @@ func (r reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tik
 	}
 	if req.Type == tikvrpc.CmdResolveLock && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
 		// try collapse resolve lock request.
-		key := strconv.FormatUint(req.Context.RegionId, 10) + "-" + strconv.FormatUint(req.ResolveLock().StartVersion, 10)
+		key := strconv.FormatUint(req.RegionId, 10) + "-" + strconv.FormatUint(req.ResolveLock().StartVersion, 10)
 		copyReq := *req
 		rsC := resolveRegionSf.DoChan(key, func() (interface{}, error) {
 			// resolveRegionSf will call this function in a goroutine, thus use SendRequest directly.
@@ -119,7 +119,7 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 			return
 		}
 		canCollapse = true
-		key := strconv.FormatUint(req.Context.RegionId, 10) + "-" + strconv.FormatUint(resolveLock.StartVersion, 10)
+		key := strconv.FormatUint(req.RegionId, 10) + "-" + strconv.FormatUint(resolveLock.StartVersion, 10)
 		resp, err = r.collapse(ctx, key, &resolveRegionSf, addr, req, timeout)
 		return
 	default:

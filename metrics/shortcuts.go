@@ -38,16 +38,18 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // Shortcuts for performance improvement.
 var (
-	TxnCmdHistogramWithCommitInternal   prometheus.Observer
-	TxnCmdHistogramWithCommitGeneral    prometheus.Observer
-	TxnCmdHistogramWithRollbackInternal prometheus.Observer
-	TxnCmdHistogramWithRollbackGeneral  prometheus.Observer
-	TxnCmdHistogramWithBatchGetInternal prometheus.Observer
-	TxnCmdHistogramWithBatchGetGeneral  prometheus.Observer
-	TxnCmdHistogramWithGetInternal      prometheus.Observer
-	TxnCmdHistogramWithGetGeneral       prometheus.Observer
-	TxnCmdHistogramWithLockKeysInternal prometheus.Observer
-	TxnCmdHistogramWithLockKeysGeneral  prometheus.Observer
+	TxnCmdHistogramWithCommitInternal         prometheus.Observer
+	TxnCmdHistogramWithCommitGeneral          prometheus.Observer
+	TxnCmdHistogramWithRollbackInternal       prometheus.Observer
+	TxnCmdHistogramWithRollbackGeneral        prometheus.Observer
+	TxnCmdHistogramWithBatchGetInternal       prometheus.Observer
+	TxnCmdHistogramWithBatchGetGeneral        prometheus.Observer
+	TxnCmdHistogramWithGetInternal            prometheus.Observer
+	TxnCmdHistogramWithGetGeneral             prometheus.Observer
+	TxnCmdHistogramWithLockKeysInternal       prometheus.Observer
+	TxnCmdHistogramWithLockKeysGeneral        prometheus.Observer
+	TxnCmdHistogramWithSharedLockKeysInternal prometheus.Observer
+	TxnCmdHistogramWithSharedLockKeysGeneral  prometheus.Observer
 
 	RawkvCmdHistogramWithGet           prometheus.Observer
 	RawkvCmdHistogramWithBatchGet      prometheus.Observer
@@ -96,19 +98,28 @@ var (
 	TxnWriteSizeHistogramInternal    prometheus.Observer
 	TxnWriteSizeHistogramGeneral     prometheus.Observer
 
-	LockResolverCountWithBatchResolve             prometheus.Counter
-	LockResolverCountWithExpired                  prometheus.Counter
-	LockResolverCountWithNotExpired               prometheus.Counter
-	LockResolverCountWithWaitExpired              prometheus.Counter
-	LockResolverCountWithResolve                  prometheus.Counter
-	LockResolverCountWithResolveForWrite          prometheus.Counter
-	LockResolverCountWithResolveAsync             prometheus.Counter
-	LockResolverCountWithQueryTxnStatus           prometheus.Counter
-	LockResolverCountWithQueryTxnStatusCommitted  prometheus.Counter
-	LockResolverCountWithQueryTxnStatusRolledBack prometheus.Counter
-	LockResolverCountWithQueryCheckSecondaryLocks prometheus.Counter
-	LockResolverCountWithResolveLocks             prometheus.Counter
-	LockResolverCountWithResolveLockLite          prometheus.Counter
+	LockResolverCountWithBatchResolve                          prometheus.Counter
+	LockResolverCountWithExpired                               prometheus.Counter
+	LockResolverCountWithNotExpired                            prometheus.Counter
+	LockResolverCountWithWaitExpired                           prometheus.Counter
+	LockResolverCountWithResolve                               prometheus.Counter
+	LockResolverCountWithResolveForWrite                       prometheus.Counter
+	LockResolverCountWithResolveAsync                          prometheus.Counter
+	LockResolverCountWithQueryTxnStatus                        prometheus.Counter
+	LockResolverCountWithQueryTxnStatusCommitted               prometheus.Counter
+	LockResolverCountWithQueryTxnStatusRolledBack              prometheus.Counter
+	LockResolverCountWithQueryCheckSecondaryLocks              prometheus.Counter
+	LockResolverCountWithResolveLocks                          prometheus.Counter
+	LockResolverCountWithResolveLockLite                       prometheus.Counter
+	LockResolverCountWithAsyncResolveAsyncCommitFallback       prometheus.Counter
+	LockResolverCountWithReadAsyncResolveFallback              prometheus.Counter
+	LockResolverCountWithAsyncCheckSecondariesFallback         prometheus.Counter
+	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback prometheus.Counter
+
+	LockResolverAsyncRunningTasksForReadResolve              prometheus.Gauge
+	LockResolverAsyncRunningTasksForResolveAsyncCommit       prometheus.Gauge
+	LockResolverAsyncRunningTasksForCheckSecondaries         prometheus.Gauge
+	LockResolverAsyncRunningTasksForResolveAsyncCommitRegion prometheus.Gauge
 
 	RegionCacheCounterWithInvalidateRegionFromCacheOK prometheus.Counter
 	RegionCacheCounterWithSendFail                    prometheus.Counter
@@ -173,10 +184,6 @@ var (
 	StaleReadRemoteInBytes  prometheus.Counter
 	StaleReadRemoteOutBytes prometheus.Counter
 
-	BatchRequestDurationSend prometheus.Observer
-	BatchRequestDurationRecv prometheus.Observer
-	BatchRequestDurationDone prometheus.Observer
-
 	AsyncSendReqCounterWithOK          prometheus.Counter
 	AsyncSendReqCounterWithRegionError prometheus.Counter
 	AsyncSendReqCounterWithRPCError    prometheus.Counter
@@ -192,6 +199,11 @@ var (
 	ReadRequestLeaderRemoteBytes   prometheus.Observer
 	ReadRequestFollowerLocalBytes  prometheus.Observer
 	ReadRequestFollowerRemoteBytes prometheus.Observer
+
+	LagCommitTSWaitHistogramWithOK       prometheus.Observer
+	LagCommitTSWaitHistogramWithError    prometheus.Observer
+	LagCommitTSAttemptHistogramWithOK    prometheus.Observer
+	LagCommitTSAttemptHistogramWithError prometheus.Observer
 )
 
 func initShortcuts() {
@@ -205,6 +217,8 @@ func initShortcuts() {
 	TxnCmdHistogramWithGetGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblGet, LblGeneral)
 	TxnCmdHistogramWithLockKeysInternal = TiKVTxnCmdHistogram.WithLabelValues(LblLockKeys, LblInternal)
 	TxnCmdHistogramWithLockKeysGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblLockKeys, LblGeneral)
+	TxnCmdHistogramWithSharedLockKeysInternal = TiKVTxnCmdHistogram.WithLabelValues(LblSharedLockKeys, LblInternal)
+	TxnCmdHistogramWithSharedLockKeysGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblSharedLockKeys, LblGeneral)
 
 	RawkvCmdHistogramWithGet = TiKVRawkvCmdHistogram.WithLabelValues("get")
 	RawkvCmdHistogramWithBatchGet = TiKVRawkvCmdHistogram.WithLabelValues("batch_get")
@@ -265,6 +279,15 @@ func initShortcuts() {
 	LockResolverCountWithQueryCheckSecondaryLocks = TiKVLockResolverCounter.WithLabelValues("query_check_secondary_locks")
 	LockResolverCountWithResolveLocks = TiKVLockResolverCounter.WithLabelValues("query_resolve_locks")
 	LockResolverCountWithResolveLockLite = TiKVLockResolverCounter.WithLabelValues("query_resolve_lock_lite")
+	LockResolverCountWithAsyncResolveAsyncCommitFallback = TiKVLockResolverCounter.WithLabelValues("async_resolve_async_commit_fallback")
+	LockResolverCountWithReadAsyncResolveFallback = TiKVLockResolverCounter.WithLabelValues("read_async_resolve_fallback")
+	LockResolverCountWithAsyncCheckSecondariesFallback = TiKVLockResolverCounter.WithLabelValues("async_check_secondaries_fallback")
+	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback = TiKVLockResolverCounter.WithLabelValues("async_resolve_async_commit_region_fallback")
+
+	LockResolverAsyncRunningTasksForReadResolve = TiKVLockResolverAsyncRunningTasks.WithLabelValues("read_resolve")
+	LockResolverAsyncRunningTasksForResolveAsyncCommit = TiKVLockResolverAsyncRunningTasks.WithLabelValues("resolve_async_commit")
+	LockResolverAsyncRunningTasksForCheckSecondaries = TiKVLockResolverAsyncRunningTasks.WithLabelValues("check_secondaries")
+	LockResolverAsyncRunningTasksForResolveAsyncCommitRegion = TiKVLockResolverAsyncRunningTasks.WithLabelValues("resolve_async_commit_region")
 
 	RegionCacheCounterWithInvalidateRegionFromCacheOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_region_from_cache", "ok")
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")
@@ -304,10 +327,6 @@ func initShortcuts() {
 	OnePCTxnCounterOk = TiKVOnePCTxnCounter.WithLabelValues("ok")
 	OnePCTxnCounterError = TiKVOnePCTxnCounter.WithLabelValues("err")
 	OnePCTxnCounterFallback = TiKVOnePCTxnCounter.WithLabelValues("fallback")
-
-	BatchRequestDurationSend = TiKVBatchRequestDuration.WithLabelValues("send")
-	BatchRequestDurationRecv = TiKVBatchRequestDuration.WithLabelValues("recv")
-	BatchRequestDurationDone = TiKVBatchRequestDuration.WithLabelValues("done")
 
 	PrewriteAssertionUsageCounterNone = TiKVPrewriteAssertionUsageCounter.WithLabelValues("none")
 	PrewriteAssertionUsageCounterExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("exist")
@@ -353,4 +372,9 @@ func initShortcuts() {
 	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
 	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
 	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
+
+	LagCommitTSWaitHistogramWithOK = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("ok")
+	LagCommitTSWaitHistogramWithError = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("err")
+	LagCommitTSAttemptHistogramWithOK = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("ok")
+	LagCommitTSAttemptHistogramWithError = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("err")
 }

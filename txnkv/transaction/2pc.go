@@ -137,6 +137,7 @@ type twoPhaseCommitter struct {
 	detail              unsafe.Pointer
 	txnSize             int
 	hasNoNeedCommitKeys bool
+	hasSharedLocks      bool
 	resourceGroupName   string
 
 	primaryKey  []byte
@@ -548,8 +549,17 @@ func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, asse
 	return assertionFailed
 }
 
+// getLockTypeFromFlags gets the lock type from the key flags. It's valid only when flags.HasLocked() is true.
+func getLockTypeFromFlags(flags kv.KeyFlags) kvrpcpb.Op {
+	if flags.HasLockedInShareMode() {
+		return kvrpcpb.Op_SharedLock
+	} else {
+		return kvrpcpb.Op_Lock
+	}
+}
+
 func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
-	var size, putCnt, delCnt, lockCnt, checkCnt int
+	var size, putCnt, delCnt, lockCnt, sharedLockCnt, checkCnt int
 
 	txn := c.txn
 	memBuf := txn.GetMemBuffer().GetMemDB()
@@ -567,12 +577,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		flags := it.Flags()
 		var value []byte
 		var op kvrpcpb.Op
-
 		if !it.HasValue() {
 			if !flags.HasLocked() {
 				continue
 			}
-			op = kvrpcpb.Op_Lock
+			op = getLockTypeFromFlags(flags)
 			lockCnt++
 		} else {
 			value = it.Value()
@@ -591,7 +600,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// If the key was locked before, we should prewrite the lock even if
 					// the KV needn't be committed according to the filter. Otherwise, we
 					// were forgetting removing pessimistic locks added before.
-					op = kvrpcpb.Op_Lock
+					op = getLockTypeFromFlags(flags)
 					lockCnt++
 				} else {
 					op = kvrpcpb.Op_Put
@@ -612,16 +621,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					toUpdatePrewriteOnly = append(toUpdatePrewriteOnly, key)
 				} else {
 					if flags.HasNewlyInserted() {
+						if !flags.HasLocked() {
+							continue
+						}
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
 						// other deletes for example the secondary index delete.
 						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
 						// the logic is same as the pessimistic mode.
-						if flags.HasLocked() {
-							op = kvrpcpb.Op_Lock
-							lockCnt++
-						} else {
-							continue
-						}
+						op = getLockTypeFromFlags(flags)
+						lockCnt++
 					} else {
 						op = kvrpcpb.Op_Del
 						delCnt++
@@ -637,6 +645,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
 		if c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
+		}
+		if op == kvrpcpb.Op_SharedLock {
+			sharedLockCnt++
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		size += len(key) + len(value)
@@ -679,7 +690,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			}
 		}
 
-		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_SharedLock {
 			c.primaryKey = key
 		}
 	}
@@ -690,6 +701,22 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	if c.mutations.Len() == 0 {
 		return nil
+	} else if len(c.primaryKey) == 0 && sharedLockCnt > 0 {
+		// A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
+		// that (it's the only place that sets `flagKeyLockedInShareMode`). Here we just double check it.
+		// Only report error when there are shared locks - if all keys are CheckNotExists (delete-your-writes),
+		// we allow the transaction to continue and use the first key as primary via the primary() fallback.
+		msg := "no suitable primary key found for the transaction"
+		logutil.BgLogger().Warn(msg,
+			zap.Uint64("session", c.sessionID),
+			zap.Int("keys", c.mutations.Len()),
+			zap.Int("puts", putCnt),
+			zap.Int("dels", delCnt),
+			zap.Int("locks", lockCnt),
+			zap.Int("sharedLocks", sharedLockCnt),
+			zap.Int("checks", checkCnt),
+			zap.Uint64("txnStartTS", txn.startTS))
+		return errors.New(msg)
 	}
 	c.txnSize = size
 
@@ -704,6 +731,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			zap.Int("puts", putCnt),
 			zap.Int("dels", delCnt),
 			zap.Int("locks", lockCnt),
+			zap.Int("sharedLocks", sharedLockCnt),
 			zap.Int("checks", checkCnt),
 			zap.Uint64("txnStartTS", txn.startTS))
 	}
@@ -731,6 +759,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
 		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
 	}
+	c.hasSharedLocks = sharedLockCnt > 0
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
@@ -953,8 +982,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 		sizeFunc = c.keyValueSize
 		atomic.AddInt32(&c.getDetail().PrewriteRegionNum, int32(len(groups)))
 	case actionPessimisticLock:
-		if act.LockCtx.Stats != nil {
-			act.LockCtx.Stats.RegionNum = int32(len(groups))
+		if act.Stats != nil {
+			act.Stats.RegionNum = int32(len(groups))
 		}
 	}
 
@@ -1429,12 +1458,12 @@ func broadcastToAllStores(
 						TxnStatus: []*kvrpcpb.TxnStatus{status},
 					},
 				)
-				req.Context.ClusterId = store.GetClusterID()
-				req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
+				req.ClusterId = store.GetClusterID()
+				req.ResourceControlContext = &kvrpcpb.ResourceControlContext{
 					ResourceGroupName: resourceGroupName,
 				}
-				req.Context.ResourceGroupTag = resourceGroupTag
-				req.Context.RequestSource = txn.GetRequestSource()
+				req.ResourceGroupTag = resourceGroupTag
+				req.RequestSource = txn.GetRequestSource()
 
 				_, err := store.GetTiKVClient().SendRequest(
 					bo.GetCtx(),
@@ -1640,18 +1669,24 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			}
 		} else if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			if err != nil {
+				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
+				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
+			} else {
+				logutil.Logger(ctx).Info("2PC prewrite lock cleanup finished",
+					zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic))
+			}
 		} else if c.isPessimistic {
 			err = c.pessimisticRollbackMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
-		}
-
-		if err != nil {
-			metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
-			logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
-				zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
-		} else {
-			logutil.Logger(ctx).Debug("2PC clean up done",
-				zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
-				zap.Bool("isOnePC", c.isOnePC()))
+			if err != nil {
+				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
+				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPessimistic", c.isPessimistic), zap.Bool("isOnePC", c.isOnePC()))
+			} else {
+				logutil.Logger(ctx).Debug("2PC pessimistic lock rollback finished",
+					zap.Uint64("txnStartTS", c.startTS))
+			}
 		}
 	})
 }
@@ -1711,7 +1746,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
-	if !c.txn.isPipelined {
+	if !c.txn.isPipelined && !c.hasSharedLocks {
 		// Check async commit is available or not.
 		if c.checkAsyncCommit() {
 			commitTSMayBeCalculated = true
@@ -1750,10 +1785,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// all nodes, we have to make sure the commit TS of this transaction is greater
 	// than the snapshot TS of all existent readers. So we get a new timestamp
 	// from PD and plus one as our MinCommitTS.
-	if commitTSMayBeCalculated && c.needLinearizability() {
+	// If `commitWaitUntilTSO > 0`, we also need to get a new timestamp from TSO to ensure the constraint satisfied.
+	if commitTSMayBeCalculated && (c.needLinearizability() || c.txn.commitWaitUntilTSO > 0) {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
 		start := time.Now()
-		latestTS, err := c.store.GetTimestampWithRetry(bo)
+		latestTS, err := c.txn.GetTimestampForCommit(bo)
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
@@ -1761,6 +1797,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTSMgr.tryUpdate(latestTS+1, twoPCAccess)
 	}
@@ -1809,7 +1846,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		// RPCs fails. However, if there are multiple errors and some of the errors
 		// are not RPC failures, we can return the actual error instead of undetermined.
 		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Error("Async commit/1PC result undetermined",
+			logutil.Logger(ctx).Warn("Async commit/1PC result undetermined",
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
@@ -1888,7 +1925,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
-		commitTS, err = c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars))
+		commitTS, err = c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars))
 		if err != nil {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
@@ -1896,6 +1933,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return err
 		}
 		commitDetail.GetCommitTsTime = time.Since(start)
+		c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
 		logutil.Event(ctx, "finish get commit ts")
 		logutil.SetTag(ctx, "commitTs", commitTS)
 	}
@@ -2000,7 +2038,7 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 	}
 	if err != nil {
 		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Error("2PC commit result undetermined",
+			logutil.Logger(ctx).Warn("2PC commit result undetermined",
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))

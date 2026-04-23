@@ -153,8 +153,9 @@ func convertToPbPairs(pairs []Pair) []*kvrpcpb.KvPair {
 		var kvPair *kvrpcpb.KvPair
 		if p.Err == nil {
 			kvPair = &kvrpcpb.KvPair{
-				Key:   p.Key,
-				Value: p.Value,
+				Key:      p.Key,
+				Value:    p.Value,
+				CommitTs: p.CommitTS,
 			}
 		} else {
 			kvPair = &kvrpcpb.KvPair{
@@ -177,14 +178,21 @@ func (h kvHandler) handleKvGet(req *kvrpcpb.GetRequest) *kvrpcpb.GetResponse {
 		panic("KvGet: key not in region")
 	}
 
-	val, err := h.mvccStore.Get(req.Key, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
-	if err != nil {
+	pair := h.mvccStore.GetKVPair(req.Key, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
+	if pair.Err != nil {
 		return &kvrpcpb.GetResponse{
-			Error: convertToKeyError(err),
+			Error: convertToKeyError(pair.Err),
 		}
 	}
+
+	var commitTS uint64
+	if req.NeedCommitTs {
+		commitTS = pair.CommitTS
+	}
+
 	return &kvrpcpb.GetResponse{
-		Value: val,
+		Value:    pair.Value,
+		CommitTs: commitTS,
 	}
 }
 
@@ -341,8 +349,14 @@ func (h kvHandler) handleKvBatchGet(req *kvrpcpb.BatchGetRequest) *kvrpcpb.Batch
 		}
 	}
 	pairs := h.mvccStore.BatchGet(req.Keys, req.GetVersion(), h.isolationLevel, req.Context.GetResolvedLocks())
+	pbPairs := convertToPbPairs(pairs)
+	if !req.NeedCommitTs {
+		for _, p := range pbPairs {
+			p.CommitTs = 0
+		}
+	}
 	return &kvrpcpb.BatchGetResponse{
-		Pairs: convertToPbPairs(pairs),
+		Pairs: pbPairs,
 	}
 }
 
@@ -549,6 +563,12 @@ func (h kvHandler) handleKvRawBatchDelete(req *kvrpcpb.RawBatchDeleteRequest) *k
 }
 
 func (h kvHandler) handleKvRawDeleteRange(req *kvrpcpb.RawDeleteRangeRequest) *kvrpcpb.RawDeleteRangeResponse {
+	if !h.checkRawKeyInRegion(req.StartKey) {
+		panic("RawDeleteRange: start key not in region")
+	}
+	if !h.checkRawEndKeyInRegion(req.EndKey) {
+		panic("RawDeleteRange: end key not in region")
+	}
 	rawKV, ok := h.mvccStore.(RawKV)
 	if !ok {
 		return &kvrpcpb.RawDeleteRangeResponse{
@@ -773,7 +793,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.PrewriteResponse{
 							RegionError: &errorpb.Error{
@@ -824,7 +844,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.CommitResponse{
 							RegionError: &errorpb.Error{

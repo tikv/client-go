@@ -102,7 +102,7 @@ func (s *testTiclientSuite) TestSingleKey() {
 	txn = s.beginTxn()
 	val, err := txn.Get(context.TODO(), encodeKey(s.prefix, "key"))
 	s.Nil(err)
-	s.Equal(val, []byte("value"))
+	s.Equal(val.Value, []byte("value"))
 
 	txn = s.beginTxn()
 	err = txn.Delete(encodeKey(s.prefix, "key"))
@@ -126,7 +126,7 @@ func (s *testTiclientSuite) TestMultiKeys() {
 	for i := 0; i < keyNum; i++ {
 		val, err1 := txn.Get(context.TODO(), encodeKey(s.prefix, s08d("key", i)))
 		s.Nil(err1)
-		s.Equal(val, valueBytes(i))
+		s.Equal(val.Value, valueBytes(i))
 	}
 
 	txn = s.beginTxn()

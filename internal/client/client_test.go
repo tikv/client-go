@@ -119,11 +119,54 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	cancel()
-	_, err := sendBatchRequest(ctx, "", "", a, req, 2*time.Second, 0)
+	_, err := sendBatchRequest(ctx, "", "", a, nil, req, 2*time.Second, 0)
 	assert.Equal(t, errors.Cause(err), context.Canceled)
 
-	_, err = sendBatchRequest(context.Background(), "", "", a, req, 0, 0)
+	_, err = sendBatchRequest(context.Background(), "", "", a, nil, req, 0, 0)
 	assert.Equal(t, errors.Cause(err), context.DeadlineExceeded)
+}
+
+func TestCompletedTiKVRUV2RPCCount(t *testing.T) {
+	testCases := []struct {
+		name       string
+		req        *tikvrpc.Request
+		readCount  int64
+		writeCount int64
+	}{
+		{
+			name:       "get",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}),
+			readCount:  1,
+			writeCount: 0,
+		},
+		{
+			name:       "batch get",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{}),
+			readCount:  1,
+			writeCount: 0,
+		},
+		{
+			name:       "prewrite",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}),
+			readCount:  0,
+			writeCount: 1,
+		},
+		{
+			name:       "commit",
+			req:        tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{}),
+			readCount:  0,
+			writeCount: 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.req.StoreTp = tikvrpc.TiKV
+			readCount, writeCount := completedTiKVRUV2RPCCount(tc.req)
+			require.Equal(t, tc.readCount, readCount)
+			require.Equal(t, tc.writeCount, writeCount)
+		})
+	}
 }
 
 func TestSendWhenReconnect(t *testing.T) {
@@ -143,13 +186,13 @@ func TestSendWhenReconnect(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Suppose all connections are re-establishing.
-	for _, client := range conn.batchConn.batchCommandsClients {
+	for _, client := range conn.batchCommandsClients {
 		client.lockForRecreate()
 	}
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
-	require.Regexp(t, "wait recvLoop timeout, timeout:5s: context deadline exceeded", err.Error())
+	require.Regexp(t, "wait recvLoop timeout, timeout:5s.*context deadline exceeded", err.Error())
 	server.Stop()
 }
 
@@ -413,12 +456,14 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs := builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 10)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 10)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 10)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 10)
 	assert.Equal(t, len(entryMap), 10)
-	for i, id := range batchedReq.GetRequestIds() {
-		assert.Equal(t, id, uint64(i))
-		assert.Equal(t, entryMap[id].req, batchedReq.GetRequests()[i])
+	for i, id := range batchedReq.req.GetRequestIds() {
+		assert.Equal(t, id, uint64(i+1))
+		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
+		assert.Nil(t, entryMap[id].batchState.Load())
+		assert.Positive(t, entryMap[id].batchSelectedAfterReqArriveNS.Load())
 	}
 	assert.Equal(t, len(forwardingReqs), 0)
 	assert.Equal(t, builder.idAlloc, uint64(10))
@@ -439,19 +484,22 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 1)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 1)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 1)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 1)
 	assert.Equal(t, len(forwardingReqs), 3)
 	for i, host := range forwardedHosts[1:] {
-		assert.Equal(t, len(forwardingReqs[host].GetRequests()), i+2)
-		assert.Equal(t, len(forwardingReqs[host].GetRequestIds()), i+2)
+		assert.Equal(t, len(forwardingReqs[host].req.GetRequests()), i+2)
+		assert.Equal(t, len(forwardingReqs[host].req.GetRequestIds()), i+2)
 	}
 	assert.Equal(t, int(builder.idAlloc), 20)
 	assert.Equal(t, len(entryMap), 10)
 	for host, forwardingReq := range forwardingReqs {
-		for i, id := range forwardingReq.GetRequestIds() {
-			assert.Equal(t, entryMap[id].req, forwardingReq.GetRequests()[i])
+		for i, id := range forwardingReq.req.GetRequestIds() {
+			assert.Equal(t, entryMap[id].req, forwardingReq.req.GetRequests()[i])
 			assert.Equal(t, entryMap[id].forwardedHost, host)
+			assert.Nil(t, entryMap[id].batchState.Load())
+			assert.Positive(t, entryMap[id].batchSelectedAfterReqArriveNS.Load())
+			assert.NotNil(t, forwardingReq.state)
 		}
 	}
 
@@ -471,12 +519,12 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
-	assert.Equal(t, len(batchedReq.GetRequests()), 2)
-	assert.Equal(t, len(batchedReq.GetRequestIds()), 2)
+	assert.Equal(t, len(batchedReq.req.GetRequests()), 2)
+	assert.Equal(t, len(batchedReq.req.GetRequestIds()), 2)
 	assert.Equal(t, len(forwardingReqs), 0)
 	assert.Equal(t, len(entryMap), 2)
-	for i, id := range batchedReq.GetRequestIds() {
-		assert.Equal(t, entryMap[id].req, batchedReq.GetRequests()[i])
+	for i, id := range batchedReq.req.GetRequestIds() {
+		assert.Equal(t, entryMap[id].req, batchedReq.req.GetRequests()[i])
 		assert.False(t, entryMap[id].isCanceled())
 	}
 
@@ -499,10 +547,207 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	// Test reset
 	builder.reset()
 	assert.Equal(t, builder.len(), 0)
-	assert.Equal(t, len(builder.requests), 0)
-	assert.Equal(t, len(builder.requestIDs), 0)
-	assert.Equal(t, len(builder.forwardingReqs), 0)
+	assert.NotNil(t, builder.directGroup.req)
+	assert.Nil(t, builder.directGroup.state)
+	assert.Len(t, builder.directGroup.req.GetRequests(), 0)
+	assert.Len(t, builder.directGroup.req.GetRequestIds(), 0)
+	assert.Equal(t, len(builder.forwardingGroups), 0)
 	assert.NotEqual(t, builder.idAlloc, 0)
+}
+
+func TestBatchRequestTerminalOutcome(t *testing.T) {
+	testCases := []struct {
+		name    string
+		err     error
+		outcome batchRequestOutcome
+	}{
+		{name: "ok", err: nil, outcome: batchRequestOutcomeOK},
+		{name: "timeout", err: errors.WithMessage(context.DeadlineExceeded, "wait sendLoop"), outcome: batchRequestOutcomeTimeout},
+		{name: "canceled", err: errors.WithStack(context.Canceled), outcome: batchRequestOutcomeCanceled},
+		{name: "batch conn closed", err: errors.New("batchConn closed"), outcome: batchRequestOutcomeClosed},
+		{name: "batch client closed", err: errors.WithStack(errors.New("batch client closed")), outcome: batchRequestOutcomeClosed},
+		{name: "failed", err: errors.New("boom"), outcome: batchRequestOutcomeFailed},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.outcome, batchRequestTerminalOutcome(tc.err))
+		})
+	}
+}
+
+func TestVisitBatchRequestObservations(t *testing.T) {
+	type batchRequestObservation struct {
+		stage    batchRequestStage
+		outcome  batchRequestOutcome
+		duration time.Duration
+	}
+	mustObservations := func(entry *batchCommandsEntry, terminal batchRequestOutcome, now time.Time) []batchRequestObservation {
+		t.Helper()
+		var observations []batchRequestObservation
+		visitBatchRequestObservations(entry, terminal, now, func(stage batchRequestStage, outcome batchRequestOutcome, duration time.Duration) {
+			observations = append(observations, batchRequestObservation{stage: stage, outcome: outcome, duration: duration})
+		})
+		return observations
+	}
+	newEntry := func(reqArriveAt time.Time, batched, sent, recv time.Duration) *batchCommandsEntry {
+		entry := &batchCommandsEntry{reqArriveAt: reqArriveAt}
+		if batched > 0 {
+			entry.batchSelectedAfterReqArriveNS.Store(max(batched, time.Nanosecond).Nanoseconds())
+		}
+		if batched > 0 && (sent > 0 || recv > 0) {
+			batchState := &batchCommandsRequestState{batchSize: 1, sendStartAt: reqArriveAt.Add(batched)}
+			entry.batchState.Store(batchState)
+			if sent > 0 {
+				batchState.sentAfterSendStartNS.Store(max(sent-batched, time.Nanosecond).Nanoseconds())
+			}
+			if recv > 0 {
+				batchState.firstRespAfterSendStartNS.Store(max(recv-batched, time.Nanosecond).Nanoseconds())
+				entry.recvAfterReqArriveNS.Store(max(recv, time.Nanosecond).Nanoseconds())
+			}
+		} else if recv > 0 {
+			entry.recvAfterReqArriveNS.Store(max(recv, time.Nanosecond).Nanoseconds())
+		}
+		return entry
+	}
+
+	start := time.Unix(0, 0)
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeTimeout, duration: 25 * time.Millisecond},
+	}, mustObservations(newEntry(start, 0, 0, 0), batchRequestOutcomeTimeout, start.Add(25*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeCanceled, duration: 7 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 0, 0), batchRequestOutcomeCanceled, start.Add(11*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Millisecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeTimeout, duration: 5 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 5*time.Millisecond, 0), batchRequestOutcomeTimeout, start.Add(10*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Millisecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 5 * time.Millisecond},
+		{stage: batchRequestStageDone, outcome: batchRequestOutcomeOK, duration: 12 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 5*time.Millisecond, 10*time.Millisecond), batchRequestOutcomeOK, start.Add(12*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Millisecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 5 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 5*time.Millisecond, 10*time.Millisecond), batchRequestOutcomeCanceled, start.Add(12*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Nanosecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 4*time.Millisecond - 1*time.Nanosecond},
+		{stage: batchRequestStageDone, outcome: batchRequestOutcomeOK, duration: 10 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 0, 8*time.Millisecond), batchRequestOutcomeOK, start.Add(10*time.Millisecond)))
+
+	require.Equal(t, []batchRequestObservation{
+		{stage: batchRequestStageBatchWait, outcome: batchRequestOutcomeOK, duration: 4 * time.Millisecond},
+		{stage: batchRequestStageSendWait, outcome: batchRequestOutcomeOK, duration: 1*time.Millisecond - 1*time.Nanosecond},
+		{stage: batchRequestStageRecvWait, outcome: batchRequestOutcomeOK, duration: 1 * time.Nanosecond},
+		{stage: batchRequestStageDone, outcome: batchRequestOutcomeOK, duration: 10 * time.Millisecond},
+	}, mustObservations(newEntry(start, 4*time.Millisecond, 7*time.Millisecond, 5*time.Millisecond), batchRequestOutcomeOK, start.Add(10*time.Millisecond)))
+}
+
+func TestFormatBatchRequestTimeoutReasonNormalizesObservedSentNS(t *testing.T) {
+	start := time.Unix(0, 0)
+
+	entry := &batchCommandsEntry{reqArriveAt: start}
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((8 * time.Millisecond).Nanoseconds())
+	require.Equal(t,
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
+		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
+	)
+
+	entry = &batchCommandsEntry{reqArriveAt: start}
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().sentAfterSendStartNS.Store((3 * time.Millisecond).Nanoseconds())
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((1 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((5 * time.Millisecond).Nanoseconds())
+	require.Equal(t,
+		"wait recvLoop timeout, timeout:10ms, EntryProgress{batch:4ms, size:1, send:1ms, ack:1ns, recv:1ns}",
+		formatBatchRequestTimeoutReason(entry, 10*time.Millisecond, start.Add(10*time.Millisecond)),
+	)
+}
+
+func TestWriteBatchCommandsEntryProgress(t *testing.T) {
+	start := time.Unix(0, 0)
+	entry := &batchCommandsEntry{reqArriveAt: start}
+	require.Equal(t, "EntryProgress{}", writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String())
+
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond)})
+	entry.batchState.Load().firstRespAfterSendStartNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.recvAfterReqArriveNS.Store((8 * time.Millisecond).Nanoseconds())
+	require.Equal(t,
+		"EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
+		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
+	)
+
+	var builder strings.Builder
+	builder.WriteString("prefix=")
+	require.Equal(t,
+		"prefix=EntryProgress{batch:4ms, size:1, send:1ns, ack:4ms, recv:4ms}",
+		writeBatchCommandsEntryProgress(&builder, entry, start.Add(10*time.Millisecond)).String(),
+	)
+
+	entry = &batchCommandsEntry{reqArriveAt: start}
+	entry.requestID.Store(4)
+	entry.batchSelectedAfterReqArriveNS.Store((4 * time.Millisecond).Nanoseconds())
+	entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, sendStartAt: start.Add(4 * time.Millisecond), stream: &batchCommandsStream{}})
+	entry.batchState.Load().stream.maxRespReqID.Store(5)
+	require.Equal(t,
+		"EntryProgress{batch:4ms, size:1, send:6ms, ack:yes}",
+		writeBatchCommandsEntryProgress(nil, entry, start.Add(10*time.Millisecond)).String(),
+	)
+}
+
+func TestInspectPendingBatchRequests(t *testing.T) {
+	now := time.Unix(0, 0).Add(7 * time.Minute)
+	stream1 := &batchCommandsStream{}
+	stream1.maxRespReqID.Store(5)
+	stream2 := &batchCommandsStream{}
+
+	newEntry := func(id uint64, wait time.Duration, batchedAt time.Duration, forwardedHost string, stream *batchCommandsStream) *batchCommandsEntry {
+		entry := &batchCommandsEntry{
+			reqArriveAt:   now.Add(-wait),
+			forwardedHost: forwardedHost,
+		}
+		entry.requestID.Store(id)
+		entry.batchState.Store(&batchCommandsRequestState{batchSize: 1, stream: stream})
+		if batchedAt > 0 {
+			entry.batchSelectedAfterReqArriveNS.Store(max(batchedAt, time.Nanosecond).Nanoseconds())
+			entry.batchState.Load().sendStartAt = entry.reqArriveAt.Add(batchedAt)
+		}
+		return entry
+	}
+
+	client := &batchCommandsClient{}
+	client.batched.Store(uint64(1), newEntry(1, 7*time.Minute+30*time.Second, 30*time.Second, "", stream2))
+	client.batched.Store(uint64(2), newEntry(2, 5*time.Minute, 3*time.Minute, "store-1", stream1))
+	client.batched.Store(uint64(3), newEntry(3, 30*time.Second, 0, "", stream2))
+	client.batched.Store(uint64(4), newEntry(4, 4*time.Minute, 2*time.Minute, "store-1", stream1))
+	client.batched.Store(uint64(5), newEntry(5, 6*time.Minute, time.Minute, "store-2", stream2))
+
+	stats := client.inspectPendingBatchRequests(now)
+	require.NotNil(t, stats.oldestEntry)
+	require.Equal(t, uint64(1), stats.oldestID)
+	require.Equal(t, 7*time.Minute+30*time.Second, stats.oldestWait)
+	require.Equal(t, 5, stats.slowCount)
+	require.Equal(t, 3, stats.slowUnconfirmedCount)
+	require.Equal(t, 4, stats.hangingCount)
+	require.Equal(t, 2, stats.hangingUnconfirmedCount)
 }
 
 func TestTraceExecDetails(t *testing.T) {
@@ -679,12 +924,12 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		server.Stop()
 	}()
 
-	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	conn, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
 
@@ -694,7 +939,8 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be failed since server is down.
 	for i := 0; i < 10; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Millisecond*100, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
 		grpcConn := conn.Get()
@@ -716,9 +962,9 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		grpcConn := conn.Get()
 		require.NotNil(t, grpcConn)
 		var cli *batchCommandsClient
-		for i := range conn.batchConn.batchCommandsClients {
+		for i := range conn.batchCommandsClients {
 			if conn.batchConn.batchCommandsClients[i].tryLockForSend() {
-				cli = conn.batchConn.batchCommandsClients[i]
+				cli = conn.batchCommandsClients[i]
 				break
 			}
 		}
@@ -737,7 +983,8 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
+		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
 }
@@ -748,7 +995,7 @@ func TestLimitConcurrency(t *testing.T) {
 	{
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		reqs, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 1)
+		re.Len(reqs.req.RequestIds, 1)
 		re.Equal(0, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
 	}
@@ -758,7 +1005,7 @@ func TestLimitConcurrency(t *testing.T) {
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority - 1})
 		reqs, _ := batch.reqBuilder.buildWithLimit(0, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 1)
+		re.Len(reqs.req.RequestIds, 1)
 		batch.reqBuilder.reset()
 		re.Equal(1, batch.reqBuilder.len())
 	}
@@ -768,7 +1015,7 @@ func TestLimitConcurrency(t *testing.T) {
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		reqs, _ := batch.reqBuilder.buildWithLimit(2, func(_ uint64, _ *batchCommandsEntry) {})
-		re.Len(reqs.RequestIds, 2)
+		re.Len(reqs.req.RequestIds, 2)
 		re.Equal(1, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
 	}
@@ -959,7 +1206,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 				if i%2 != 0 {
 					forwardedHost = addr2
 				}
-				_, err := sendBatchRequest(context.Background(), addr1, forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
+				_, err := sendBatchRequest(context.Background(), addr1, forwardedHost, conn.batchConn, nil, req, time.Millisecond*50, 0)
 				if err == nil ||
 					err.Error() == "EOF" ||
 					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
@@ -975,7 +1222,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	}
 	wg.Wait()
 
-	for _, cli := range conn.batchConn.batchCommandsClients {
+	for _, cli := range conn.batchCommandsClients {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
@@ -1042,16 +1289,18 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	conn, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
-	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second, 0)
+	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Second, 0)
 	require.NoError(t, err)
 
-	for _, c := range conn.batchConn.batchCommandsClients {
+	for _, c := range conn.batchCommandsClients {
 		// mock all client a in recreate.
 		c.lockForRecreate()
 	}
+
+	req = &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 	start := time.Now()
 	timeout := time.Second
-	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, timeout, 0)
+	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, timeout, 0)
 	require.Error(t, err)
 	require.Equal(t, "no available connections", err.Error())
 	require.Less(t, time.Since(start), timeout)

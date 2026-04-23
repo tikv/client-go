@@ -17,18 +17,16 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
@@ -36,6 +34,7 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/mem"
 )
 
 type connPool struct {
@@ -55,12 +54,7 @@ type connPool struct {
 
 	monitor *connMonitor
 
-	metrics struct {
-		rpcLatHist        *rpcMetrics
-		rpcSrcLatSum      sync.Map
-		rpcNetLatExternal prometheus.Observer
-		rpcNetLatInternal prometheus.Observer
-	}
+	metrics atomic.Pointer[storeMetrics]
 }
 
 func newConnPool(maxSize uint, addr string, ver uint64, security config.Security,
@@ -74,9 +68,6 @@ func newConnPool(maxSize uint, addr string, ver uint64, security config.Security
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	a.metrics.rpcLatHist = deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: addr}))
-	a.metrics.rpcNetLatExternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "false")
-	a.metrics.rpcNetLatInternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "true")
 	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
 		return nil, err
 	}
@@ -87,6 +78,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	//nolint:staticcheck // SA1019: ignore deprecation warning
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -120,7 +112,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	allowBatch := (cfg.TiKVClient.MaxBatchSize > 0) && enableBatch
 	if allowBatch {
 		a.batchConn = newBatchConn(uint(len(a.conns)), cfg.TiKVClient.MaxBatchSize, idleNotify)
-		a.batchConn.initMetrics(a.target)
+		a.initMetrics(a.target)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.conns {
@@ -130,6 +122,9 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
+
+		// Don't remove this until we no longer use sharedBytes in tipb and kvproto.
+		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 
 		opts = append([]grpc.DialOption{
 			opt,
@@ -152,8 +147,8 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
@@ -171,8 +166,10 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		a.conns[i] = conn
 
 		if allowBatch {
+			connIdx := strconv.Itoa(i)
 			batchClient := &batchCommandsClient{
 				target:           a.target,
+				connIdx:          connIdx,
 				conn:             conn.ClientConn,
 				forwardedClients: make(map[string]*batchCommandsStream),
 				batched:          sync.Map{},
@@ -183,7 +180,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				eventListener:    eventListener,
-				metrics:          &a.batchConn.metrics,
+				metrics:          initBatchCommandsClientMetrics(a.target, connIdx),
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
@@ -220,36 +217,15 @@ func (a *connPool) Close() {
 	close(a.done)
 }
 
-func (a *connPool) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {
-	seconds := latency.Seconds()
-	stale := req.GetStaleRead()
-	source := req.GetRequestSource()
-	internal := util.IsInternalRequest(req.GetRequestSource())
-
-	a.metrics.rpcLatHist.get(req.Type, stale, internal).Observe(seconds)
-
-	srcLatSum, ok := a.metrics.rpcSrcLatSum.Load(source)
-	if !ok {
-		srcLatSum = deriveRPCMetrics(metrics.TiKVSendReqSummary.MustCurryWith(
-			prometheus.Labels{metrics.LblStore: a.target, metrics.LblSource: source}))
-		a.metrics.rpcSrcLatSum.Store(source, srcLatSum)
+func (a *connPool) getStoreMetrics(storeID uint64) *storeMetrics {
+	m := a.metrics.Load()
+	if m == nil || m.storeID != storeID {
+		// The client selects a connPool by addr via RPCClient.getConnPool, so it's possible that the storeID of the
+		// selected connPool is not the same as the storeID in req.Context. We need to create a new storeMetrics for the
+		// new storeID. Note that connPool.metrics just works as a cache, the metric data is stored in corresponding
+		// MetricVec, so it's ok to overwrite it here.
+		m = newStoreMetrics(storeID)
+		a.metrics.Store(m)
 	}
-	srcLatSum.(*rpcMetrics).get(req.Type, stale, internal).Observe(seconds)
-
-	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
-		var totalRpcWallTimeNs uint64
-		if execDetail.TimeDetailV2 != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
-		} else if execDetail.TimeDetail != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
-		}
-		if totalRpcWallTimeNs > 0 {
-			lat := latency - time.Duration(totalRpcWallTimeNs)
-			if internal {
-				a.metrics.rpcNetLatInternal.Observe(lat.Seconds())
-			} else {
-				a.metrics.rpcNetLatExternal.Observe(lat.Seconds())
-			}
-		}
-	}
+	return m
 }

@@ -22,8 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/testutils"
@@ -267,4 +269,26 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS())
+}
+
+func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
+	// this is a leak test, TestMain will check goroutine leak
+	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
+	require.Error(s.T(), err)
+}
+
+func TestKVStoreCloseCheckRegionCacheClosedBeforePDClose(t *testing.T) {
+	util.EnableFailpoints()
+	require.NoError(t, failpoint.Enable("tikvclient/checkRegionCacheClosedBeforePDClose", "return(true)"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/checkRegionCacheClosedBeforePDClose"))
+	})
+
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	_, _, _, _ = mocktikv.BootstrapWithMultiStores(cluster, 1)
+
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
 }

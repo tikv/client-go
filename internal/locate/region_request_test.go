@@ -794,7 +794,8 @@ func (s *mockTikvGrpcServer) BroadcastTxnStatus(ctx context.Context, request *kv
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"
-	lis, err := net.Listen("tcp", addr)
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	s.Nil(err)
 	server := grpc.NewServer()
 	tikvpb.RegisterTikvServer(server, &mockTikvGrpcServer{})
@@ -1027,7 +1028,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestClusterIDInReq() {
 	s.True(port > 0)
 	rpcClient := client.NewRPCClient()
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		s.True(req.ClusterId > 0)
+		s.Greater(req.ClusterId, uint64(0))
 		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
 	}}
 	defer func() {
@@ -1040,9 +1041,12 @@ func (s *testRegionRequestToSingleStoreSuite) TestClusterIDInReq() {
 	s.Nil(err)
 	s.NotNil(region)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
-	// send a probe request to make sure the mock server is ready.
-	s.regionRequestSender.SendReq(retry.NewNoopBackoff(context.Background()), req, region.Region, time.Second)
-	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
+	// Wait for the gRPC serve loop to start accepting connections before running assertions.
+	s.Eventually(func() bool {
+		_, probeErr := rpcClient.SendRequest(context.Background(), server.Addr(), req, time.Second)
+		return probeErr == nil
+	}, 3*time.Second, 10*time.Millisecond)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
@@ -1174,7 +1178,7 @@ type noCauseError struct {
 	error
 }
 
-func (_ noCauseError) Cause() error {
+func (noCauseError) Cause() error {
 	return nil
 }
 
@@ -1185,4 +1189,78 @@ func TestGetErrMsg(t *testing.T) {
 		_ = errors.Cause(err).Error()
 	}, "should panic")
 	require.Equal(t, "no cause err", getErrMsg(err))
+}
+
+func TestRPCContextString(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		var ctx *RPCContext
+		require.Equal(t, "<nil>", ctx.ToBackoffReasonString())
+		require.Equal(t, "<nil>", ctx.String())
+	})
+
+	t.Run("without proxy", func(t *testing.T) {
+		region := RegionVerID{id: 100, confVer: 2, ver: 3}
+		meta := &metapb.Region{
+			Id:          region.id,
+			RegionEpoch: &metapb.RegionEpoch{ConfVer: region.confVer, Version: region.ver},
+		}
+		peer := &metapb.Peer{Id: 101, StoreId: 1}
+		store := newStore(1, "tikv-1", "", "", tikvrpc.TiKV, resolved, nil)
+		ctx := &RPCContext{
+			Region:     region,
+			Meta:       meta,
+			Peer:       peer,
+			AccessIdx:  4,
+			Store:      store,
+			Addr:       "tikv-1",
+			AccessMode: tiKVOnly,
+		}
+
+		require.Equal(
+			t,
+			fmt.Sprintf(
+				"region ID: %d, meta: %s, peer: %s, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
+				region.GetID(), meta, peer, "tikv-1", AccessIndex(4), tiKVOnly, tikvrpc.TiKV.Name(),
+			),
+			ctx.String(),
+		)
+		require.Equal(
+			t,
+			fmt.Sprintf(
+				"region: %s, peerID: %d, storeID: %d, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
+				region.String(), peer.Id, peer.StoreId, "tikv-1", AccessIndex(4), tiKVOnly, tikvrpc.TiKV.Name(),
+			),
+			ctx.ToBackoffReasonString(),
+		)
+	})
+
+	t.Run("with proxy", func(t *testing.T) {
+		store := newStore(1, "tikv-1", "", "", tikvrpc.TiKV, resolved, nil)
+		proxyStore := newStore(2, "tikv-2", "", "", tikvrpc.TiKV, resolved, nil)
+		ctx := &RPCContext{
+			Region:     RegionVerID{id: 200, confVer: 5, ver: 8},
+			Store:      store,
+			Addr:       "tikv-1",
+			AccessMode: tiKVOnly,
+			ProxyStore: proxyStore,
+		}
+
+		require.Contains(t, ctx.String(), ", proxy store id: 2, proxy addr: tikv-2")
+		require.Contains(t, ctx.ToBackoffReasonString(), ", proxy store id: 2, proxy addr: tikv-2")
+	})
+}
+
+func TestBackoffErrWithRPCContext(t *testing.T) {
+	ctx := &RPCContext{
+		Region:     RegionVerID{id: 200, confVer: 5, ver: 8},
+		Peer:       &metapb.Peer{Id: 101, StoreId: 1},
+		Addr:       "tikv-1",
+		AccessMode: tiKVOnly,
+	}
+
+	err := newBackoffErrWithRPCContext("reason1", ctx)
+	require.Equal(t, "reason1, ctx: "+ctx.ToBackoffReasonString(), err.Error())
+
+	err = newBackoffErrWithRPCContextAndAdvice("reason1", ctx, "advice1")
+	require.Equal(t, "reason1, ctx: "+ctx.ToBackoffReasonString()+", advice1", err.Error())
 }

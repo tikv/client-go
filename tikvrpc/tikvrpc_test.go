@@ -35,6 +35,7 @@
 package tikvrpc
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -45,6 +46,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/util"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestBatchResponse(t *testing.T) {
@@ -136,4 +141,82 @@ func TestTiDB51921(t *testing.T) {
 			wg.Wait()
 		})
 	}
+}
+
+type mockCoprocessorStreamClient struct {
+	resp *coprocessor.Response
+	err  error
+}
+
+func (*mockCoprocessorStreamClient) Header() (metadata.MD, error) { return nil, nil }
+func (*mockCoprocessorStreamClient) Trailer() metadata.MD         { return nil }
+func (*mockCoprocessorStreamClient) CloseSend() error             { return nil }
+func (*mockCoprocessorStreamClient) Context() context.Context     { return context.Background() }
+func (*mockCoprocessorStreamClient) SendMsg(any) error            { return nil }
+func (*mockCoprocessorStreamClient) RecvMsg(any) error            { return nil }
+func (c *mockCoprocessorStreamClient) Recv() (*coprocessor.Response, error) {
+	return c.resp, c.err
+}
+
+func TestCopStreamResponseRecvBypass(t *testing.T) {
+	original := config.GetGlobalConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalConfig(original)
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
+	config.StoreGlobalConfig(&cfg)
+
+	makeResponse := func() *coprocessor.Response {
+		return &coprocessor.Response{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				RuV2: &kvrpcpb.RUV2{
+					KvEngineCacheMiss:            1,
+					StorageProcessedKeysGet:      2,
+					StorageProcessedKeysBatchGet: 3,
+				},
+			},
+		}
+	}
+
+	t.Run("charged stream updates tikv ruv2", func(t *testing.T) {
+		ruDetails := util.NewRUDetails()
+		ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+		resp := &CopStreamResponse{
+			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
+			Ctx:                          ctx,
+			CountRPC:                     true,
+		}
+		_, err := resp.Recv()
+		require.NoError(t, err)
+		require.Greater(t, ruDetails.TiKVRUV2(), 0.0)
+		require.Equal(t, uint64(1), resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
+		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
+		drained := ruDetails.DrainRUV2()
+		require.NotNil(t, drained)
+		require.Equal(t, uint64(1), drained.GetReadRpcCount())
+		require.Equal(t, uint64(2), drained.GetStorageProcessedKeysGet())
+		require.Equal(t, uint64(3), drained.GetStorageProcessedKeysBatchGet())
+		require.Nil(t, ruDetails.DrainRUV2())
+	})
+
+	t.Run("bypass stream skips tikv ruv2", func(t *testing.T) {
+		ruDetails := util.NewRUDetails()
+		ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+		resp := &CopStreamResponse{
+			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
+			Ctx:                          ctx,
+			Bypass:                       true,
+			CountRPC:                     true,
+		}
+		_, err := resp.Recv()
+		require.NoError(t, err)
+		require.Zero(t, ruDetails.TiKVRUV2())
+		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
+		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
+		require.Nil(t, ruDetails.DrainRUV2())
+	})
 }

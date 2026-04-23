@@ -91,6 +91,7 @@ func (s *KVStore) GC(ctx context.Context, expectedSafePoint uint64, opts ...GCOp
 
 	gcSafePoint := txnSafePoint
 
+	//nolint:staticcheck
 	return s.pdClient.UpdateGCSafePoint(ctx, gcSafePoint)
 }
 
@@ -154,8 +155,8 @@ func (l *BaseRegionLockResolver) ResolveLocksInOneRegion(bo *Backoffer, locks []
 }
 
 // ScanLocksInOneRegion return locks and location with given start key in a region.
-func (l *BaseRegionLockResolver) ScanLocksInOneRegion(bo *Backoffer, key []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error) {
-	return scanLocksInOneRegionWithStartKey(bo, l.GetStore(), key, maxVersion, scanLimit)
+func (l *BaseRegionLockResolver) ScanLocksInOneRegion(bo *Backoffer, key []byte, endKey []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error) {
+	return scanLocksInOneRegionWithRange(bo, l.GetStore(), key, endKey, maxVersion, scanLimit)
 }
 
 // GetStore is used to get store to GetRegionCache and SendReq for this lock resolver.
@@ -179,10 +180,11 @@ type RegionLockResolver interface {
 	// ** the locks are assumed sorted by key in ascending order **
 	ResolveLocksInOneRegion(bo *Backoffer, locks []*txnlock.Lock, regionLocation *locate.KeyLocation) (*locate.KeyLocation, error)
 
-	// ScanLocksInOneRegion return locks and location with given start key in a region.
+	// ScanLocksInOneRegion return locks and location with given range, and if the range spans over multiple regions,
+	// it stops at the end of the first region that's covered or partially covered by the specified range.
 	// The return result ([]*Lock, *KeyLocation, error) represents the all locks in a regionLocation.
 	// which will used by ResolveLocksInOneRegion later.
-	ScanLocksInOneRegion(bo *Backoffer, key []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error)
+	ScanLocksInOneRegion(bo *Backoffer, key []byte, endKey []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error)
 
 	// GetStore is used to get store to GetRegionCache and SendReq for this lock resolver.
 	GetStore() Storage
@@ -210,7 +212,7 @@ func ResolveLocksForRange(
 			return stat, errors.New("[gc worker] gc job canceled")
 		default:
 		}
-		locks, loc, err := resolver.ScanLocksInOneRegion(bo, key, maxVersion, scanLimit)
+		locks, loc, err := resolver.ScanLocksInOneRegion(bo, key, endKey, maxVersion, scanLimit)
 		if err != nil {
 			return stat, err
 		}
@@ -247,17 +249,21 @@ func ResolveLocksForRange(
 	return stat, nil
 }
 
-func scanLocksInOneRegionWithStartKey(bo *retry.Backoffer, store Storage, startKey []byte, maxVersion uint64, limit uint32) (locks []*txnlock.Lock, loc *locate.KeyLocation, err error) {
+func scanLocksInOneRegionWithRange(bo *retry.Backoffer, store Storage, startKey []byte, endKey []byte, maxVersion uint64, limit uint32) (locks []*txnlock.Lock, loc *locate.KeyLocation, err error) {
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
 			return nil, loc, err
 		}
+		reqEndKey := loc.EndKey
+		if len(endKey) > 0 && (len(reqEndKey) == 0 || bytes.Compare(endKey, reqEndKey) < 0) {
+			reqEndKey = endKey
+		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
 			MaxVersion: maxVersion,
 			Limit:      limit,
 			StartKey:   startKey,
-			EndKey:     loc.EndKey,
+			EndKey:     reqEndKey,
 		})
 		resp, err := store.SendReq(bo, req, loc.Region, ReadTimeoutMedium)
 		if err != nil {
@@ -282,9 +288,16 @@ func scanLocksInOneRegionWithStartKey(bo *retry.Backoffer, store Storage, startK
 			return nil, loc, errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
 		locksInfo := locksResp.GetLocks()
-		locks = make([]*txnlock.Lock, len(locksInfo))
-		for i := range locksInfo {
-			locks[i] = txnlock.NewLock(locksInfo[i])
+		locks = make([]*txnlock.Lock, 0, len(locksInfo))
+		for _, lockInfo := range locksInfo {
+			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+				// expand shared lock into multiple locks, and drop the dummy wrapper lock.
+				for _, sharedLockInfo := range sharedLockInfos {
+					locks = append(locks, txnlock.NewLock(sharedLockInfo))
+				}
+				continue
+			}
+			locks = append(locks, txnlock.NewLock(lockInfo))
 		}
 		return locks, loc, nil
 	}

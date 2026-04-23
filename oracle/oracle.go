@@ -43,6 +43,7 @@ import (
 // Option represents available options for the oracle.Oracle.
 // TODO: remove this struct
 type Option struct {
+	TxnScope string
 }
 
 // Oracle is the interface that provides strictly ascending timestamps.

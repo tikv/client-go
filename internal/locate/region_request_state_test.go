@@ -305,9 +305,9 @@ func testRegionCacheStaleRead(t *testing.T) {
 			leaderSuccessReadType: SuccessStaleRead,
 			followerRegionValid:   false,
 			followerAsyncReload:   util.Some(false),
-			// may async reload region and access it from leader.
-			followerSuccessReplica:  []string{},
-			followerSuccessReadType: ReadFail,
+			// region is hard-invalidated but the current request succeeds via leader retry.
+			followerSuccessReplica:  []string{"z1"},
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                evictLeader,
@@ -543,7 +543,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			return
 		}
 
-		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending))
+		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending|needDelayedReloadReady))
 	}()
 
 	bo := retry.NewBackoffer(ctx, -1)

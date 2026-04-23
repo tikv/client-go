@@ -88,7 +88,8 @@ func (s *testCommitterSuite) SetupSuite() {
 
 func (s *testCommitterSuite) TearDownSuite() {
 	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
-	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
+	atomic.StoreUint64(&transaction.CommitMaxBackoff, 40000)
 }
 
 func (s *testCommitterSuite) SetupTest() {
@@ -126,7 +127,7 @@ func (s *testCommitterSuite) checkValues(m map[string]string) {
 	for k, v := range m {
 		val, err := txn.Get(context.TODO(), []byte(k))
 		s.Nil(err)
-		s.Equal(string(val), v)
+		s.Equal(string(val.Value), v)
 	}
 }
 
@@ -257,7 +258,7 @@ func (s *testCommitterSuite) TestPrewriteRollback() {
 	txn2 := s.begin()
 	v, err := txn2.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Equal(v, []byte("a0"))
+	s.Equal(v.Value, []byte("a0"))
 
 	err = committer.PrewriteAllMutations(ctx)
 	if err != nil {
@@ -281,7 +282,7 @@ func (s *testCommitterSuite) TestPrewriteRollback() {
 	txn3 := s.begin()
 	v, err = txn3.Get(context.TODO(), []byte("b"))
 	s.Nil(err)
-	s.Equal(v, []byte("b1"))
+	s.Equal(v.Value, []byte("b1"))
 }
 
 func (s *testCommitterSuite) TestContextCancel() {
@@ -511,7 +512,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 	txn := s.begin()
 	v, err := txn.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Equal(v, []byte("a1"))
+	s.Equal(v.Value, []byte("a1"))
 
 	// set txn2's startTs before txn1's
 	txn2 := s.begin()
@@ -528,7 +529,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 	txn = s.begin()
 	v, err = txn.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Equal(v, []byte("a1"))
+	s.Equal(v.Value, []byte("a1"))
 	_, err = txn.Get(context.TODO(), []byte("b"))
 	s.True(tikverr.IsErrNotFound(err))
 
@@ -542,7 +543,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 	txn = s.begin()
 	v, err = txn.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Equal(v, []byte("a1"))
+	s.Equal(v.Value, []byte("a1"))
 
 	// update data in a new txn, should be success.
 	err = txn.Set([]byte("a"), []byte("a3"))
@@ -553,7 +554,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 	txn = s.begin()
 	v, err = txn.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Equal(v, []byte("a3"))
+	s.Equal(v.Value, []byte("a3"))
 }
 
 func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
@@ -669,7 +670,7 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 	s.Nil(err)
 	val, err := txn2.Get(bo.GetCtx(), []byte("x"))
 	s.Nil(err)
-	s.True(bytes.Equal(val, []byte("v")))
+	s.True(bytes.Equal(val.Value, []byte("v")))
 }
 
 func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
@@ -1597,6 +1598,67 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingKeepAliveAfterMultiLockKeysOperation() {
+	test := func(isRetried bool, isPrimaryChanged bool) {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+		s.True(txn.GetCommitter().IsNil())
+
+		txn.StartAggressiveLocking()
+		lockCtx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
+
+		if isRetried {
+			// Test in the condition that the aggressive locking stage is retried, so that the transaction used
+			// to set primary previously.
+			lastPrimary := []byte("k0")
+			if !isPrimaryChanged {
+				lastPrimary = []byte("k1")
+			}
+			err := txn.LockKeys(context.Background(), lockCtx, lastPrimary)
+			s.NoError(err)
+			s.Equal(lastPrimary, txn.GetCommitter().GetPrimaryKey())
+			s.Equal(lastPrimary, txn.GetAggressiveLockingPrimary())
+			txn.RetryAggressiveLocking(context.Background())
+			s.Equal(lastPrimary, txn.GetAggressiveLockingLastPrimary())
+		}
+
+		err := txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+		s.NoError(err)
+		s.True(txn.IsInAggressiveLockingMode())
+		s.True(txn.IsInAggressiveLockingStage([]byte("k1")))
+		s.True(txn.GetCommitter().IsTTLRunning())
+		s.Equal([]byte("k1"), txn.GetCommitter().GetPrimaryKey())
+		err = txn.LockKeys(context.Background(), lockCtx, []byte("k2"))
+		s.NoError(err)
+		s.True(txn.IsInAggressiveLockingMode())
+		s.True(txn.IsInAggressiveLockingStage([]byte("k1")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k2")))
+		s.True(txn.GetCommitter().IsTTLRunning())
+		s.Equal([]byte("k1"), txn.GetCommitter().GetPrimaryKey())
+
+		txn.DoneAggressiveLocking(context.Background())
+		s.True(txn.GetCommitter().IsTTLRunning())
+
+		// Check the keys are still locked
+		txn2 := s.begin()
+		txn2.SetPessimistic(true)
+		lockCtx2 := kv.NewLockCtx(txn2.StartTS(), 100, time.Now())
+		err = txn2.LockKeys(context.Background(), lockCtx2, []byte("k1"))
+		s.Error(err)
+		s.ErrorIs(err, tikverr.ErrLockWaitTimeout)
+
+		err = txn2.LockKeys(context.Background(), lockCtx2, []byte("k2"))
+		s.Error(err)
+		s.ErrorIs(err, tikverr.ErrLockWaitTimeout)
+
+		s.NoError(txn2.Rollback())
+		s.NoError(txn.Rollback())
+	}
+	test(false, false)
+	test(true, false)
+	test(true, true)
+}
+
 type aggressiveLockingExitPhase int
 
 const (
@@ -1769,7 +1831,7 @@ func (s *testCommitterSuite) TestDeleteYourWriteCauseGhostPrimary() {
 	s.store.ClearTxnLatches()
 	v, err := txn2.Get(context.Background(), k3)
 	s.Nil(err) // should resolve lock and read txn1 k3 result instead of rollback it.
-	s.Equal(v[0], byte(2))
+	s.Equal(v.Value[0], byte(2))
 	bk <- struct{}{}
 	txn1Done.Wait()
 }
@@ -2547,10 +2609,10 @@ func (s *testCommitterSuite) TestFailCommitTimeout() {
 	txn2 := s.begin()
 	value, err := txn2.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Greater(len(value), 0)
-	_, err = txn2.Get(context.TODO(), []byte("b"))
+	s.Greater(len(value.Value), 0)
+	value, err = txn2.Get(context.TODO(), []byte("b"))
 	s.Nil(err)
-	s.Greater(len(value), 0)
+	s.Greater(len(value.Value), 0)
 }
 
 // TestCommitMultipleRegions tests commit multiple regions.

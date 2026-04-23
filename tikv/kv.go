@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/gc"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -316,23 +317,28 @@ func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvCli
 }
 
 // NewKVStore creates a new TiKV store instance.
-func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
+func NewKVStore(
+	uuid string,
+	pdClient pd.Client,
+	spkv SafePointKV,
+	tikvclient Client,
+	opt ...Option,
+) (_ *KVStore, retErr error) {
 	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
 		UpdateInterval: defaultOracleUpdateInterval,
 	})
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			o.Close()
+		}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
-	var opts []locate.RegionCacheOpt
-	if config.NextGen {
-		opts = append(opts, locate.RegionCacheNoHealthTick)
-	} else {
-		opts = append(opts, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
-			return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
-		}))
-	}
-	regionCache := locate.NewRegionCache(pdClient, opts...)
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+	}))
 	codec := pdClient.(*CodecPDClient).GetCodec()
 	etcdAddrs, etcdTlsCfg := spkv.extractConnectionInfo()
 	store := &KVStore{
@@ -349,8 +355,19 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:                       cancel,
 		gP:                           NewSpool(128, 10*time.Second),
 	}
+	defer func() {
+		if retErr != nil {
+			regionCache.Close()
+			cancel()
+		}
+	}()
 
 	txnSafePoint, err := store.loadTxnSafePoint(context.Background())
+	if intest.InTest {
+		if uuid == "TestErrorHalfwayInNewKVStore" {
+			err = errors.New("mock error for TestErrorHalfwayInNewKVStore")
+		}
+	}
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -485,20 +502,25 @@ func (s *KVStore) Close() error {
 	s.wg.Wait()
 
 	s.oracle.Close()
-	s.pdClient.Close()
-	if s.pdHttpClient != nil {
-		s.pdHttpClient.Close()
+	if s.txnLatches != nil {
+		s.txnLatches.Close()
 	}
 	s.lockResolver.Close()
+	// Close region cache before closing clients it depends on. Otherwise, its background tasks might still try
+	// to access PD/TiKV and encounter "grpc: the client connection is closing".
+	s.regionCache.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
 		return err
 	}
 
-	if s.txnLatches != nil {
-		s.txnLatches.Close()
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
 	}
-	s.regionCache.Close()
+	if _, err := util.EvalFailpoint("checkRegionCacheClosedBeforePDClose"); err == nil && !s.regionCache.IsBackgroundRunnerClosed() {
+		panic("region cache is not closed before closing pd client")
+	}
+	s.pdClient.Close()
 
 	if err := s.kv.Close(); err != nil {
 		return err
