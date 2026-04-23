@@ -120,6 +120,7 @@ const (
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
+	CmdEstimateTiCICount CmdType = 3072 + iota
 )
 
 // CmdType aliases.
@@ -227,6 +228,8 @@ func (t CmdType) String() string {
 		return "GetHealthFeedback"
 	case CmdBroadcastTxnStatus:
 		return "BroadcastTxnStatus"
+	case CmdEstimateTiCICount:
+		return "EstimateTiCICount"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
@@ -622,6 +625,11 @@ func (req *Request) BufferBatchGet() *kvrpcpb.BufferBatchGetRequest {
 	return req.Req.(*kvrpcpb.BufferBatchGetRequest)
 }
 
+// EstimateTiCICount returns TiCIEstimateCountRequest in request.
+func (req *Request) EstimateTiCICount() *coprocessor.TiCIEstimateCountRequest {
+	return req.Req.(*coprocessor.TiCIEstimateCountRequest)
+}
+
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
 func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Request {
 	switch req.Type {
@@ -729,6 +737,8 @@ func (req *Request) GetSize() int {
 		size = req.CheckTxnStatus().Size()
 	case CmdMPPTask:
 		size = req.DispatchMPPTask().Size()
+	case CmdEstimateTiCICount:
+		size = req.EstimateTiCICount().Size()
 	default:
 		// ignore others
 	}
@@ -1289,6 +1299,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetHealthFeedback(ctx, req.GetHealthFeedback())
 	case CmdBroadcastTxnStatus:
 		resp.Resp, err = client.BroadcastTxnStatus(ctx, req.BroadcastTxnStatus())
+	case CmdEstimateTiCICount:
+		resp.Resp, err = client.EstimateTiCICount(ctx, req.EstimateTiCICount())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1527,6 +1539,8 @@ func (req *Request) GetStartTS() uint64 {
 		return req.Flush().GetStartTs()
 	case CmdBufferBatchGet:
 		return req.BufferBatchGet().GetVersion()
+	case CmdEstimateTiCICount:
+		return req.EstimateTiCICount().GetStartTs()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:

@@ -543,7 +543,9 @@ func (c *cancelContextClient) SendRequest(ctx context.Context, addr string, req 
 }
 
 // mockTikvGrpcServer mock a tikv gprc server for testing.
-type mockTikvGrpcServer struct{}
+type mockTikvGrpcServer struct {
+	tikvpb.UnimplementedTikvServer
+}
 
 var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
 

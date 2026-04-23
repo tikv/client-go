@@ -69,6 +69,7 @@ cmds=(
   PrepareFlashbackToVersion
   Flush
   BufferBatchGet
+  EstimateTiCICount
 )
 
 cat <<EOF >> $output
