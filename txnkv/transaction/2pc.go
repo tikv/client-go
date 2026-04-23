@@ -103,10 +103,10 @@ type kvstore interface {
 	WaitScatterRegionFinish(ctx context.Context, regionID uint64, backOff int) error
 
 	// GetTimestampWithRetry returns latest timestamp.
-	GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error)
+	GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error)
 	// GetOracle gets a timestamp oracle client.
 	GetOracle() oracle.Oracle
-	CurrentTimestamp(txnScope string) (uint64, error)
+	CurrentTimestamp() (uint64, error)
 	// SendReq sends a request to TiKV.
 	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
 	// GetTiKVClient gets the client instance.
@@ -537,7 +537,7 @@ func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.C
 func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, assertionFailed *tikverr.ErrAssertionFailed) error {
 	// If the schema has changed, it might be a false-positive. In this case we should return schema changed, which
 	// is a usual case, instead of assertion failed.
-	ts, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	ts, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars))
 	if err != nil {
 		return err
 	}
@@ -1315,7 +1315,7 @@ func keepAlive(
 				return
 			}
 			bo := retry.NewBackofferWithVars(context.Background(), keepAliveMaxBackoff, c.txn.vars)
-			now, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+			now, err := c.store.GetTimestampWithRetry(bo)
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Warn("keepAlive get tso fail",
 					zap.Error(err))
@@ -1545,11 +1545,6 @@ func sendTxnHeartBeat(
 
 // checkAsyncCommit checks if async commit protocol is available for current transaction commit, true is returned if possible.
 func (c *twoPhaseCommitter) checkAsyncCommit() bool {
-	// Disable async commit in local transactions
-	if c.txn.GetScope() != oracle.GlobalTxnScope {
-		return false
-	}
-
 	// Don't use async commit when commitTSUpperBoundCheck is set.
 	// For TiDB, this is used by cached table.
 	if c.txn.commitTSUpperBoundCheck != nil {
@@ -1576,10 +1571,6 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 
 // checkOnePC checks if 1PC protocol is available for current transaction.
 func (c *twoPhaseCommitter) checkOnePC() bool {
-	// Disable 1PC in local transactions
-	if c.txn.GetScope() != oracle.GlobalTxnScope {
-		return false
-	}
 	// Disable 1PC for transaction when commitTSUpperBoundCheck is set.
 	if c.txn.commitTSUpperBoundCheck != nil {
 		return false
@@ -1798,7 +1789,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if commitTSMayBeCalculated && (c.needLinearizability() || c.txn.commitWaitUntilTSO > 0) {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
 		start := time.Now()
-		latestTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())
+		latestTS, err := c.txn.GetTimestampForCommit(bo)
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
@@ -1934,7 +1925,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
-		commitTS, err = c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+		commitTS, err = c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars))
 		if err != nil {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
@@ -1955,7 +1946,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
 
-	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
 			c.sessionID, c.startTS, c.commitTS)
 		return err

@@ -71,7 +71,7 @@ func (u *unimplementedOracle) GetLowResolutionTimestampAsync(ctx context.Context
 }
 
 // GetStaleTimestamp implements oracle.Oracle.
-func (u *unimplementedOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (uint64, error) {
+func (u *unimplementedOracle) GetStaleTimestamp(ctx context.Context, prevSecond uint64) (uint64, error) {
 	panic("unimplemented")
 }
 
@@ -404,7 +404,7 @@ func (u *unimplementedKVStore) Ctx() context.Context {
 }
 
 // CurrentTimestamp implements kvstore.
-func (u *unimplementedKVStore) CurrentTimestamp(txnScope string) (uint64, error) {
+func (u *unimplementedKVStore) CurrentTimestamp() (uint64, error) {
 	panic("unimplemented")
 }
 
@@ -434,7 +434,7 @@ func (u *unimplementedKVStore) GetTiKVClient() (client client.Client) {
 }
 
 // GetTimestampWithRetry implements kvstore.
-func (u *unimplementedKVStore) GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error) {
+func (u *unimplementedKVStore) GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error) {
 	panic("unimplemented")
 }
 
