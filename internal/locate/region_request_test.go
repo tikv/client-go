@@ -1171,7 +1171,11 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestValidateReadTS() 
 	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, false, oracle.ErrFutureTSRead{})
 	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, true, oracle.ErrFutureTSRead{})
 	testImpl(func() uint64 { return math.MaxUint64 }, false, nil)
-	testImpl(func() uint64 { return math.MaxUint64 }, true, oracle.ErrLatestStaleRead{})
+	if config.NextGen {
+		testImpl(func() uint64 { return math.MaxUint64 }, true, nil)
+	} else {
+		testImpl(func() uint64 { return math.MaxUint64 }, true, oracle.ErrLatestStaleRead{})
+	}
 }
 
 type noCauseError struct {
