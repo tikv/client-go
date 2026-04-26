@@ -64,18 +64,17 @@ func TestEstimateTiCICountRequest(t *testing.T) {
 	assert.NotZero(t, req.GetSize())
 }
 
-
 type estimateTiCICountTestClient struct {
 	tikvpb.TikvClient
 	request *coprocessor.TiCIEstimateCountRequest
 }
 
-func (c *estimateTiCICountTestClient) EstimateTiCICount(ctx context.Context, req *coprocessor.TiCIEstimateCountRequest, _ ...grpc.CallOption) (*coprocessor.TiCIEstimateCountResponse, error) {
+func (c *estimateTiCICountTestClient) GetEstimateTiCICount(ctx context.Context, req *coprocessor.TiCIEstimateCountRequest, _ ...grpc.CallOption) (*coprocessor.TiCIEstimateCountResponse, error) {
 	c.request = req
 	return &coprocessor.TiCIEstimateCountResponse{EstCount: 7}, nil
 }
 
-func TestCallRPCEstimateTiCICount(t *testing.T) {
+func TestCallRPCGetEstimateTiCICount(t *testing.T) {
 	client := &estimateTiCICountTestClient{}
 	req := NewRequest(CmdEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 456})
 	resp, err := CallRPC(context.Background(), client, req)

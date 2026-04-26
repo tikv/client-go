@@ -119,7 +119,7 @@ const (
 	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
-	CmdEmpty CmdType = 3072 + iota
+	CmdEmpty             CmdType = 3072 + iota
 	CmdEstimateTiCICount CmdType = 3072 + iota
 )
 
@@ -229,7 +229,7 @@ func (t CmdType) String() string {
 	case CmdBroadcastTxnStatus:
 		return "BroadcastTxnStatus"
 	case CmdEstimateTiCICount:
-		return "EstimateTiCICount"
+		return "GetEstimateTiCICount"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
@@ -1300,7 +1300,7 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 	case CmdBroadcastTxnStatus:
 		resp.Resp, err = client.BroadcastTxnStatus(ctx, req.BroadcastTxnStatus())
 	case CmdEstimateTiCICount:
-		resp.Resp, err = client.EstimateTiCICount(ctx, req.EstimateTiCICount())
+		resp.Resp, err = client.GetEstimateTiCICount(ctx, req.EstimateTiCICount())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
