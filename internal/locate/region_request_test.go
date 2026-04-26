@@ -543,9 +543,7 @@ func (c *cancelContextClient) SendRequest(ctx context.Context, addr string, req 
 }
 
 // mockTikvGrpcServer mock a tikv gprc server for testing.
-type mockTikvGrpcServer struct {
-	tikvpb.UnimplementedTikvServer
-}
+type mockTikvGrpcServer struct{}
 
 var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
 
@@ -766,6 +764,10 @@ func (s *mockTikvGrpcServer) TabletSnapshot(_ tikvpb.Tikv_TabletSnapshotServer) 
 }
 
 func (s *mockTikvGrpcServer) GetTiFlashSystemTable(context.Context, *kvrpcpb.TiFlashSystemTableRequest) (*kvrpcpb.TiFlashSystemTableResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) GetEstimateTiCICount(context.Context, *coprocessor.TiCIEstimateCountRequest) (*coprocessor.TiCIEstimateCountResponse, error) {
 	return nil, errors.New("unreachable")
 }
 

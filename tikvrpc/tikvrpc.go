@@ -118,9 +118,9 @@ const (
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
 	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdGetEstimateTiCICount             // TODO: These non TiKV RPCs should be moved out of TiKV client
 
-	CmdEmpty             CmdType = 3072 + iota
-	CmdEstimateTiCICount CmdType = 3072 + iota
+	CmdEmpty CmdType = 3072 + iota
 )
 
 // CmdType aliases.
@@ -228,7 +228,7 @@ func (t CmdType) String() string {
 		return "GetHealthFeedback"
 	case CmdBroadcastTxnStatus:
 		return "BroadcastTxnStatus"
-	case CmdEstimateTiCICount:
+	case CmdGetEstimateTiCICount:
 		return "GetEstimateTiCICount"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
@@ -625,8 +625,8 @@ func (req *Request) BufferBatchGet() *kvrpcpb.BufferBatchGetRequest {
 	return req.Req.(*kvrpcpb.BufferBatchGetRequest)
 }
 
-// EstimateTiCICount returns TiCIEstimateCountRequest in request.
-func (req *Request) EstimateTiCICount() *coprocessor.TiCIEstimateCountRequest {
+// GetEstimateTiCICount returns TiCIEstimateCountRequest in request.
+func (req *Request) GetEstimateTiCICount() *coprocessor.TiCIEstimateCountRequest {
 	return req.Req.(*coprocessor.TiCIEstimateCountRequest)
 }
 
@@ -737,8 +737,8 @@ func (req *Request) GetSize() int {
 		size = req.CheckTxnStatus().Size()
 	case CmdMPPTask:
 		size = req.DispatchMPPTask().Size()
-	case CmdEstimateTiCICount:
-		size = req.EstimateTiCICount().Size()
+	case CmdGetEstimateTiCICount:
+		size = req.GetEstimateTiCICount().Size()
 	default:
 		// ignore others
 	}
@@ -1299,8 +1299,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetHealthFeedback(ctx, req.GetHealthFeedback())
 	case CmdBroadcastTxnStatus:
 		resp.Resp, err = client.BroadcastTxnStatus(ctx, req.BroadcastTxnStatus())
-	case CmdEstimateTiCICount:
-		resp.Resp, err = client.GetEstimateTiCICount(ctx, req.EstimateTiCICount())
+	case CmdGetEstimateTiCICount:
+		resp.Resp, err = client.GetEstimateTiCICount(ctx, req.GetEstimateTiCICount())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1539,8 +1539,8 @@ func (req *Request) GetStartTS() uint64 {
 		return req.Flush().GetStartTs()
 	case CmdBufferBatchGet:
 		return req.BufferBatchGet().GetVersion()
-	case CmdEstimateTiCICount:
-		return req.EstimateTiCICount().GetStartTs()
+	case CmdGetEstimateTiCICount:
+		return req.GetEstimateTiCICount().GetStartTs()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:

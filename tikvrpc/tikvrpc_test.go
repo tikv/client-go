@@ -56,11 +56,11 @@ func TestBatchResponse(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestEstimateTiCICountRequest(t *testing.T) {
-	req := NewRequest(CmdEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 123})
+func TestGetEstimateTiCICountRequest(t *testing.T) {
+	req := NewRequest(CmdGetEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 123})
 	assert.Equal(t, uint64(123), req.GetStartTS())
 	assert.True(t, AttachContext(req, kvrpcpb.Context{RegionId: 42}))
-	assert.Equal(t, uint64(42), req.EstimateTiCICount().GetContext().GetRegionId())
+	assert.Equal(t, uint64(42), req.GetEstimateTiCICount().GetContext().GetRegionId())
 	assert.NotZero(t, req.GetSize())
 }
 
@@ -76,7 +76,7 @@ func (c *estimateTiCICountTestClient) GetEstimateTiCICount(ctx context.Context, 
 
 func TestCallRPCGetEstimateTiCICount(t *testing.T) {
 	client := &estimateTiCICountTestClient{}
-	req := NewRequest(CmdEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 456})
+	req := NewRequest(CmdGetEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 456})
 	resp, err := CallRPC(context.Background(), client, req)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
