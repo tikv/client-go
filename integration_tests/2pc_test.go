@@ -39,6 +39,7 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	stderrs "errors"
 	"fmt"
 	"math"
@@ -63,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
 )
 
 var (
@@ -236,6 +238,38 @@ func (s *testCommitterSuite) TestCommitOnTiKVDiskFullOpt() {
 	err = txn.Commit(ctx)
 	s.NotNil(err)
 	s.Nil(failpoint.Disable("tikvclient/rpcAllowedOnAlmostFull"))
+}
+
+func (s *testCommitterSuite) TestCommitCallbackWithZeroSessionID() {
+	testCommit := func(key string) {
+		txn := s.begin()
+		err := txn.Set([]byte(key), []byte("v"))
+		s.Require().NoError(err)
+
+		var (
+			callbackCalled bool
+			info           transaction.TxnInfo
+			callbackErr    error
+		)
+		txn.SetCommitCallback(func(infoStr string, err error) {
+			callbackCalled = true
+			callbackErr = err
+			s.Require().NoError(json.Unmarshal([]byte(infoStr), &info))
+		})
+
+		ctx := context.WithValue(context.Background(), util.SessionID, uint64(0))
+		err = txn.Commit(ctx)
+		s.Require().NoError(err)
+		s.True(callbackCalled)
+		s.NoError(callbackErr)
+		s.Greater(info.CommitTS, uint64(0))
+		s.Equal(txn.GetCommitTS(), info.CommitTS)
+	}
+
+	testCommit("zero-session-id-with-latches")
+
+	s.store.ClearTxnLatches()
+	testCommit("zero-session-id-without-latches")
 }
 
 func (s *testCommitterSuite) TestPrewriteRollback() {
