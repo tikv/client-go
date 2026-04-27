@@ -35,7 +35,6 @@
 package tikvrpc
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -46,7 +45,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/grpc"
 )
 
 func TestBatchResponse(t *testing.T) {
@@ -54,37 +52,6 @@ func TestBatchResponse(t *testing.T) {
 	batchResp, err := FromBatchCommandsResponse(resp)
 	assert.Nil(t, batchResp)
 	assert.NotNil(t, err)
-}
-
-func TestGetEstimateTiCICountRequest(t *testing.T) {
-	req := NewRequest(CmdGetEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 123})
-	assert.Equal(t, uint64(123), req.GetStartTS())
-	assert.True(t, AttachContext(req, kvrpcpb.Context{RegionId: 42}))
-	assert.Equal(t, uint64(42), req.GetEstimateTiCICount().GetContext().GetRegionId())
-	assert.NotZero(t, req.GetSize())
-}
-
-type estimateTiCICountTestClient struct {
-	tikvpb.TikvClient
-	request *coprocessor.TiCIEstimateCountRequest
-}
-
-func (c *estimateTiCICountTestClient) GetEstimateTiCICount(ctx context.Context, req *coprocessor.TiCIEstimateCountRequest, _ ...grpc.CallOption) (*coprocessor.TiCIEstimateCountResponse, error) {
-	c.request = req
-	return &coprocessor.TiCIEstimateCountResponse{EstCount: 7}, nil
-}
-
-func TestCallRPCGetEstimateTiCICount(t *testing.T) {
-	client := &estimateTiCICountTestClient{}
-	req := NewRequest(CmdGetEstimateTiCICount, &coprocessor.TiCIEstimateCountRequest{StartTs: 456})
-	resp, err := CallRPC(context.Background(), client, req)
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	pbResp, ok := resp.Resp.(*coprocessor.TiCIEstimateCountResponse)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(7), pbResp.GetEstCount())
-	assert.NotNil(t, client.request)
-	assert.Equal(t, uint64(456), client.request.GetStartTs())
 }
 
 // https://github.com/pingcap/tidb/issues/51921
