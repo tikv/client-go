@@ -767,6 +767,10 @@ func (s *mockTikvGrpcServer) GetTiFlashSystemTable(context.Context, *kvrpcpb.TiF
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) GetEstimateTiCICount(context.Context, *coprocessor.TiCIEstimateCountRequest) (*coprocessor.TiCIEstimateCountResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) GetDisaggConfig(context.Context, *disaggregated.GetDisaggConfigRequest) (*disaggregated.GetDisaggConfigResponse, error) {
 	return nil, errors.New("unreachable")
 }
