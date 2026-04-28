@@ -37,11 +37,13 @@ package client
 
 import (
 	"context"
+	"math/rand"
 	"strconv"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
 	"golang.org/x/sync/singleflight"
@@ -130,9 +132,14 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 
 func resolveLockCollapseKey(req *tikvrpc.Request) string {
 	resolveLock := req.ResolveLock()
+	buckets := config.GetGlobalConfig().TiKVClient.ResolveLockCollapseBuckets
+	if buckets <= 0 {
+		buckets = 1
+	}
 	return strconv.FormatUint(req.RegionId, 10) + "-" +
 		strconv.FormatUint(resolveLock.StartVersion, 10) + "-" +
-		strconv.FormatBool(resolveLock.GetIsAsync())
+		strconv.FormatBool(resolveLock.GetIsAsync()) + "-" +
+		strconv.FormatInt(rand.Int63n(buckets), 10)
 }
 
 func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.Group,

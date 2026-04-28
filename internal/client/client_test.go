@@ -227,6 +227,10 @@ func (c *chanClient) SendRequestAsync(ctx context.Context, addr string, req *tik
 }
 
 func TestCollapseResolveLock(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.ResolveLockCollapseBuckets = 1
+	})()
+
 	buildResolveLockReq := func(regionID uint64, startTS uint64, commitTS uint64, keys [][]byte, isAsync bool) *tikvrpc.Request {
 		region := &metapb.Region{Id: regionID}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{

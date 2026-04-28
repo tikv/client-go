@@ -82,10 +82,15 @@ func TestValidateGRPCKeepAliveTimeout(t *testing.T) {
 	cfg := DefaultTiKVClient()
 	assert.Nil(t, cfg.Valid())
 	assert.Equal(t, time.Second*3, cfg.GetGrpcKeepAliveTimeout())
+	assert.Equal(t, int64(8), cfg.ResolveLockCollapseBuckets)
 	cfg.GrpcKeepAliveTimeout = 0.05
 	assert.Nil(t, cfg.Valid())
 	assert.Equal(t, time.Millisecond*50, cfg.GetGrpcKeepAliveTimeout())
 	cfg.GrpcKeepAliveTimeout = 0.04
 	assert.NotNil(t, cfg.Valid())
 	assert.Equal(t, "grpc-keepalive-timeout should be at least 0.05, but got 0.040000", cfg.Valid().Error())
+	cfg.GrpcKeepAliveTimeout = 0.05
+	cfg.ResolveLockCollapseBuckets = 0
+	assert.NotNil(t, cfg.Valid())
+	assert.Equal(t, "resolve-lock-collapse-buckets should be greater than 0", cfg.Valid().Error())
 }
