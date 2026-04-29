@@ -129,13 +129,13 @@ func (s *apiTestSuite) TestGetStoresMinResolvedTS() {
 	require.NoError(failpoint.Enable("tikvclient/InjectPDMinResolvedTS", `return(100)`))
 	s.waitForMinSafeTS(dcLabel, 100)
 	require.Equal(int32(0), atomic.LoadInt32(&mockClient.requestCount))
-	require.Equal(uint64(100), s.store.GetMinSafeTS(dcLabel))
+	require.Equal(uint64(100), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 }
 
 func (s *apiTestSuite) waitForMinSafeTS(txnScope string, ts uint64) {
 	s.Eventually(func() bool {
-		return s.store.GetMinSafeTS(txnScope) == ts
+		return s.store.GetMinSafeTS() == ts
 	}, time.Second, 200*time.Millisecond)
 }
 
@@ -148,7 +148,7 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 	require.NoError(failpoint.Enable("tikvclient/InjectPDMinResolvedTS", `return(100)`))
 	s.waitForMinSafeTS(oracle.GlobalTxnScope, 100)
 	require.Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
-	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(100), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 
 	// Set DC label for store 1.
@@ -171,7 +171,7 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 	// Try to get the minimum resolved timestamp of the store from TiKV.
 	s.waitForMinSafeTS(dcLabel, 150)
 	require.GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
-	require.Equal(uint64(150), s.store.GetMinSafeTS(dcLabel))
+	require.Equal(uint64(150), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 }
 
@@ -187,14 +187,14 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 	require.NoError(failpoint.Enable("tikvclient/InjectPDMinResolvedTS", `return(0)`))
 	// Make sure the store's min resolved ts is not initialized.
 	s.waitForMinSafeTS(oracle.GlobalTxnScope, 0)
-	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(0), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	require.NoError(failpoint.Enable("tikvclient/InjectPDMinResolvedTS", `return(100)`))
 	// Make sure the store's min resolved ts is not regarded as MaxUint64.
 	s.waitForMinSafeTS(oracle.GlobalTxnScope, 100)
-	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(100), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 
 	// Fallback to KV Request when PD server not support get min resolved ts.
@@ -202,7 +202,7 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 	mockClient.SetKVSafeTS(150)
 	// Make sure the minSafeTS can advance.
 	s.waitForMinSafeTS(oracle.GlobalTxnScope, 150)
-	require.Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(150), s.store.GetMinSafeTS())
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 }
 
