@@ -479,6 +479,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		cb.Invoke(re, err)
 		return
 	}
+	disableReadFeaturesForNextGen(req)
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
@@ -1502,6 +1503,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		return
 	}
 
+	disableReadFeaturesForNextGen(req)
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		return nil, nil, 0, err
