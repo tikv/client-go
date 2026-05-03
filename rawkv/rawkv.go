@@ -547,6 +547,9 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
+			if pair.Error != nil {
+				return nil, nil, errors.New(pair.Error.String())
+			}
 			keys = append(keys, pair.Key)
 			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
@@ -596,6 +599,9 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
+			if pair.Error != nil {
+				return nil, nil, errors.New(pair.Error.String())
+			}
 			keys = append(keys, pair.Key)
 			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
