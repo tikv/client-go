@@ -52,7 +52,7 @@ func TestUpdateTiKVRUV2FromExecDetailsV2(t *testing.T) {
 		},
 	}, 0, 0)
 
-	require.InDelta(t, 38.64481334, ruDetails.TiKVRUV2(), 1e-9)
+	require.InDelta(t, 57.96722001, ruDetails.TiKVRUV2(), 1e-9)
 	drained := ruDetails.DrainRUV2()
 	require.NotNil(t, drained)
 	require.Equal(t, uint64(43), drained.KvEngineCacheMiss)

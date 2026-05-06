@@ -497,6 +497,9 @@ func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
 }
 
 func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	originAsyncEnable := config.GetGlobalConfig().EnableAsyncBatchGet
 	defer func() {
 		cfg := config.GetGlobalConfig()
