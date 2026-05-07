@@ -63,10 +63,11 @@ type storage interface {
 
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
-	store                    storage
-	asyncResolvePool         *asyncResolveTaskPool
-	resolveLockLiteThreshold uint64
-	mu                       struct {
+	store                            storage
+	asyncResolvePool                 *asyncResolveTaskPool
+	resolveLockLiteThreshold         uint64
+	enableTiKVAsyncRegionResolveLock bool
+	mu                               struct {
 		sync.RWMutex
 		// These two fields is used to tracking lock resolving information
 		// currentStartTS -> caller token -> resolving locks
@@ -100,9 +101,10 @@ type ResolvingLock struct {
 // NewLockResolver creates a new LockResolver instance.
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
-		store:                    store,
-		asyncResolvePool:         newAsyncResolveTaskPool(globalAsyncResolveLockSemaphore),
-		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
+		store:                            store,
+		asyncResolvePool:                 newAsyncResolveTaskPool(globalAsyncResolveLockSemaphore),
+		resolveLockLiteThreshold:         config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
+		enableTiKVAsyncRegionResolveLock: config.GetGlobalConfig().TiKVClient.EnableTiKVAsyncRegionResolveLock,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
 	r.mu.resolving = make(map[uint64][][]Lock)
@@ -626,7 +628,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				asyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
-					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
+					err := lr.resolveLock(asyncBo, l, status, lite, true, map[locate.RegionVerID]struct{}{})
 					if err != nil {
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
@@ -637,7 +639,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				}
 			}
 			if !asyncResolve {
-				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
+				err = lr.resolveLock(bo, l, status, lite, forRead, cleanRegions)
 			}
 		}
 		return status, err
@@ -1383,11 +1385,12 @@ func resolveActionLabel(status TxnStatus) string {
 	return "rollback"
 }
 
-func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
+func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, resultNotRequired bool, cleanRegions map[locate.RegionVerID]struct{}) error {
 	util.EvalFailpoint("resolveLock")
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
+	isAsync := lr.enableTiKVAsyncRegionResolveLock && resultNotRequired && !resolveLite
 	resolveAction := resolveActionLabel(status)
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
@@ -1410,6 +1413,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
+			IsAsync:      isAsync,
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()
@@ -1465,6 +1469,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			zap.Uint64("commitTS", lreq.CommitVersion),
 			zap.Uint64("regionID", loc.Region.GetID()),
 			zap.Bool("resolveLite", resolveLite),
+			zap.Bool("isAsync", isAsync),
 			zap.Bool("resolvedByCheckTxnStatus", false),
 		)
 		return nil
