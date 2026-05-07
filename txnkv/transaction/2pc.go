@@ -567,6 +567,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	c.mutations = newMemBufferMutations(sizeHint, memBuf)
 	c.isPessimistic = txn.IsPessimistic()
 	filter := txn.kvFilter
+	primaryKeyIsSharedLock := false
 
 	var err error
 	var assertionError error
@@ -648,6 +649,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		}
 		if op == kvrpcpb.Op_SharedLock {
 			sharedLockCnt++
+			if bytes.Equal(c.primaryKey, key) {
+				primaryKeyIsSharedLock = true
+			}
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		size += len(key) + len(value)
@@ -701,12 +705,12 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	if c.mutations.Len() == 0 {
 		return nil
-	} else if len(c.primaryKey) == 0 && sharedLockCnt > 0 {
+	} else if primaryKeyIsSharedLock || len(c.primaryKey) == 0 && sharedLockCnt > 0 {
 		// A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
 		// that (it's the only place that sets `flagKeyLockedInShareMode`). Here we just double check it.
 		// Only report error when there are shared locks - if all keys are CheckNotExists (delete-your-writes),
 		// we allow the transaction to continue and use the first key as primary via the primary() fallback.
-		msg := "no suitable primary key found for the transaction"
+		msg := "shared lock key cannot be used as transaction primary key"
 		logutil.BgLogger().Warn(msg,
 			zap.Uint64("session", c.sessionID),
 			zap.Int("keys", c.mutations.Len()),
@@ -1545,6 +1549,9 @@ func sendTxnHeartBeat(
 
 // checkAsyncCommit checks if async commit protocol is available for current transaction commit, true is returned if possible.
 func (c *twoPhaseCommitter) checkAsyncCommit() bool {
+	if c.hasSharedLocks {
+		return false
+	}
 	// Disable async commit in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
@@ -1576,6 +1583,9 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 
 // checkOnePC checks if 1PC protocol is available for current transaction.
 func (c *twoPhaseCommitter) checkOnePC() bool {
+	if c.hasSharedLocks {
+		return false
+	}
 	// Disable 1PC in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
@@ -1755,6 +1765,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
+	if c.hasSharedLocks {
+		c.setAsyncCommit(false)
+		c.setOnePC(false)
+	}
 	if !c.txn.isPipelined && !c.hasSharedLocks {
 		// Check async commit is available or not.
 		if c.checkAsyncCommit() {
