@@ -635,7 +635,9 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			var value []byte
 			var op kvrpcpb.Op
 
-			// TODO(slock): pipelined DML do not prewrite shared lock even when flags.HasLockedInShareMode() is true.
+			if flags.HasLockedInShareMode() {
+				return errors.New("shared lock is not supported in pipelined transaction")
+			}
 			if !it.HasValue() {
 				if !flags.HasLocked() {
 					continue
@@ -1309,7 +1311,13 @@ func (txn *KVTxn) collectAggressiveLockingStats(lockCtx *tikv.LockCtx, keys int,
 }
 
 func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockCtx *tikv.LockCtx, keys [][]byte) error {
-	if (len(keys) > 1 || lockCtx.InShareMode) && txn.IsInAggressiveLockingMode() {
+	if !txn.IsInAggressiveLockingMode() {
+		return nil
+	}
+	if lockCtx.InShareMode {
+		return errors.New("shared lock is not supported in aggressive/fair locking mode")
+	}
+	if len(keys) > 1 {
 		// Only allow fair locking if it only needs to lock one key. Considering that it's possible that a
 		// statement causes multiple calls to `LockKeys` (which means some keys may have been locked in fair
 		// locking mode), here we exit fair locking mode by calling DoneFairLocking instead of cancelling.
@@ -1385,6 +1393,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
 	}
+	if lockCtx.InShareMode && txn.IsPipelined() {
+		return errors.New("shared lock is not supported in pipelined transaction")
+	}
 
 	if lockCtx.InShareMode {
 		// create shared lock span in tracing.
@@ -1396,7 +1407,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 		// Shared lock in aggressive locking mode is not supported.
 		if txn.IsInAggressiveLockingMode() {
-			txn.DoneAggressiveLocking(ctx)
+			return errors.New("shared lock is not supported in aggressive/fair locking mode")
 		}
 	}
 
