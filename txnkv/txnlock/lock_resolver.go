@@ -50,7 +50,20 @@ const ResolvedCacheSize = 2048
 const (
 	getTxnStatusMaxBackoff     = 20000
 	asyncResolveLockMaxBackoff = 40000
+
+	asyncRegionResolveRecentTTL = time.Second
 )
+
+type recentAsyncRegionResolve struct {
+	txnID     uint64
+	regionID  locate.RegionVerID
+	expiresAt time.Time
+}
+
+type asyncRegionResolveRecentKey struct {
+	txnID    uint64
+	regionID locate.RegionVerID
+}
 
 type storage interface {
 	// GetRegionCache gets the RegionCache.
@@ -79,6 +92,9 @@ type LockResolver struct {
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
 		recentResolved *list.List
+
+		recentAsyncRegionResolve       map[asyncRegionResolveRecentKey]time.Time
+		recentAsyncRegionResolveExpiry *list.List
 	}
 	testingKnobs struct {
 		meetLock func(locks []*Lock)
@@ -110,6 +126,8 @@ func NewLockResolver(store storage) *LockResolver {
 	r.mu.resolving = make(map[uint64][][]Lock)
 	r.mu.resolvingConcurrency = make(map[uint64]int)
 	r.mu.recentResolved = list.New()
+	r.mu.recentAsyncRegionResolve = make(map[asyncRegionResolveRecentKey]time.Time)
+	r.mu.recentAsyncRegionResolveExpiry = list.New()
 	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
 	return r
 }
@@ -277,6 +295,52 @@ func (lr *LockResolver) getResolved(txnID uint64) (TxnStatus, bool) {
 
 	s, ok := lr.mu.resolved[txnID]
 	return s, ok
+}
+
+func (lr *LockResolver) markRecentAsyncRegionResolve(txnID uint64, regionID locate.RegionVerID, now time.Time) (time.Time, bool) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+
+	key := asyncRegionResolveRecentKey{txnID: txnID, regionID: regionID}
+	lr.gcRecentAsyncRegionResolveLocked(now)
+	if expiresAt, ok := lr.mu.recentAsyncRegionResolve[key]; ok && expiresAt.After(now) {
+		return expiresAt, false
+	}
+
+	expiresAt := now.Add(asyncRegionResolveRecentTTL)
+	lr.mu.recentAsyncRegionResolve[key] = expiresAt
+	lr.mu.recentAsyncRegionResolveExpiry.PushBack(recentAsyncRegionResolve{
+		txnID:     txnID,
+		regionID:  regionID,
+		expiresAt: expiresAt,
+	})
+	return expiresAt, true
+}
+
+func (lr *LockResolver) unmarkRecentAsyncRegionResolve(txnID uint64, regionID locate.RegionVerID, expiresAt time.Time) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+
+	key := asyncRegionResolveRecentKey{txnID: txnID, regionID: regionID}
+	if currentExpiresAt, ok := lr.mu.recentAsyncRegionResolve[key]; ok && currentExpiresAt.Equal(expiresAt) {
+		delete(lr.mu.recentAsyncRegionResolve, key)
+	}
+}
+
+func (lr *LockResolver) gcRecentAsyncRegionResolveLocked(now time.Time) {
+	for elem := lr.mu.recentAsyncRegionResolveExpiry.Front(); elem != nil; {
+		next := elem.Next()
+		entry := elem.Value.(recentAsyncRegionResolve)
+		if entry.expiresAt.After(now) {
+			break
+		}
+		key := asyncRegionResolveRecentKey{txnID: entry.txnID, regionID: entry.regionID}
+		if currentExpiresAt, ok := lr.mu.recentAsyncRegionResolve[key]; ok && currentExpiresAt.Equal(entry.expiresAt) {
+			delete(lr.mu.recentAsyncRegionResolve, key)
+		}
+		lr.mu.recentAsyncRegionResolveExpiry.Remove(elem)
+		elem = next
+	}
 }
 
 // BatchResolveLocks resolve locks in a batch.
@@ -1392,6 +1456,15 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
 	isAsync := lr.enableTiKVAsyncRegionResolveLock && resultNotRequired && !resolveLite
 	resolveAction := resolveActionLabel(status)
+	asyncRegionResolveRegionID := locate.RegionVerID{}
+	asyncRegionResolveExpiresAt := time.Time{}
+	asyncRegionResolveMarked := false
+	asyncRegionResolveSucceeded := false
+	defer func() {
+		if asyncRegionResolveMarked && !asyncRegionResolveSucceeded {
+			lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
+		}
+	}()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
@@ -1410,6 +1483,23 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		if _, ok := cleanRegions[loc.Region]; ok {
 			return nil
+		}
+		if isAsync {
+			asyncRegionResolveRegionID = loc.Region
+			var marked bool
+			asyncRegionResolveExpiresAt, marked = lr.markRecentAsyncRegionResolve(l.TxnID, loc.Region, time.Now())
+			if !marked {
+				logutil.Logger(bo.GetCtx()).Info("txn lock cleanup async resolve-lock skipped rpc (recently signaled)",
+					zap.String("action", resolveAction),
+					zap.Uint64("txnStartTS", l.TxnID),
+					zap.Uint64("commitTS", status.CommitTS()),
+					zap.Uint64("regionID", loc.Region.GetID()),
+					zap.Bool("resolveLite", resolveLite),
+					zap.Bool("isAsync", isAsync),
+				)
+				return nil
+			}
+			asyncRegionResolveMarked = true
 		}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
@@ -1441,6 +1531,10 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			return err
 		}
 		if regionErr != nil {
+			if asyncRegionResolveMarked {
+				lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
+				asyncRegionResolveMarked = false
+			}
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				return err
@@ -1463,6 +1557,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if !resolveLite {
 			cleanRegions[loc.Region] = struct{}{}
 		}
+		asyncRegionResolveSucceeded = true
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
 			zap.String("action", resolveAction),
 			zap.Uint64("txnStartTS", l.TxnID),

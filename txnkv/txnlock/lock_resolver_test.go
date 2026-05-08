@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -51,6 +52,52 @@ func TestLockResolverCache(t *testing.T) {
 	_, err := lockResolver.ResolveLocks(backOff, 5, []*Lock{NewLock(toResolveLock)})
 	require.NoError(t, err)
 	require.Nil(t, failpoint.Disable("tikvclient/resolveAsyncCommitLockReturn"))
+}
+
+func TestRecentAsyncRegionResolveTTL(t *testing.T) {
+	lockResolver := NewLockResolver(nil)
+	defer lockResolver.Close()
+
+	now := time.Unix(100, 0)
+	region1 := locate.NewRegionVerID(1, 1, 1)
+	region2 := locate.NewRegionVerID(2, 1, 1)
+	expiresAt, marked := lockResolver.markRecentAsyncRegionResolve(10, region1, now)
+	require.True(t, marked)
+	require.Equal(t, now.Add(asyncRegionResolveRecentTTL), expiresAt)
+
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region1, now.Add(asyncRegionResolveRecentTTL/2))
+	require.False(t, marked)
+
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region2, now.Add(asyncRegionResolveRecentTTL/2))
+	require.True(t, marked)
+
+	_, marked = lockResolver.markRecentAsyncRegionResolve(11, region1, now.Add(asyncRegionResolveRecentTTL/2))
+	require.True(t, marked)
+
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region1, now.Add(asyncRegionResolveRecentTTL+time.Nanosecond))
+	require.True(t, marked)
+}
+
+func TestRecentAsyncRegionResolveUnmark(t *testing.T) {
+	lockResolver := NewLockResolver(nil)
+	defer lockResolver.Close()
+
+	now := time.Unix(100, 0)
+	region := locate.NewRegionVerID(1, 1, 1)
+	expiresAt, marked := lockResolver.markRecentAsyncRegionResolve(10, region, now)
+	require.True(t, marked)
+
+	lockResolver.unmarkRecentAsyncRegionResolve(10, region, expiresAt.Add(time.Nanosecond))
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region, now.Add(time.Millisecond))
+	require.False(t, marked)
+
+	lockResolver.unmarkRecentAsyncRegionResolve(10, locate.NewRegionVerID(2, 1, 1), expiresAt)
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region, now.Add(2*time.Millisecond))
+	require.False(t, marked)
+
+	lockResolver.unmarkRecentAsyncRegionResolve(10, region, expiresAt)
+	_, marked = lockResolver.markRecentAsyncRegionResolve(10, region, now.Add(3*time.Millisecond))
+	require.True(t, marked)
 }
 
 func TestTryAsyncResolve(t *testing.T) {
