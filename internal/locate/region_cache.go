@@ -82,6 +82,26 @@ const (
 // LabelFilter returns false means label doesn't match, and will ignore this store.
 type LabelFilter = func(labels []*metapb.StoreLabel) bool
 
+// TiFlashRPCContextUnavailableReason is the reason why GetTiFlashRPCContext returns a nil RPCContext.
+type TiFlashRPCContextUnavailableReason string
+
+const (
+	TiFlashRPCContextAvailable                       TiFlashRPCContextUnavailableReason = ""
+	TiFlashRPCContextUnavailableError				 TiFlashRPCContextUnavailableReason = "error"
+	TiFlashRPCContextUnavailableCachedRegionMissing  TiFlashRPCContextUnavailableReason = "cached_region_missing"
+	TiFlashRPCContextUnavailableNeedReloadOnAccess   TiFlashRPCContextUnavailableReason = "need_reload_on_access"
+	TiFlashRPCContextUnavailableTTLExpired           TiFlashRPCContextUnavailableReason = "ttl_expired"
+	TiFlashRPCContextUnavailableNoTiFlashAccessStore TiFlashRPCContextUnavailableReason = "no_tiflash_access_store"
+	TiFlashRPCContextUnavailableStoreAddrEmpty       TiFlashRPCContextUnavailableReason = "store_addr_empty"
+	TiFlashRPCContextUnavailableAllStoresFiltered    TiFlashRPCContextUnavailableReason = "all_tiflash_stores_filtered_by_label"
+	TiFlashRPCContextUnavailableAllStoresEpochStale  TiFlashRPCContextUnavailableReason = "all_tiflash_stores_epoch_mismatch"
+	TiFlashRPCContextUnavailableNoAvailableStore     TiFlashRPCContextUnavailableReason = "no_available_tiflash_store"
+)
+
+func (r TiFlashRPCContextUnavailableReason) String() string {
+	return string(r)
+}
+
 // LabelFilterOnlyTiFlashWriteNode will only select stores whose label contains: <engine, tiflash> and <engine_role, write>.
 // Only used for tiflash_compute node.
 var LabelFilterOnlyTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
@@ -1013,17 +1033,28 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 	return allStores, nonPendingStores
 }
 
-// GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the region
-// must be out of date and already dropped from cache or not flash store found.
+// GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the returned
+// TiFlashRPCContextUnavailableReason explains why the region cannot access TiFlash.
 // `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
-func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, error) {
+func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, TiFlashRPCContextUnavailableReason, error) {
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
-		return nil, nil
+		if cachedRegion == nil {
+			return nil, TiFlashRPCContextUnavailableCachedRegionMissing, nil
+		}
+		if cachedRegion.checkSyncFlags(needReloadOnAccess) {
+			return nil, TiFlashRPCContextUnavailableNeedReloadOnAccess, nil
+		}
+		return nil, TiFlashRPCContextUnavailableTTLExpired, nil
 	}
 
 	regionStore := cachedRegion.getStore()
+	accessStoreNum := regionStore.accessStoreNum(tiFlashOnly)
+	if accessStoreNum == 0 {
+		cachedRegion.invalidate(Other)
+		return nil, TiFlashRPCContextUnavailableNoTiFlashAccessStore, nil
+	}
 
 	// sIdx is for load balance of TiFlash store.
 	var sIdx int
@@ -1032,19 +1063,22 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	} else {
 		sIdx = int(regionStore.workTiFlashIdx.Load())
 	}
-	for i := 0; i < regionStore.accessStoreNum(tiFlashOnly); i++ {
-		accessIdx := AccessIndex((sIdx + i) % regionStore.accessStoreNum(tiFlashOnly))
+	labelFilteredCount := 0
+	epochMismatchCount := 0
+	for i := 0; i < accessStoreNum; i++ {
+		accessIdx := AccessIndex((sIdx + i) % accessStoreNum)
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
 		if !labelFilter(store.GetLabels()) {
+			labelFilteredCount++
 			continue
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
 		if err != nil {
-			return nil, err
+			return nil, TiFlashRPCContextUnavailableError, err
 		}
 		if len(addr) == 0 {
 			cachedRegion.invalidate(StoreNotFound)
-			return nil, nil
+			return nil, TiFlashRPCContextUnavailableStoreAddrEmpty, nil
 		}
 		if store.getResolveState() == needCheck {
 			_, err := store.reResolve(c.stores)
@@ -1055,6 +1089,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			cachedRegion.invalidate(Other)
+			epochMismatchCount++
 			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
 				zap.String("store", store.GetAddr()))
@@ -1071,11 +1106,17 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			Addr:       addr,
 			AccessMode: tiFlashOnly,
 			TiKVNum:    regionStore.accessStoreNum(tiKVOnly),
-		}, nil
+		}, TiFlashRPCContextAvailable, nil
 	}
 
 	cachedRegion.invalidate(Other)
-	return nil, nil
+	if labelFilteredCount == accessStoreNum {
+		return nil, TiFlashRPCContextUnavailableAllStoresFiltered, nil
+	}
+	if epochMismatchCount == accessStoreNum {
+		return nil, TiFlashRPCContextUnavailableAllStoresEpochStale, nil
+	}
+	return nil, TiFlashRPCContextUnavailableNoAvailableStore, nil
 }
 
 // KeyLocation is the region and range that a key is located.
