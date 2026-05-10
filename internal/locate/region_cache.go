@@ -91,7 +91,7 @@ type TiFlashRPCContextUnavailableReason string
 
 const (
 	TiFlashRPCContextAvailable                       TiFlashRPCContextUnavailableReason = ""
-	TiFlashRPCContextUnavailableError				 TiFlashRPCContextUnavailableReason = "error"
+	TiFlashRPCContextUnavailableError                TiFlashRPCContextUnavailableReason = "error"
 	TiFlashRPCContextUnavailableCachedRegionMissing  TiFlashRPCContextUnavailableReason = "cached_region_missing"
 	TiFlashRPCContextUnavailableNeedReloadOnAccess   TiFlashRPCContextUnavailableReason = "need_reload_on_access"
 	TiFlashRPCContextUnavailableTTLExpired           TiFlashRPCContextUnavailableReason = "ttl_expired"
