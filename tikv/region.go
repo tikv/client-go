@@ -60,6 +60,22 @@ type RegionVerID = locate.RegionVerID
 // RegionCache caches Regions loaded from PD.
 type RegionCache = locate.RegionCache
 
+// TiFlashRPCContextUnavailableReason explains why GetTiFlashRPCContext returns a nil RPCContext.
+type TiFlashRPCContextUnavailableReason = locate.TiFlashRPCContextUnavailableReason
+
+const (
+	TiFlashRPCContextAvailable                       = locate.TiFlashRPCContextAvailable
+	TiFlashRPCContextUnavailableError				 = locate.TiFlashRPCContextUnavailableError
+	TiFlashRPCContextUnavailableCachedRegionMissing  = locate.TiFlashRPCContextUnavailableCachedRegionMissing
+	TiFlashRPCContextUnavailableNeedReloadOnAccess   = locate.TiFlashRPCContextUnavailableNeedReloadOnAccess
+	TiFlashRPCContextUnavailableTTLExpired           = locate.TiFlashRPCContextUnavailableTTLExpired
+	TiFlashRPCContextUnavailableNoTiFlashAccessStore = locate.TiFlashRPCContextUnavailableNoTiFlashAccessStore
+	TiFlashRPCContextUnavailableStoreAddrEmpty       = locate.TiFlashRPCContextUnavailableStoreAddrEmpty
+	TiFlashRPCContextUnavailableAllStoresFiltered    = locate.TiFlashRPCContextUnavailableAllStoresFiltered
+	TiFlashRPCContextUnavailableAllStoresEpochStale  = locate.TiFlashRPCContextUnavailableAllStoresEpochStale
+	TiFlashRPCContextUnavailableNoAvailableStore     = locate.TiFlashRPCContextUnavailableNoAvailableStore
+)
+
 // KeyLocation is the region and range that a key is located.
 type KeyLocation = locate.KeyLocation
 
