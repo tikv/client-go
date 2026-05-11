@@ -1113,12 +1113,9 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	for i := 0; i < accessStoreNum; i++ {
 		accessIdx := AccessIndex((sIdx + i) % accessStoreNum)
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
+		peer := cachedRegion.meta.Peers[storeIdx]
 		storeIDs = append(storeIDs, store.storeID)
-		peerID := uint64(0)
-		if storeIdx < len(cachedRegion.meta.GetPeers()) {
-			peerID = cachedRegion.meta.GetPeers()[storeIdx].GetId()
-		}
-		peerIDs = append(peerIDs, peerID)
+		peerIDs = append(peerIDs, peer.GetId())
 		if !labelFilter(store.GetLabels()) {
 			labelFilteredCount++
 			continue
@@ -1128,7 +1125,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, TiFlashRPCContextUnavailableDetail{
 				Reason:   TiFlashRPCContextUnavailableError,
 				StoreIDs: []uint64{store.storeID},
-				PeerIDs:  []uint64{peerID},
+				PeerIDs:  []uint64{peer.GetId()},
 			}, err
 		}
 		if len(addr) == 0 {
@@ -1136,7 +1133,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, TiFlashRPCContextUnavailableDetail{
 				Reason:   TiFlashRPCContextUnavailableStoreAddrEmpty,
 				StoreIDs: []uint64{store.storeID},
-				PeerIDs:  []uint64{peerID},
+				PeerIDs:  []uint64{peer.GetId()},
 			}, nil
 		}
 		if store.getResolveState() == needCheck {
@@ -1144,7 +1141,6 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			tikverr.Log(err)
 		}
 		regionStore.workTiFlashIdx.Store(int32(accessIdx))
-		peer := cachedRegion.meta.Peers[storeIdx]
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			cachedRegion.invalidate(Other)
