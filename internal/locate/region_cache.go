@@ -2308,6 +2308,194 @@ func (c *RegionCache) GetAllStores() []*Store {
 	})
 }
 
+// CachedRegionPeerStoreDebugInfo is the debug information of one peer-store pair in cached region.
+type CachedRegionPeerStoreDebugInfo struct {
+	Peer                *metapb.Peer
+	StoreID             uint64
+	Addr                string
+	PeerAddr            string
+	StatusAddr          string
+	StoreType           string
+	ResolveState        string
+	LivenessState       string
+	StoreEpoch          uint32
+	IsSlow              bool
+	ClientSideSlowScore int64
+	TiKVSideSlowScore   int64
+}
+
+// CachedRegionDebugInfo is the debug information of one cached region.
+type CachedRegionDebugInfo struct {
+	RegionID       uint64
+	RegionEpoch    *metapb.RegionEpoch
+	RegionVer      RegionVerID
+	StartKey       []byte
+	EndKey         []byte
+	Peers          []*metapb.Peer
+	LeaderPeerID   uint64
+	LeaderStoreID  uint64
+	TTL            int64
+	Expired        bool
+	Valid          bool
+	InvalidReason  string
+	SyncFlags      int32
+	SyncFlagNames  []string
+	BucketVersion  uint64
+	BucketKeyCount int
+	PeerStores     []CachedRegionPeerStoreDebugInfo
+}
+
+// CachedStoreDebugInfo is the debug information of one cached store.
+type CachedStoreDebugInfo struct {
+	StoreID             uint64
+	Addr                string
+	PeerAddr            string
+	StatusAddr          string
+	StoreType           string
+	ResolveState        string
+	LivenessState       string
+	Labels              []*metapb.StoreLabel
+	IsSlow              bool
+	ClientSideSlowScore int64
+	TiKVSideSlowScore   int64
+	EstimatedWaitMs     int64
+}
+
+// GetCachedRegionDebugInfoByID returns region information from cache directly.
+// It never triggers PD lookups or cache reload.
+func (c *RegionCache) GetCachedRegionDebugInfoByID(regionID uint64) (*CachedRegionDebugInfo, bool) {
+	c.mu.RLock()
+	ver, ok := c.mu.latestVersions[regionID]
+	if !ok {
+		c.mu.RUnlock()
+		return nil, false
+	}
+	region, ok := c.mu.regions[ver]
+	c.mu.RUnlock()
+	if !ok || region == nil {
+		return nil, false
+	}
+
+	rs := region.getStore()
+	meta := region.GetMeta()
+	now := time.Now().Unix()
+	ttl := atomic.LoadInt64(&region.ttl)
+	expired := region.isCacheTTLExpired(now)
+	syncFlags := region.getSyncFlags()
+	invalidReason := InvalidReason(atomic.LoadInt32((*int32)(&region.invalidReason)))
+	valid := !expired && invalidReason == Ok && syncFlags&(needReloadOnAccess|needDelayedReloadReady) == 0
+	var regionEpoch *metapb.RegionEpoch
+	if epoch := meta.GetRegionEpoch(); epoch != nil {
+		regionEpoch = proto.Clone(epoch).(*metapb.RegionEpoch)
+	}
+
+	info := &CachedRegionDebugInfo{
+		RegionID:      region.GetID(),
+		RegionEpoch:   regionEpoch,
+		RegionVer:     region.VerID(),
+		StartKey:      slices.Clone(region.StartKey()),
+		EndKey:        slices.Clone(region.EndKey()),
+		Peers:         make([]*metapb.Peer, len(meta.Peers)),
+		LeaderPeerID:  region.GetLeaderPeerID(),
+		LeaderStoreID: region.GetLeaderStoreID(),
+		TTL:           ttl,
+		Expired:       expired,
+		Valid:         valid,
+		InvalidReason: invalidReason.String(),
+		SyncFlags:     syncFlags,
+		SyncFlagNames: syncFlagNames(syncFlags),
+	}
+	for i, peer := range meta.Peers {
+		info.Peers[i] = proto.Clone(peer).(*metapb.Peer)
+	}
+
+	if rs != nil && rs.buckets != nil {
+		info.BucketVersion = rs.buckets.GetVersion()
+		info.BucketKeyCount = len(rs.buckets.GetKeys())
+	}
+
+	if rs == nil {
+		return info, true
+	}
+
+	peerStoreInfos := make([]CachedRegionPeerStoreDebugInfo, 0, len(meta.Peers))
+	for i, peer := range meta.Peers {
+		peerInfo := CachedRegionPeerStoreDebugInfo{
+			Peer: proto.Clone(peer).(*metapb.Peer),
+		}
+		if i < len(rs.stores) {
+			store := rs.stores[i]
+			healthDetail := store.GetHealthStatus().GetHealthStatusDetail()
+			peerInfo.StoreID = store.StoreID()
+			peerInfo.Addr = store.GetAddr()
+			peerInfo.PeerAddr = store.GetPeerAddr()
+			peerInfo.StatusAddr = store.GetStatusAddr()
+			peerInfo.StoreType = store.StoreType().Name()
+			peerInfo.ResolveState = store.getResolveState().String()
+			peerInfo.LivenessState = store.getLivenessState().String()
+			peerInfo.IsSlow = store.GetHealthStatus().IsSlow()
+			peerInfo.ClientSideSlowScore = healthDetail.ClientSideSlowScore
+			peerInfo.TiKVSideSlowScore = healthDetail.TiKVSideSlowScore
+		}
+		if i < len(rs.storeEpochs) {
+			peerInfo.StoreEpoch = rs.storeEpochs[i]
+		}
+		peerStoreInfos = append(peerStoreInfos, peerInfo)
+	}
+	info.PeerStores = peerStoreInfos
+	return info, true
+}
+
+// GetCachedStoreDebugInfoByID returns store information from cache directly.
+// It never triggers PD lookups or cache reload.
+func (c *RegionCache) GetCachedStoreDebugInfoByID(storeID uint64) (*CachedStoreDebugInfo, bool) {
+	store, ok := c.stores.get(storeID)
+	if !ok || store == nil {
+		return nil, false
+	}
+
+	healthDetail := store.GetHealthStatus().GetHealthStatusDetail()
+	info := &CachedStoreDebugInfo{
+		StoreID:             store.StoreID(),
+		Addr:                store.GetAddr(),
+		PeerAddr:            store.GetPeerAddr(),
+		StatusAddr:          store.GetStatusAddr(),
+		StoreType:           store.StoreType().Name(),
+		ResolveState:        store.getResolveState().String(),
+		LivenessState:       store.getLivenessState().String(),
+		IsSlow:              store.GetHealthStatus().IsSlow(),
+		ClientSideSlowScore: healthDetail.ClientSideSlowScore,
+		TiKVSideSlowScore:   healthDetail.TiKVSideSlowScore,
+		EstimatedWaitMs:     store.EstimatedWaitTime().Milliseconds(),
+	}
+	labels := store.GetLabels()
+	info.Labels = make([]*metapb.StoreLabel, 0, len(labels))
+	for _, label := range labels {
+		info.Labels = append(info.Labels, proto.Clone(label).(*metapb.StoreLabel))
+	}
+	return info, true
+}
+
+func syncFlagNames(flags int32) []string {
+	if flags == 0 {
+		return nil
+	}
+	names := make([]string, 0, 4)
+	if flags&needReloadOnAccess > 0 {
+		names = append(names, "need_reload_on_access")
+	}
+	if flags&needExpireAfterTTL > 0 {
+		names = append(names, "need_expire_after_ttl")
+	}
+	if flags&needDelayedReloadPending > 0 {
+		names = append(names, "need_delayed_reload_pending")
+	}
+	if flags&needDelayedReloadReady > 0 {
+		names = append(names, "need_delayed_reload_ready")
+	}
+	return names
+}
+
 var loadRegionCounters sync.Map
 
 const (

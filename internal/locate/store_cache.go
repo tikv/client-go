@@ -312,6 +312,13 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
+// GetStatusAddr returns the status address of the store.
+func (s *Store) GetStatusAddr() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	return s.saddr
+}
+
 // GetLabels returns the labels of the store, it is not safe to modify the returned labels.
 func (s *Store) GetLabels() []*metapb.StoreLabel {
 	s.metaMu.RLock()
