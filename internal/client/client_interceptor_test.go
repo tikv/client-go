@@ -21,11 +21,14 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util/async"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 type emptyClient struct{}
@@ -47,6 +50,28 @@ func (c emptyClient) CloseAddr(addr string) error {
 }
 
 func (c emptyClient) SetEventListener(listener ClientEventListener) {}
+
+type testResourceControlInterceptor struct{}
+
+func (testResourceControlInterceptor) OnRequestWait(context.Context, string, resourceControlClient.RequestInfo) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	return nil, nil, 0, 0, nil
+}
+
+func (testResourceControlInterceptor) OnResponse(string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo) (*rmpb.Consumption, error) {
+	return nil, nil
+}
+
+func (testResourceControlInterceptor) OnResponseWait(context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo) (*rmpb.Consumption, time.Duration, error) {
+	return nil, 0, nil
+}
+
+func (testResourceControlInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
+	return false
+}
+
+func (testResourceControlInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return 0
+}
 
 func TestInterceptedClient(t *testing.T) {
 	executed := false
@@ -114,4 +139,27 @@ func TestBypassRUV2FollowsRequestInfoBypass(t *testing.T) {
 	backgroundReq.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "rg"}
 	backgroundReq.RequestSource = "background-task"
 	assert.False(t, resourcecontrol.MakeRequestInfo(backgroundReq).Bypass())
+}
+
+func TestGetResourceControlInfoBypassesResourceControl(t *testing.T) {
+	require := require.New(t)
+	ResourceControlSwitch.Store(true)
+	defer ResourceControlSwitch.Store(false)
+
+	interceptor := resourceControlClient.ResourceGroupKVInterceptor(testResourceControlInterceptor{})
+	ResourceControlInterceptor.Store(&interceptor)
+	defer ResourceControlInterceptor.Store(nil)
+
+	req := &tikvrpc.Request{
+		Context: kvrpcpb.Context{
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{ResourceGroupName: "rg-1"},
+			RequestSource:          "xxx_internal_others",
+		},
+	}
+
+	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(context.Background(), req)
+	require.Equal("rg-1", resourceGroupName)
+	require.Nil(resourceControlInterceptor)
+	require.NotNil(reqInfo)
+	require.True(reqInfo.Bypass())
 }
