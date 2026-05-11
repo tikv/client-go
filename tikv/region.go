@@ -62,10 +62,11 @@ type RegionCache = locate.RegionCache
 
 // TiFlashRPCContextUnavailableReason explains why GetTiFlashRPCContext returns a nil RPCContext.
 type TiFlashRPCContextUnavailableReason = locate.TiFlashRPCContextUnavailableReason
+type TiFlashRPCContextUnavailableDetail = locate.TiFlashRPCContextUnavailableDetail
 
 const (
 	TiFlashRPCContextAvailable                       = locate.TiFlashRPCContextAvailable
-	TiFlashRPCContextUnavailableError				 = locate.TiFlashRPCContextUnavailableError
+	TiFlashRPCContextUnavailableError                = locate.TiFlashRPCContextUnavailableError
 	TiFlashRPCContextUnavailableCachedRegionMissing  = locate.TiFlashRPCContextUnavailableCachedRegionMissing
 	TiFlashRPCContextUnavailableNeedReloadOnAccess   = locate.TiFlashRPCContextUnavailableNeedReloadOnAccess
 	TiFlashRPCContextUnavailableTTLExpired           = locate.TiFlashRPCContextUnavailableTTLExpired
