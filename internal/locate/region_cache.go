@@ -109,6 +109,7 @@ func (r TiFlashRPCContextUnavailableReason) String() string {
 type TiFlashRPCContextUnavailableDetail struct {
 	Reason   TiFlashRPCContextUnavailableReason
 	StoreIDs []uint64
+	PeerIDs  []uint64
 }
 
 func (d TiFlashRPCContextUnavailableDetail) String() string {
@@ -1108,10 +1109,16 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	labelFilteredCount := 0
 	epochMismatchCount := 0
 	storeIDs := make([]uint64, 0, accessStoreNum)
+	peerIDs := make([]uint64, 0, accessStoreNum)
 	for i := 0; i < accessStoreNum; i++ {
 		accessIdx := AccessIndex((sIdx + i) % accessStoreNum)
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
 		storeIDs = append(storeIDs, store.storeID)
+		peerID := uint64(0)
+		if storeIdx < len(cachedRegion.meta.GetPeers()) {
+			peerID = cachedRegion.meta.GetPeers()[storeIdx].GetId()
+		}
+		peerIDs = append(peerIDs, peerID)
 		if !labelFilter(store.GetLabels()) {
 			labelFilteredCount++
 			continue
@@ -1121,6 +1128,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, TiFlashRPCContextUnavailableDetail{
 				Reason:   TiFlashRPCContextUnavailableError,
 				StoreIDs: []uint64{store.storeID},
+				PeerIDs:  []uint64{peerID},
 			}, err
 		}
 		if len(addr) == 0 {
@@ -1128,6 +1136,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, TiFlashRPCContextUnavailableDetail{
 				Reason:   TiFlashRPCContextUnavailableStoreAddrEmpty,
 				StoreIDs: []uint64{store.storeID},
+				PeerIDs:  []uint64{peerID},
 			}, nil
 		}
 		if store.getResolveState() == needCheck {
@@ -1143,6 +1152,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
 				zap.Uint64("store_id", store.storeID),
+				zap.Uint64("peer_id", peer.GetId()),
 				zap.String("store", store.GetAddr()))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
 			continue
@@ -1165,17 +1175,20 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		return nil, TiFlashRPCContextUnavailableDetail{
 			Reason:   TiFlashRPCContextUnavailableAllStoresFiltered,
 			StoreIDs: storeIDs,
+			PeerIDs:  peerIDs,
 		}, nil
 	}
 	if epochMismatchCount == accessStoreNum {
 		return nil, TiFlashRPCContextUnavailableDetail{
 			Reason:   TiFlashRPCContextUnavailableAllStoresEpochStale,
 			StoreIDs: storeIDs,
+			PeerIDs:  peerIDs,
 		}, nil
 	}
 	return nil, TiFlashRPCContextUnavailableDetail{
 		Reason:   TiFlashRPCContextUnavailableNoAvailableStore,
 		StoreIDs: storeIDs,
+		PeerIDs:  peerIDs,
 	}, nil
 }
 
