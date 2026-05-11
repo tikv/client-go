@@ -397,6 +397,45 @@ func (s *testRegionCacheSuite) TestSimple() {
 	s.NotNil(r)
 }
 
+func (s *testRegionCacheSuite) TestGetCachedRegionDebugInfoByID() {
+	r := s.getRegion([]byte("a"))
+	info, ok := s.cache.GetCachedRegionDebugInfoByID(r.GetID())
+	s.True(ok)
+	s.NotNil(info)
+	s.Equal(r.GetID(), info.RegionID)
+	s.Equal(r.VerID(), info.RegionVer)
+	s.Equal(r.GetLeaderStoreID(), info.LeaderStoreID)
+	s.False(info.Expired)
+	s.True(info.Valid)
+	s.Equal(2, len(info.Peers))
+	s.Equal(2, len(info.PeerStores))
+
+	r.setSyncFlags(needReloadOnAccess)
+	info, ok = s.cache.GetCachedRegionDebugInfoByID(r.GetID())
+	s.True(ok)
+	s.NotNil(info)
+	s.False(info.Valid)
+	s.Contains(info.SyncFlagNames, "need_reload_on_access")
+
+	_, ok = s.cache.GetCachedRegionDebugInfoByID(0)
+	s.False(ok)
+}
+
+func (s *testRegionCacheSuite) TestGetCachedStoreDebugInfoByID() {
+	s.getRegion([]byte("a"))
+
+	storeInfo, ok := s.cache.GetCachedStoreDebugInfoByID(s.store1)
+	s.True(ok)
+	s.NotNil(storeInfo)
+	s.Equal(s.store1, storeInfo.StoreID)
+	s.Equal(s.storeAddr(s.store1), storeInfo.Addr)
+	s.Equal("resolved", storeInfo.ResolveState)
+	s.NotEmpty(storeInfo.StoreType)
+
+	_, ok = s.cache.GetCachedStoreDebugInfoByID(0)
+	s.False(ok)
+}
+
 // TestResolveStateTransition verifies store's resolve state transition. For example,
 // a newly added store is in unresolved state and will be resolved soon if it's an up store,
 // or in tombstone state if it's a tombstone.

@@ -60,6 +60,15 @@ type RegionVerID = locate.RegionVerID
 // RegionCache caches Regions loaded from PD.
 type RegionCache = locate.RegionCache
 
+// CachedRegionPeerStoreDebugInfo is the debug information of one peer-store pair in cached region.
+type CachedRegionPeerStoreDebugInfo = locate.CachedRegionPeerStoreDebugInfo
+
+// CachedRegionDebugInfo is the debug information of one cached region.
+type CachedRegionDebugInfo = locate.CachedRegionDebugInfo
+
+// CachedStoreDebugInfo is the debug information of one cached store.
+type CachedStoreDebugInfo = locate.CachedStoreDebugInfo
+
 // TiFlashRPCContextUnavailableReason explains why GetTiFlashRPCContext returns a nil RPCContext.
 type TiFlashRPCContextUnavailableReason = locate.TiFlashRPCContextUnavailableReason
 type TiFlashRPCContextUnavailableDetail = locate.TiFlashRPCContextUnavailableDetail
@@ -172,6 +181,18 @@ func NewRPCanceller() *RPCCanceller {
 // NewRegionVerID creates a region ver id, which used for invalidating regions.
 func NewRegionVerID(id, confVer, ver uint64) RegionVerID {
 	return locate.NewRegionVerID(id, confVer, ver)
+}
+
+// GetCachedRegionDebugInfoByID returns region debug information from cache directly.
+// It never triggers PD lookups or cache reload.
+func GetCachedRegionDebugInfoByID(cache *RegionCache, regionID uint64) (*CachedRegionDebugInfo, bool) {
+	return cache.GetCachedRegionDebugInfoByID(regionID)
+}
+
+// GetCachedStoreDebugInfoByID returns store debug information from cache directly.
+// It never triggers PD lookups or cache reload.
+func GetCachedStoreDebugInfoByID(cache *RegionCache, storeID uint64) (*CachedStoreDebugInfo, bool) {
+	return cache.GetCachedStoreDebugInfoByID(storeID)
 }
 
 // GetStoreTypeByMeta gets store type by store meta pb.
