@@ -1060,15 +1060,11 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	for i := 0; i < accessStoreNum; i++ {
 		accessIdx := AccessIndex((sIdx + i) % accessStoreNum)
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
-<<<<<<< HEAD
-		if !labelFilter(store.labels) {
-=======
 		peer := cachedRegion.meta.Peers[storeIdx]
 		storeIDs = append(storeIDs, store.storeID)
 		peerIDs = append(peerIDs, peer.GetId())
-		if !labelFilter(store.GetLabels()) {
+		if !labelFilter(store.labels) {
 			labelFilteredCount++
->>>>>>> fb7ee099 (region_cache: return nil reason from GetTiFlashRPCContext (#1959))
 			continue
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
@@ -1098,13 +1094,9 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			epochMismatchCount++
 			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
-<<<<<<< HEAD
-				zap.String("store", store.addr))
-=======
 				zap.Uint64("store_id", store.storeID),
 				zap.Uint64("peer_id", peer.GetId()),
 				zap.String("store", store.GetAddr()))
->>>>>>> fb7ee099 (region_cache: return nil reason from GetTiFlashRPCContext (#1959))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
 			continue
 		}
