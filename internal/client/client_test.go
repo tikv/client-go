@@ -886,12 +886,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
-<<<<<<< HEAD
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
-=======
-		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Second*20, 0)
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 		require.NoError(t, err)
 	}
 
@@ -901,12 +896,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be failed since server is down.
 	for i := 0; i < 10; i++ {
-<<<<<<< HEAD
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
-=======
-		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Millisecond*100, 0)
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
 		grpcConn := conn.Get()
@@ -949,12 +939,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
-<<<<<<< HEAD
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
-=======
-		req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, nil, req, time.Second*20, 0)
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 		require.NoError(t, err)
 	}
 }

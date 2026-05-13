@@ -22,11 +22,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122 // indirect
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
-<<<<<<< HEAD
-	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18 // indirect
-=======
-	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53 // indirect
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
+	github.com/pingcap/kvproto v0.0.0-20260513130714-a164c29a1dce // indirect
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.20.5 // indirect

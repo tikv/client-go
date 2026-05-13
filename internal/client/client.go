@@ -340,26 +340,10 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
-<<<<<<< HEAD
-	defer func() {
-		elapsed := time.Since(start)
-		connPool.updateRPCMetrics(req, resp, elapsed)
-=======
-	bypass := resourcecontrol.MakeRequestInfo(req).Bypass()
 	storeMetrics := connPool.getStoreMetrics(req.Context.GetPeer().GetStoreId())
 	defer func() {
 		elapsed := time.Since(start)
 		storeMetrics.updateRPCMetrics(req, resp, elapsed)
-		if resp != nil && !bypass {
-			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
-			switch resp.Resp.(type) {
-			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
-				// Stream responses are handled in Recv().
-			default:
-				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
-			}
-		}
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {

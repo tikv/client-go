@@ -913,9 +913,6 @@ func (c *batchCommandsClient) available() int64 {
 	return limit
 }
 
-<<<<<<< HEAD
-func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
-=======
 func (c *batchCommandsClient) stream(forwardedHost string) *batchCommandsStream {
 	if forwardedHost == "" {
 		return c.client
@@ -924,9 +921,6 @@ func (c *batchCommandsClient) stream(forwardedHost string) *batchCommandsStream 
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, grp *batchCommandsRequestGroup) {
-	defer reuseRequestData(grp.req)
-
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
@@ -1372,14 +1366,7 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 	priority uint64,
-<<<<<<< HEAD
-) (*tikvrpc.Response, error) {
-=======
 ) (_ *tikvrpc.Response, err error) {
-	if err := encodeRequestCmd(req); err != nil {
-		return nil, err
-	}
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 	entry := &batchCommandsEntry{
 		ctx:                 ctx,
 		req:                 req,

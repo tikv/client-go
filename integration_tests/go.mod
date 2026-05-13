@@ -7,13 +7,8 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-<<<<<<< HEAD
-	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18
+	github.com/pingcap/kvproto v0.0.0-20260513130714-a164c29a1dce
 	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
-=======
-	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
-	github.com/pingcap/tidb v1.1.0-beta.0.20260317213042-b1525070ca3e
->>>>>>> 0eed1ff3 (metrics: refine batch client metrics (#1931))
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
