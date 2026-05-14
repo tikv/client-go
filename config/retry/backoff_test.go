@@ -37,11 +37,15 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
+	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 func TestBackoffWithMax(t *testing.T) {
@@ -85,6 +89,15 @@ func TestBackoffErrorType(t *testing.T) {
 	assert.Fail(t, "should not be here")
 }
 
+func assertCloneOrForkEqual(t *testing.T, b1, b2 *Backoffer) {
+	assert.Equal(t, b1.errors, b2.errors)
+	assert.Equal(t, b1.errorsNum, b2.errorsNum)
+	assert.Equal(t, b1.backoffSleepMS, b2.backoffSleepMS)
+	assert.Equal(t, b1.backoffTimes, b2.backoffTimes)
+	assert.Equal(t, b1.excludedSleep, b2.excludedSleep)
+	assert.Equal(t, b1.totalSleep, b2.totalSleep)
+}
+
 func TestBackoffDeepCopy(t *testing.T) {
 	var err error
 	b := NewBackofferWithVars(context.TODO(), 4, nil)
@@ -95,7 +108,9 @@ func TestBackoffDeepCopy(t *testing.T) {
 	}
 	bForked, cancel := b.Fork()
 	defer cancel()
+	assertCloneOrForkEqual(t, b, bForked)
 	bCloned := b.Clone()
+	assertCloneOrForkEqual(t, b, bCloned)
 	for _, b := range []*Backoffer{bForked, bCloned} {
 		err = b.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
 		assert.ErrorIs(t, err, BoMaxRegionNotInitialized.err)
@@ -115,11 +130,7 @@ func TestBackoffUpdateUsingFork(t *testing.T) {
 	bForked.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
 	bCloneForked := bForked.Clone()
 	b.UpdateUsingForked(bForked)
-	assert.Equal(t, b.errors, bCloneForked.errors)
-	assert.Equal(t, b.backoffSleepMS, bCloneForked.backoffSleepMS)
-	assert.Equal(t, b.backoffTimes, bCloneForked.backoffTimes)
-	assert.Equal(t, b.excludedSleep, bCloneForked.excludedSleep)
-	assert.Equal(t, b.totalSleep, bCloneForked.totalSleep)
+	assertCloneOrForkEqual(t, b, bCloneForked)
 	assert.Nil(t, b.parent)
 }
 
@@ -179,4 +190,60 @@ func TestMayBackoffForRegionError(t *testing.T) {
 		err = MayBackoffForRegionError(regionErr, b)
 		assert.EqualError(t, err, regionErr.String())
 	}
+}
+
+func TestBackoffErrorsKeep(t *testing.T) {
+	b := NewBackofferWithVars(context.TODO(), 1000000, nil)
+	assert.Zero(t, b.ErrorsNum())
+	assert.Empty(t, b.latestErrors())
+	cfg := NewConfig("foo", nil, NewBackoffFnCfg(1, 2, EqualJitter), tikverr.ErrTiKVServerTimeout)
+	errs := make([]error, 0, 32)
+	for i := 0; i < cap(errs); i++ {
+		cnt := i + 1
+		msg := fmt.Sprintf("currnet mock error count: %d", cnt)
+		errs = append(errs, fmt.Errorf("mockErr-%d", i))
+		assert.NoError(t, b.Backoff(cfg, errs[i]), msg)
+
+		// b.ErrorsNum() should return the real number of errors.
+		assert.Equal(t, len(errs), b.ErrorsNum(), msg)
+
+		// b.latestErrors() should return at most MaxRecordBackoffErrCount errors.
+		if cnt <= MaxRecordBackoffErrCount {
+			// If cnt <= MaxRecordBackoffErrCount, return cnt errors.
+			assert.Len(t, b.latestErrors(), cnt, msg)
+		} else {
+			// If cnt > MaxRecordBackoffErrCount, return MaxRecordBackoffErrCount errors.
+			assert.Len(t, b.latestErrors(), MaxRecordBackoffErrCount, msg)
+		}
+
+		// The returned errors should be the last MaxRecordBackoffErrCount errors.
+		realErrs := b.latestErrors()
+		expectedErrs := make([]backoffErr, 0, len(realErrs))
+		for j := max(0, cnt-MaxRecordBackoffErrCount); j < len(errs); j++ {
+			realErrIdx := len(expectedErrs)
+			expectedErrs = append(expectedErrs, backoffErr{
+				Reason: errs[j].Error(),
+				Time:   realErrs[realErrIdx].Time,
+			})
+		}
+		assert.Equal(t, expectedErrs, realErrs, msg)
+
+		// The time in returned errors should be in ascending order.
+		sort.Slice(expectedErrs, func(i, j int) bool {
+			return expectedErrs[i].Time.Before(expectedErrs[j].Time)
+		})
+		assert.Equal(t, expectedErrs, realErrs)
+
+		// The time in returned errors should near the now time
+		assert.InDelta(t, time.Now().Unix(), realErrs[0].Time.Unix(), 5)
+		assert.InDelta(t, time.Now().Unix(), realErrs[len(realErrs)-1].Time.Unix(), 5)
+	}
+}
+
+func TestBackoffError(t *testing.T) {
+	err := backoffErr{
+		Reason: "mockErr",
+		Time:   time.Unix(3600*4+1234, 0).In(time.FixedZone("xx", 3*3600)),
+	}
+	assert.Equal(t, "mockErr at 1970-01-01T07:20:34+03:00", err.Error())
 }

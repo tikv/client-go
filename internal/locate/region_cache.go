@@ -833,6 +833,9 @@ type RPCContext struct {
 }
 
 func (c *RPCContext) String() string {
+	if c == nil {
+		return "<nil>"
+	}
 	var runStoreType string
 	if c.Store != nil {
 		runStoreType = c.Store.storeType.Name()
@@ -841,6 +844,23 @@ func (c *RPCContext) String() string {
 		c.Region.GetID(), c.Meta, c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
 	if c.ProxyStore != nil {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
+	}
+	return res
+}
+
+// ToBackoffReasonString returns the reason string used for backoff error logs
+func (c *RPCContext) ToBackoffReasonString() string {
+	if c == nil {
+		return "<nil>"
+	}
+	var runStoreType string
+	if c.Store != nil {
+		runStoreType = c.Store.StoreType().Name()
+	}
+	res := fmt.Sprintf("region: %s, peerID: %d, storeID: %d, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
+		c.Region.String(), c.Peer.GetId(), c.Peer.GetStoreId(), c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
+	if c.ProxyStore != nil {
+		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.GetAddr())
 	}
 	return res
 }
