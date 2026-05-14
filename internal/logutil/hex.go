@@ -87,7 +87,7 @@ func prettyPrint(w io.Writer, val reflect.Value) {
 			prettyPrint(w, fv)
 		}
 		fmt.Fprintf(w, "}")
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if val.IsNil() {
 			fmt.Fprintf(w, "%v", val.Interface())
 		} else {
