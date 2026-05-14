@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -253,6 +254,9 @@ func (s *testRegionCacheStaleReadSuite) setTimeout(id uint64) { //nolint: unused
 }
 
 func TestRegionCacheStaleRead(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support stale-read feature")
+	}
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	defer func() {
 		retry.BoTiKVServerBusy = originBoTiKVServerBusy
@@ -261,6 +265,9 @@ func TestRegionCacheStaleRead(t *testing.T) {
 }
 
 func TestRegionCacheStaleReadUsingAsyncAPI(t *testing.T) {
+	if config.NextGen {
+		t.Skip("NextGen does not support stale-read feature")
+	}
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
 	defer func() {

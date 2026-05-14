@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/kv"
@@ -40,6 +41,17 @@ type replicaSelector struct {
 	attempts        int
 }
 
+// disableReadFeaturesForNextGen disables replica-read and stale-read feature
+// flags for nextgen while keeping the request read TS unchanged.
+func disableReadFeaturesForNextGen(req *tikvrpc.Request) {
+	if req == nil || !config.NextGen {
+		return
+	}
+	req.StaleRead = false
+	req.SetReplicaReadType(kv.ReplicaReadLeader)
+	req.BusyThresholdMs = 0
+}
+
 func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
@@ -52,6 +64,7 @@ func newReplicaSelector(
 	for _, op := range opts {
 		op(&option)
 	}
+	disableReadFeaturesForNextGen(req)
 	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 		WithPerferLeader()(&option)
 	}
@@ -139,7 +152,9 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 		idleTarget := mixedStrategy.next(s)
 		if idleTarget != nil {
 			s.target = idleTarget
-			req.ReplicaRead = true
+			if !config.NextGen {
+				req.ReplicaRead = true
+			}
 		} else {
 			// No threshold if all peers are too busy, remove busy threshold and still use leader.
 			s.busyThreshold = 0
@@ -153,7 +168,9 @@ func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s)
 	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].hasFlag(deadlineErrUsingConfTimeoutFlag) {
-		req.ReplicaRead = true
+		if !config.NextGen {
+			req.ReplicaRead = true
+		}
 		req.StaleRead = false
 	}
 }
