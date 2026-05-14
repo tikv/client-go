@@ -37,11 +37,13 @@ package client
 
 import (
 	"context"
+	"math/rand"
 	"strconv"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
 	"golang.org/x/sync/singleflight"
@@ -82,7 +84,7 @@ func (r reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tik
 	}
 	if req.Type == tikvrpc.CmdResolveLock && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
 		// try collapse resolve lock request.
-		key := strconv.FormatUint(req.RegionId, 10) + "-" + strconv.FormatUint(req.ResolveLock().StartVersion, 10)
+		key := resolveLockCollapseKey(req)
 		copyReq := *req
 		rsC := resolveRegionSf.DoChan(key, func() (interface{}, error) {
 			// resolveRegionSf will call this function in a goroutine, thus use SendRequest directly.
@@ -119,13 +121,25 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 			return
 		}
 		canCollapse = true
-		key := strconv.FormatUint(req.RegionId, 10) + "-" + strconv.FormatUint(resolveLock.StartVersion, 10)
+		key := resolveLockCollapseKey(req)
 		resp, err = r.collapse(ctx, key, &resolveRegionSf, addr, req, timeout)
 		return
 	default:
 		// now we only support collapse resolve lock.
 		return
 	}
+}
+
+func resolveLockCollapseKey(req *tikvrpc.Request) string {
+	resolveLock := req.ResolveLock()
+	buckets := config.GetGlobalConfig().TiKVClient.ResolveLockCollapseBuckets
+	if buckets <= 0 {
+		buckets = 1
+	}
+	return strconv.FormatUint(req.RegionId, 10) + "-" +
+		strconv.FormatUint(resolveLock.StartVersion, 10) + "-" +
+		strconv.FormatBool(resolveLock.GetIsAsync()) + "-" +
+		strconv.FormatInt(rand.Int63n(buckets), 10)
 }
 
 func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.Group,
