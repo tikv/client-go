@@ -1456,15 +1456,15 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
 	isAsync := lr.enableTiKVAsyncRegionResolveLock && resultNotRequired && !resolveLite
 	resolveAction := resolveActionLabel(status)
-	asyncRegionResolveRegionID := locate.RegionVerID{}
-	asyncRegionResolveExpiresAt := time.Time{}
-	asyncRegionResolveMarked := false
-	asyncRegionResolveSucceeded := false
-	defer func() {
-		if asyncRegionResolveMarked && !asyncRegionResolveSucceeded {
-			lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
-		}
-	}()
+	//asyncRegionResolveRegionID := locate.RegionVerID{}
+	//asyncRegionResolveExpiresAt := time.Time{}
+	//asyncRegionResolveMarked := false
+	//asyncRegionResolveSucceeded := false
+	//defer func() {
+	//	if asyncRegionResolveMarked && !asyncRegionResolveSucceeded {
+	//		lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
+	//	}
+	//}()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock skipped rpc (resolved by check txn status)",
@@ -1484,23 +1484,23 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if _, ok := cleanRegions[loc.Region]; ok {
 			return nil
 		}
-		if isAsync {
-			asyncRegionResolveRegionID = loc.Region
-			var marked bool
-			asyncRegionResolveExpiresAt, marked = lr.markRecentAsyncRegionResolve(l.TxnID, loc.Region, time.Now())
-			if !marked {
-				logutil.Logger(bo.GetCtx()).Info("txn lock cleanup async resolve-lock skipped rpc (recently signaled)",
-					zap.String("action", resolveAction),
-					zap.Uint64("txnStartTS", l.TxnID),
-					zap.Uint64("commitTS", status.CommitTS()),
-					zap.Uint64("regionID", loc.Region.GetID()),
-					zap.Bool("resolveLite", resolveLite),
-					zap.Bool("isAsync", isAsync),
-				)
-				return nil
-			}
-			asyncRegionResolveMarked = true
-		}
+		//if isAsync {
+		//	asyncRegionResolveRegionID = loc.Region
+		//	var marked bool
+		//	asyncRegionResolveExpiresAt, marked = lr.markRecentAsyncRegionResolve(l.TxnID, loc.Region, time.Now())
+		//	if !marked {
+		//		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup async resolve-lock skipped rpc (recently signaled)",
+		//			zap.String("action", resolveAction),
+		//			zap.Uint64("txnStartTS", l.TxnID),
+		//			zap.Uint64("commitTS", status.CommitTS()),
+		//			zap.Uint64("regionID", loc.Region.GetID()),
+		//			zap.Bool("resolveLite", resolveLite),
+		//			zap.Bool("isAsync", isAsync),
+		//		)
+		//		return nil
+		//	}
+		//	asyncRegionResolveMarked = true
+		//}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
 			IsAsync:      isAsync,
@@ -1531,10 +1531,10 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			return err
 		}
 		if regionErr != nil {
-			if asyncRegionResolveMarked {
-				lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
-				asyncRegionResolveMarked = false
-			}
+			//if asyncRegionResolveMarked {
+			//	lr.unmarkRecentAsyncRegionResolve(l.TxnID, asyncRegionResolveRegionID, asyncRegionResolveExpiresAt)
+			//	asyncRegionResolveMarked = false
+			//}
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				return err
@@ -1557,7 +1557,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if !resolveLite {
 			cleanRegions[loc.Region] = struct{}{}
 		}
-		asyncRegionResolveSucceeded = true
+		//asyncRegionResolveSucceeded = true
 		logutil.Logger(bo.GetCtx()).Info("txn lock cleanup resolve-lock rpc finished",
 			zap.String("action", resolveAction),
 			zap.Uint64("txnStartTS", l.TxnID),
