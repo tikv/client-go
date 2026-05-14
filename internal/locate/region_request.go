@@ -2089,13 +2089,8 @@ func (s *RegionRequestSender) onRegionError(
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx),
 		)
-<<<<<<< HEAD
-		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
-			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
-=======
 		if ctx != nil && ctx.Store != nil && ctx.Store.StoreType().IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, newBackoffErrWithRPCContext("server is busy", ctx))
->>>>>>> 21150576 (txnkv: reduce mem / goroutine costs for resolve lock tasks (#1940))
 		} else {
 			err = bo.Backoff(retry.BoTiKVServerBusy, newBackoffErrWithRPCContext("server is busy", ctx))
 		}
