@@ -38,6 +38,9 @@ type RequestInfo struct {
 	replicaNumber int64
 	requestSize   uint64
 	accessType    controller.AccessLocationType
+	// predictedReadBytes is an optional caller-supplied read-bytes
+	// estimate; when > 0 it is the basis for RC paging pre-charge.
+	predictedReadBytes uint64
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -87,11 +90,12 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
 		return &RequestInfo{
-			writeBytes:  -1,
-			storeID:     storeID,
-			bypass:      bypass,
-			requestSize: uint64(req.GetSize()),
-			accessType:  toPDAccessLocationType(req.AccessLocation),
+			writeBytes:         -1,
+			storeID:            storeID,
+			bypass:             bypass,
+			requestSize:        uint64(req.GetSize()),
+			accessType:         toPDAccessLocationType(req.AccessLocation),
+			predictedReadBytes: req.PredictedReadBytes,
 		}
 	}
 
@@ -153,6 +157,12 @@ func (req *RequestInfo) RequestSize() uint64 {
 
 func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
+}
+
+// PredictedReadBytes implements PD's controller.RequestInfo interface,
+// supplying the read-bytes hint used for RC paging pre-charge.
+func (req *RequestInfo) PredictedReadBytes() uint64 {
+	return req.predictedReadBytes
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
