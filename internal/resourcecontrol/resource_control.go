@@ -41,6 +41,10 @@ type RequestInfo struct {
 	// predictedReadBytes is an optional caller-supplied read-bytes
 	// estimate; when > 0 it is the basis for RC paging pre-charge.
 	predictedReadBytes uint64
+	// isCop is true when the underlying tikvrpc.Request targets the
+	// coprocessor endpoint (CmdCop / CmdCopStream). PD uses this to
+	// scope paging_* metrics to coprocessor reads only.
+	isCop bool
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -96,6 +100,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			requestSize:        uint64(req.GetSize()),
 			accessType:         toPDAccessLocationType(req.AccessLocation),
 			predictedReadBytes: req.PredictedReadBytes,
+			isCop:              isCopRequest(req),
 		}
 	}
 
@@ -163,6 +168,20 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 // supplying the read-bytes hint used for RC paging pre-charge.
 func (req *RequestInfo) PredictedReadBytes() uint64 {
 	return req.predictedReadBytes
+}
+
+// IsCop implements PD's controller.RequestInfo interface. It reports whether
+// the underlying tikvrpc.Request targets the coprocessor endpoint, so that
+// PD can scope paging_* metrics to coprocessor reads and ignore point gets,
+// batch gets, scans, and other bounded-size reads that share the same RC
+// interceptor path.
+func (req *RequestInfo) IsCop() bool {
+	return req.isCop
+}
+
+// isCopRequest reports whether req is a coprocessor read RPC.
+func isCopRequest(req *tikvrpc.Request) bool {
+	return req.Type == tikvrpc.CmdCop || req.Type == tikvrpc.CmdCopStream
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
