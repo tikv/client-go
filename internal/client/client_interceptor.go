@@ -73,14 +73,21 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		})(addr, req)
 	}
 
-	if resourceControlInterceptor != nil && resp != nil {
-		respInfo := resourcecontrol.MakeResponseInfo(resp)
-		consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
-		if err != nil {
-			return nil, err
-		}
-		if ruDetails != nil {
-			ruDetails.Update(consumption, waitDuration)
+	if resourceControlInterceptor != nil {
+		if resp != nil {
+			respInfo := resourcecontrol.MakeResponseInfo(resp)
+			consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+			if err != nil {
+				return nil, err
+			}
+			if ruDetails != nil {
+				ruDetails.Update(consumption, waitDuration)
+			}
+		} else {
+			// Transport-level failure produced no response — the settlement
+			// path will not run. Cancel the pre-charge so the predicted RU
+			// debited in OnRequestWait is refunded to the limiter.
+			resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
 		}
 	}
 
@@ -130,6 +137,10 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 				if ruDetails != nil {
 					ruDetails.Update(consumption, waitDuration)
 				}
+			} else {
+				// Transport-level failure produced no response — cancel the
+				// pre-charge so the predicted RU is refunded to the limiter.
+				resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
 			}
 			return resp, err
 		})
