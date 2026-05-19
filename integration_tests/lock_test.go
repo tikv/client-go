@@ -49,11 +49,14 @@ import (
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -1759,4 +1762,148 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 	s.NoError(txn5.Rollback())
 	s.NoError(txn6.Rollback())
 	s.NoError(txn7.Rollback())
+}
+
+func TestResolveLockWithTiKVSideAsync(t *testing.T) {
+	for _, commitPrimary := range []bool{true, false} {
+		name := "primary_rollback"
+		if commitPrimary {
+			name = "primary_commit"
+		}
+
+		fetchTSO := func(store tikv.StoreProbe) uint64 {
+			ts, err := store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			require.NoError(t, err)
+			return ts
+		}
+
+		t.Run(name, func(t *testing.T) {
+			store := tikv.StoreProbe{KVStore: NewTestStore(t)}
+			defer func() {
+				require.NoError(t, store.Close())
+			}()
+
+			ctx := context.Background()
+			lockTTL := uint64(3000)
+			if !commitPrimary {
+				lockTTL = 1
+			}
+
+			keys, values := make([][]byte, 0, 20), make([][]byte, 0, 20)
+			for i := 0; i < cap(keys); i++ {
+				keys = append(keys, []byte(fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
+				values = append(values, []byte(fmt.Sprintf("value_%s_%03d", name, i)))
+			}
+			require.Greater(t, uint64(len(keys)), config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold)
+
+			// prewrite
+			txn, err := store.Begin()
+			require.NoError(t, err)
+			for i, key := range keys {
+				require.NoError(t, txn.Set(key, values[i]))
+			}
+			committer, err := txn.NewCommitter(1)
+			require.NoError(t, err)
+			committer.SetPrimaryKey(keys[0])
+			committer.SetTxnSize(len(keys))
+			committer.SetLockTTL(lockTTL)
+			require.NoError(t, committer.PrewriteAllMutations(ctx))
+
+			// commit or rollback the primary
+			if commitPrimary {
+				committer.SetCommitTS(fetchTSO(store))
+				require.NoError(t, committer.CommitMutations(ctx))
+			} else {
+				time.Sleep(10 * time.Millisecond)
+				readTS := fetchTSO(store)
+				status, err := store.NewLockResolver().GetTxnStatus(
+					retry.NewBackofferWithVars(ctx, 60000, nil),
+					txn.StartTS(),
+					keys[0],
+					readTS,
+					readTS,
+					true,
+					false,
+					nil,
+				)
+				require.NoError(t, err)
+				require.True(t, status.IsRolledBack())
+			}
+
+			// check all the locks except the primary lock are kept.
+			keysEnd := []byte(fmt.Sprintf("resolve_lock_%s_\xff", name))
+			locks, err := store.ScanLocks(ctx, keys[0], keysEnd, fetchTSO(store))
+			require.NoError(t, err)
+			require.Len(t, locks, len(keys)-1, "only the primary lock should be resolved")
+
+			// trigger resolve lock for read
+			resolveLocksBefore := testutil.ToFloat64(metrics.LockResolverCountWithResolveLocks)
+			resolveLockLiteBefore := testutil.ToFloat64(metrics.LockResolverCountWithResolveLockLite)
+			resolveLockReqs := make([]*kvrpcpb.ResolveLockRequest, 0)
+			require.NoError(t, failpoint.Enable("tikvclient/beforeSendReqToRegion", "return"))
+			defer func() {
+				require.NoError(t, failpoint.Disable("tikvclient/beforeSendReqToRegion"))
+			}()
+			ctx = context.WithValue(ctx, "sendReqToRegionHook", func(req *tikvrpc.Request) {
+				if req.Type == tikvrpc.CmdResolveLock {
+					resolveLockReqs = append(resolveLockReqs, req.ResolveLock())
+				}
+			})
+			store.GetLockResolver().Close()
+
+			snapshot := store.GetSnapshot(fetchTSO(store))
+			value, err := snapshot.BatchGet(ctx, keys)
+			require.NoError(t, err)
+			if commitPrimary {
+				require.Len(t, value, len(keys))
+			} else {
+				require.Empty(t, value)
+			}
+
+			// wait all locks are resolved
+			require.Eventually(t, func() bool {
+				locks, err := store.ScanLocks(ctx, keys[0], keysEnd, fetchTSO(store))
+				require.NoError(t, err)
+				return len(locks) == 0
+			}, 5*time.Second, 100*time.Millisecond)
+
+			// check resolve lock requests
+			require.NotEmpty(t, resolveLockReqs, "ResolveLock request should be sent")
+			for _, req := range resolveLockReqs {
+				require.Empty(t, req.Keys)
+				if commitPrimary {
+					require.Equal(t, committer.GetCommitTS(), req.CommitVersion)
+				} else {
+					require.Zero(t, req.CommitVersion)
+				}
+				// check in next-gen the IsAsync should be true in ResolveLockRequest
+				require.Equal(t, config.NextGen, req.GetIsAsync(), "ResolveLock should use TiKV-side async resolve")
+			}
+
+			// check resolve lock metrics, no resolve lock lite should be used
+			require.Greater(t,
+				testutil.ToFloat64(metrics.LockResolverCountWithResolveLocks),
+				resolveLocksBefore,
+				"ResolveLocks should be called",
+			)
+			require.Equal(
+				t,
+				resolveLockLiteBefore,
+				testutil.ToFloat64(metrics.LockResolverCountWithResolveLockLite),
+				"ResolveLock should be non-lite",
+			)
+
+			// check the keys are committed or rolled back correctly
+			snapshot = store.GetSnapshot(fetchTSO(store))
+			for i, key := range keys {
+				value, err := snapshot.Get(ctx, key)
+				if commitPrimary {
+					require.NoError(t, err)
+					require.Equal(t, values[i], value.Value)
+				} else {
+					require.True(t, tikverr.IsErrNotFound(err), "unexpected error: %v", err)
+				}
+			}
+		})
+	}
 }
