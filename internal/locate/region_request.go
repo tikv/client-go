@@ -1780,6 +1780,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return err
 	}
 
+	// TLS certificate errors are permanent configuration issues; retrying will not help.
+	if isTLSAuthError(err) {
+		return errors.WithStack(err)
+	}
+
 	if ctx.Store != nil && ctx.Store.StoreType() == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
 	} else if ctx.Meta != nil {
@@ -1812,6 +1817,14 @@ func isCauseByDeadlineExceeded(err error) bool {
 	causeErr := errors.Cause(err)
 	return causeErr == context.DeadlineExceeded || // batch-client will return this error.
 		status.Code(causeErr) == codes.DeadlineExceeded // when batch-client is disabled, grpc will return this error.
+}
+
+func isTLSAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "x509:") || strings.Contains(msg, "authentication handshake failed")
 }
 
 // NeedReloadRegion checks is all peers has sent failed, if so need reload.
