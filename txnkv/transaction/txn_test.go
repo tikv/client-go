@@ -397,6 +397,43 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.Equal(t, kvrpcpb.Op_Lock, prewriteReq.Mutations[0].Op)
 	})
 
+	t.Run("RejectUpgradeInAggressiveLockingMode", func(t *testing.T) {
+		primaryKey := []byte("primary-key")
+		upgradeKey := []byte("upgrade-key")
+		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		lockSharedKey(t, txn, primaryKey, upgradeKey)
+
+		requestCount := len(*requests)
+		txn.StartAggressiveLocking()
+		defer txn.CancelAggressiveLocking(context.Background())
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lockCtx.AllowSharedLockUpgrade = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
+		require.ErrorContains(t, err, "shared lock upgrade is not supported in aggressive/fair locking mode")
+		require.Len(t, *requests, requestCount)
+		require.True(t, txn.IsInAggressiveLockingMode())
+	})
+
+	t.Run("UpgradeLockOnlyIfExistsRequiresReturnValues", func(t *testing.T) {
+		primaryKey := []byte("primary-key")
+		upgradeKey := []byte("upgrade-key")
+		txn, _ := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		lockSharedKey(t, txn, primaryKey, upgradeKey)
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lockCtx.AllowSharedLockUpgrade = true
+		lockCtx.LockOnlyIfExists = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
+		var noReturnValueErr *tikverr.ErrLockOnlyIfExistsNoReturnValue
+		require.ErrorAs(t, err, &noReturnValueErr)
+		require.Equal(t, upgradeKey, noReturnValueErr.LockKey)
+	})
+
 	t.Run("ExplicitUpgradeFailureKeepsExistingSharedHolderAndEarlierExclusiveLocks", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
