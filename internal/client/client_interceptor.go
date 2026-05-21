@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
@@ -44,6 +45,7 @@ func NewInterceptedClient(client Client) Client {
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	var ruDetails *util.RUDetails
+	var requestConsumption *rmpb.Consumption
 
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
 	if resourceControlInterceptor != nil {
@@ -51,6 +53,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		if err != nil {
 			return nil, err
 		}
+		requestConsumption = consumption
 		req.GetResourceControlContext().Penalty = penalty
 		// override request priority with resource group priority if it's not set.
 		// Get the priority at tikv side has some performance issue, so we pass it
@@ -88,6 +91,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 			// path will not run. Cancel the pre-charge so the predicted RU
 			// debited in OnRequestWait is refunded to the limiter.
 			resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
+			rollbackRUDetailsForCanceledRequest(ruDetails, requestConsumption)
 		}
 	}
 
@@ -141,12 +145,23 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 				// Transport-level failure produced no response — cancel the
 				// pre-charge so the predicted RU is refunded to the limiter.
 				resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
+				rollbackRUDetailsForCanceledRequest(ruDetails, consumption)
 			}
 			return resp, err
 		})
 	}
 
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
+}
+
+func rollbackRUDetailsForCanceledRequest(ruDetails *util.RUDetails, consumption *rmpb.Consumption) {
+	if ruDetails == nil || consumption == nil {
+		return
+	}
+	ruDetails.Update(&rmpb.Consumption{
+		RRU: -consumption.RRU,
+		WRU: -consumption.WRU,
+	}, 0)
 }
 
 var (

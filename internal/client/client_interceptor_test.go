@@ -21,12 +21,13 @@ import (
 	"testing"
 	"time"
 
-	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
@@ -116,11 +117,13 @@ type recordingInterceptor struct {
 	cancelCalls int
 }
 
+var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
+
 func (r *recordingInterceptor) OnRequestWait(
 	context.Context, string, resourceControlClient.RequestInfo,
 ) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
 	r.waitCalls++
-	return &rmpb.Consumption{}, &rmpb.Consumption{}, 0, 0, nil
+	return recordingRequestConsumption, &rmpb.Consumption{}, 0, 0, nil
 }
 
 func (r *recordingInterceptor) OnResponse(
@@ -199,6 +202,21 @@ func TestSendRequestCancelsPreChargeOnTransportFailure(t *testing.T) {
 		"OnRequestCancel must run when the inner client returns no response")
 }
 
+func TestSendRequestRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+	withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
+	assert.Nil(t, resp)
+	assert.Error(t, err)
+	assert.Equal(t, 0.0, ruDetails.RRU(),
+		"failed no-response requests must not leave request-side RRU in runtime stats")
+	assert.Equal(t, 0.0, ruDetails.WRU(),
+		"failed no-response requests must not leave request-side WRU in runtime stats")
+}
+
 func TestSendRequestDoesNotCancelOnSuccess(t *testing.T) {
 	rec := withRecordingInterceptor(t)
 	// Inner client returns a non-nil response (default emptyClient yields
@@ -234,6 +252,31 @@ func TestSendRequestAsyncCancelsPreChargeOnTransportFailure(t *testing.T) {
 	assert.Equal(t, 0, rec.respCalls)
 	assert.Equal(t, 1, rec.cancelCalls,
 		"OnRequestCancel must run on the async path too when resp is nil")
+}
+
+func TestSendRequestAsyncRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+	withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	done := make(chan struct{})
+	var gotResp *tikvrpc.Response
+	var gotErr error
+	cb := async.NewCallback(nil, func(resp *tikvrpc.Response, err error) {
+		gotResp = resp
+		gotErr = err
+		close(done)
+	})
+	client.SendRequestAsync(ctx, "", newRGRequest(), cb)
+	<-done
+
+	assert.Nil(t, gotResp)
+	assert.Error(t, gotErr)
+	assert.Equal(t, 0.0, ruDetails.RRU(),
+		"failed async no-response requests must not leave request-side RRU in runtime stats")
+	assert.Equal(t, 0.0, ruDetails.WRU(),
+		"failed async no-response requests must not leave request-side WRU in runtime stats")
 }
 
 // respondingClient yields a non-nil empty response so the interceptor settles
