@@ -1820,9 +1820,12 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 			} else {
 				var lastErr error
 				require.Eventually(t, func() bool {
+					pollCtx, cancel := context.WithTimeout(ctx, time.Second)
+					defer cancel()
+
 					readTS := fetchTSO(store)
 					status, err := store.NewLockResolver().GetTxnStatus(
-						retry.NewBackofferWithVars(ctx, 60000, nil),
+						retry.NewBackofferWithVars(pollCtx, 1000, nil),
 						txn.StartTS(),
 						keys[0],
 						readTS,
