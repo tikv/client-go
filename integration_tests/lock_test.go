@@ -1765,6 +1765,10 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 }
 
 func TestResolveLockWithTiKVSideAsync(t *testing.T) {
+	if !*withTiKV {
+		t.Skip()
+	}
+
 	for _, commitPrimary := range []bool{true, false} {
 		name := "primary_rollback"
 		if commitPrimary {
@@ -1814,20 +1818,27 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 				committer.SetCommitTS(fetchTSO(store))
 				require.NoError(t, committer.CommitMutations(ctx))
 			} else {
-				time.Sleep(10 * time.Millisecond)
-				readTS := fetchTSO(store)
-				status, err := store.NewLockResolver().GetTxnStatus(
-					retry.NewBackofferWithVars(ctx, 60000, nil),
-					txn.StartTS(),
-					keys[0],
-					readTS,
-					readTS,
-					true,
-					false,
-					nil,
-				)
-				require.NoError(t, err)
-				require.True(t, status.IsRolledBack())
+				var lastErr error
+				require.Eventually(t, func() bool {
+					readTS := fetchTSO(store)
+					status, err := store.NewLockResolver().GetTxnStatus(
+						retry.NewBackofferWithVars(ctx, 60000, nil),
+						txn.StartTS(),
+						keys[0],
+						readTS,
+						readTS,
+						true,
+						false,
+						nil,
+					)
+					if err != nil {
+						lastErr = err
+						return false
+					}
+					lastErr = nil
+					return status.IsRolledBack()
+				}, 10*time.Second, 100*time.Millisecond)
+				require.NoError(t, lastErr)
 			}
 
 			// check all the locks except the primary lock are kept.

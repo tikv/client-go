@@ -1562,8 +1562,3 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pes
 		return nil
 	}
 }
-
-// SetEnableTiKVSideAsyncResolve sets whether to enable TiKV-side async resolve.
-func (lr *LockResolver) SetEnableTiKVSideAsyncResolve(enabled bool) {
-	lr.enableTiKVSideAsyncResolve.Store(enabled)
-}
