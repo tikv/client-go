@@ -585,7 +585,7 @@ func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
 	s.Nil(err)
 	s.Equal(loc.Region.id, s.region1)
-	ctx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+	ctx, _, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
 	s.Nil(err)
 	s.NotNil(ctx)
 	region := s.cache.GetCachedRegionWithRLock(loc.Region)
@@ -603,7 +603,7 @@ func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 		time.Sleep(1 * time.Second)
 		loc, err = s.cache.LocateKey(s.bo, []byte("a"))
 		s.Nil(err)
-		rpcCtx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+		rpcCtx, _, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
 		s.Nil(err)
 		if rpcCtx != nil {
 			s.NotEqual(s.storeAddr(store3), rpcCtx.Addr, "should not access peer3 when it is down")
@@ -621,7 +621,7 @@ func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 		}
 		loc, err = s.cache.LocateKey(s.bo, []byte("a"))
 		s.Nil(err)
-		rpcCtx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+		rpcCtx, _, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
 		s.Nil(err)
 		if rpcCtx != nil && rpcCtx.Addr == s.storeAddr(store3) {
 			break
@@ -1337,7 +1337,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(lctx.Peer.Id, peer3)
 
 	// epoch-not-match on tiflash
-	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true, LabelFilterNoTiFlashWriteNode)
+	ctxTiFlash, _, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true, LabelFilterNoTiFlashWriteNode)
 	s.Nil(err)
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
