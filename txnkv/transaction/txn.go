@@ -1672,6 +1672,10 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				memBuf.RUnlock()
 				return errors.New("upgrading a shared lock to an exclusive lock is not supported")
 			}
+			if txn.IsInAggressiveLockingMode() {
+				memBuf.RUnlock()
+				return errors.New("shared lock upgrade is not supported in aggressive/fair locking mode")
+			}
 		}
 
 		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
@@ -1714,26 +1718,28 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	if len(keys) == 0 && len(upgradeKeys) == 0 {
 		return nil
 	}
+	var lockOnlyIfExistsKey []byte
+	if len(keys) > 0 {
+		lockOnlyIfExistsKey = keys[0]
+	} else {
+		lockOnlyIfExistsKey = upgradeKeys[0]
+	}
 	if lockCtx.LockOnlyIfExists {
 		if !lockCtx.ReturnValues {
 			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     keys[0],
+				LockKey:     lockOnlyIfExistsKey,
 			}
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
 		// a LockOnlyIfExists pessimistic lock request.
 		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys)+len(upgradeKeys) > 1 {
-			lockKey := keys[0]
-			if len(keys) == 0 {
-				lockKey = upgradeKeys[0]
-			}
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     lockKey,
+				LockKey:     lockOnlyIfExistsKey,
 			}
 		}
 	}
