@@ -2248,6 +2248,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
+	pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
 	var backoffErr error
 	for {
 		if backoffErr != nil {
@@ -2258,7 +2259,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		//nolint:staticcheck
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
+		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2277,10 +2278,16 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 
 		if len(regionsInfo) == 0 {
 			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		if regionsHaveGapInRanges([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
@@ -2292,6 +2299,9 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		return validRegions, nil
@@ -2309,13 +2319,28 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		defer span1.Finish()
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
-	var opt batchLocateKeyRangesOption
+	var batchOpt batchLocateKeyRangesOption
 	for _, op := range opts {
-		op(&opt)
+		op(&batchOpt)
+	}
+	needFollowerHandle := true
+	initPdOpts := func() []pd.GetRegionOption {
+		pdOpts := []pd.GetRegionOption{
+			pd.WithOutputMustContainAllKeyRange(),
+		}
+		if needFollowerHandle {
+			pdOpts = append(pdOpts, pd.WithAllowFollowerHandle())
+		}
+		if batchOpt.needBuckets {
+			pdOpts = append(pdOpts, pd.WithBuckets())
+		}
+		return pdOpts
 	}
 	// TODO: return start key and end key after redact is introduced.
 	var backoffErr error
 	for {
+		pdOpts := initPdOpts()
+
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
@@ -2323,10 +2348,6 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			}
 		}
 		start := time.Now()
-		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
-		if opt.needBuckets {
-			pdOpts = append(pdOpts, pd.WithBuckets())
-		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2352,6 +2373,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned no region, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		if regionsHaveGapInRanges(keyRanges, regionsInfo, limit) {
@@ -2359,9 +2383,12 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned regions have gaps, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -2370,6 +2397,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		return validRegions, nil
