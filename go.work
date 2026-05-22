@@ -1,0 +1,6 @@
+go 1.25.9
+
+use (
+	.
+	/home/wenxuan/dev/pingcap/kvproto/.wt/feat/shared-lock-upgrade-next-gen
+)
