@@ -134,6 +134,15 @@ func (d *ErrDeadlock) Error() string {
 	return d.String()
 }
 
+// ErrLockUpgradeConflict wraps *kvrpcpb.LockUpgradeConflict to implement the error interface.
+type ErrLockUpgradeConflict struct {
+	*kvrpcpb.LockUpgradeConflict
+}
+
+func (e *ErrLockUpgradeConflict) Error() string {
+	return fmt.Sprintf("lock upgrade conflict { %s }", e.String())
+}
+
 // PDError wraps *pdpb.Error to implement the error interface.
 type PDError struct {
 	Err *pdpb.Error
@@ -340,6 +349,10 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 
 	if keyErr.Conflict != nil {
 		return errors.WithStack(NewErrWriteConflict(keyErr.GetConflict()))
+	}
+
+	if keyErr.LockUpgradeConflict != nil {
+		return errors.WithStack(&ErrLockUpgradeConflict{LockUpgradeConflict: keyErr.LockUpgradeConflict})
 	}
 
 	if keyErr.Retryable != "" {

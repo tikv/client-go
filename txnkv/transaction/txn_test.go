@@ -16,6 +16,7 @@ package transaction
 
 import (
 	"context"
+	stderrs "errors"
 	"testing"
 	"time"
 
@@ -480,6 +481,56 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.ElementsMatch(t,
 			[]string{string(primaryKey), string(upgradeKey), string(normalKey)},
 			keysAsStrings(TxnProbe{KVTxn: txn.KVTxn}.CollectLockedKeys()))
+	})
+
+	t.Run("LockUpgradeConflictReturnsTypedErrorWithoutRetrySemantics", func(t *testing.T) {
+		primaryKey := []byte("primary-key")
+		upgradeKey := []byte("upgrade-key")
+		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			if len(req.Mutations) == 1 &&
+				req.Mutations[0].Op == kvrpcpb.Op_PessimisticLock &&
+				string(req.Mutations[0].Key) == string(upgradeKey) {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
+					Errors: []*kvrpcpb.KeyError{{
+						LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+							Key:          upgradeKey,
+							StartTs:      1,
+							OwnerStartTs: 2,
+							Reason:       kvrpcpb.LockUpgradeConflict_SecondUpgrader,
+						},
+					}},
+				}}, nil
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		lockSharedKey(t, txn, primaryKey, upgradeKey)
+		*requests = (*requests)[:0]
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lockCtx.AllowSharedLockUpgrade = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
+		require.Error(t, err)
+		require.Len(t, *requests, 1)
+		require.Equal(t, []string{string(upgradeKey)}, keysAsStrings((*requests)[0].keys))
+		require.False(t, tikverr.IsErrWriteConflict(err))
+		require.False(t, tikverr.IsErrorUndetermined(err))
+
+		var retryable *tikverr.ErrRetryable
+		require.False(t, stderrs.As(err, &retryable))
+		var deadlock *tikverr.ErrDeadlock
+		require.False(t, stderrs.As(err, &deadlock))
+
+		var conflict *tikverr.ErrLockUpgradeConflict
+		require.ErrorAs(t, err, &conflict)
+		require.Equal(t, []byte("upgrade-key"), conflict.Key)
+		require.Equal(t, uint64(1), conflict.StartTs)
+		require.Equal(t, uint64(2), conflict.OwnerStartTs)
+		require.Equal(t, kvrpcpb.LockUpgradeConflict_SecondUpgrader, conflict.Reason)
+
+		flags, getErr := txn.GetMemBuffer().GetFlags(upgradeKey)
+		require.NoError(t, getErr)
+		require.True(t, flags.HasLocked())
+		require.True(t, flags.HasLockedInShareMode())
 	})
 
 	t.Run("OutcomeUnknownUpgradeFailureIsTransactionFatal", func(t *testing.T) {
