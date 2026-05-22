@@ -1033,6 +1033,12 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 			}
 		}
 	}
+	if keyError.LockUpgradeConflict != nil {
+		keyError.LockUpgradeConflict.Key, err = c.DecodeKey(keyError.LockUpgradeConflict.Key)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if keyError.CommitTsExpired != nil {
 		keyError.CommitTsExpired.Key, err = c.DecodeKey(keyError.CommitTsExpired.Key)
 		if err != nil {

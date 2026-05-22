@@ -1407,6 +1407,10 @@ func isKnownSharedLockUpgradeFailure(err error) bool {
 	if errors.As(err, &deadlock) {
 		return true
 	}
+	var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
+	if errors.As(err, &lockUpgradeConflict) {
+		return true
+	}
 	var assertionFailed *tikverr.ErrAssertionFailed
 	return errors.As(err, &assertionFailed)
 }

@@ -1,12 +1,39 @@
 package error
 
 import (
+	stderrs "errors"
 	"testing"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestExtractKeyErrLockUpgradeConflict(t *testing.T) {
+	keyErr := &kvrpcpb.KeyError{
+		LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+			Key:          []byte("key"),
+			StartTs:      101,
+			OwnerStartTs: 202,
+			Reason:       kvrpcpb.LockUpgradeConflict_SecondUpgrader,
+		},
+	}
+
+	err := ExtractKeyErr(keyErr)
+	require.Error(t, err)
+	require.False(t, IsErrWriteConflict(err))
+
+	var retryable *ErrRetryable
+	require.False(t, stderrs.As(err, &retryable))
+
+	var conflict *ErrLockUpgradeConflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, []byte("key"), conflict.Key)
+	require.Equal(t, uint64(101), conflict.StartTs)
+	require.Equal(t, uint64(202), conflict.OwnerStartTs)
+	require.Equal(t, kvrpcpb.LockUpgradeConflict_SecondUpgrader, conflict.Reason)
+}
 
 func TestExtractDebugInfoStrFromKeyErr(t *testing.T) {
 	origRedact := errors.RedactLogEnabled.Load()
