@@ -1547,6 +1547,9 @@ func (txn *KVTxn) lockKeysWithSharedLockUpgrade(
 	assignedPrimaryKey := false
 	totalKeys := len(normalExclusiveKeys) + len(upgradeKeys)
 	if txn.committer.primaryKey == nil {
+		// Prefer selecting the primary from freshly requested exclusive locks
+		// when possible, so the primary is not just a shared-locked key that
+		// still depends on upgrade success.
 		assignedPrimaryKey = true
 		keysForPrimary := normalExclusiveKeys
 		if len(keysForPrimary) == 0 {
