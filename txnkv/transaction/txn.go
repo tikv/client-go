@@ -1394,25 +1394,35 @@ func (txn *KVTxn) getUndeterminedLockStateErr() error {
 	return nil
 }
 
-func isKnownSharedLockUpgradeFailure(err error) bool {
+// isLockUpgradeResultUndetermined reports whether a shared-to-exclusive
+// upgrade error leaves the remote lock state uncertain.
+//
+// Upgrade requests are special because the transaction already owns the shared
+// lock locally. If TiKV returns a deterministic conflict or validation error,
+// we know the new exclusive lock was not granted, so the caller should return
+// that error directly and keep the original shared-lock state. Any error
+// outside that known-safe set is treated as undetermined and must poison the
+// transaction to avoid continuing with divergent local/remote lock state.
+func isLockUpgradeResultUndetermined(err error) bool {
 	if err == nil {
 		return false
 	}
-	if tikverr.IsErrWriteConflict(err) || tikverr.IsErrKeyExist(err) ||
+	if tikverr.IsErrWriteConflict(err) ||
+		tikverr.IsErrKeyExist(err) ||
 		errors.Is(err, tikverr.ErrLockAcquireFailAndNoWaitSet) ||
 		errors.Is(err, tikverr.ErrLockWaitTimeout) {
-		return true
+		return false
 	}
 	var deadlock *tikverr.ErrDeadlock
 	if errors.As(err, &deadlock) {
-		return true
+		return false
 	}
 	var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
 	if errors.As(err, &lockUpgradeConflict) {
-		return true
+		return false
 	}
 	var assertionFailed *tikverr.ErrAssertionFailed
-	return errors.As(err, &assertionFailed)
+	return !errors.As(err, &assertionFailed)
 }
 
 func (txn *KVTxn) lockPessimisticKeyGroup(
@@ -1446,7 +1456,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		}
 
 		if isUpgrade {
-			if !isKnownSharedLockUpgradeFailure(err) {
+			if isLockUpgradeResultUndetermined(err) {
 				txn.committer.setUndeterminedErr(err)
 				return 0, errors.WithStack(tikverr.ErrResultUndetermined)
 			}
