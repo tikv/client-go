@@ -1429,7 +1429,6 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 	ctx context.Context,
 	lockCtx *tikv.LockCtx,
 	keys [][]byte,
-	rollbackKeys [][]byte,
 	isUpgrade bool,
 ) (int, error) {
 	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
@@ -1479,7 +1478,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 			if lockCtx.MaxLockedWithConflictTS > rollbackForUpdateTS {
 				rollbackForUpdateTS = lockCtx.MaxLockedWithConflictTS
 			}
-			wg := txn.asyncPessimisticRollback(ctx, rollbackKeys, rollbackForUpdateTS)
+			wg := txn.asyncPessimisticRollback(ctx, keys, rollbackForUpdateTS)
 
 			if isDeadlock {
 				logutil.Logger(ctx).Debug("deadlock error received", zap.Uint64("startTS", txn.startTS), zap.Stringer("deadlockInfo", dl))
@@ -1564,7 +1563,7 @@ func (txn *KVTxn) lockKeysWithSharedLockUpgrade(
 
 	lockedInThisCall := 0
 	if len(normalExclusiveKeys) > 0 {
-		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, normalExclusiveKeys, normalExclusiveKeys, false)
+		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, normalExclusiveKeys, false)
 		if err != nil {
 			if assignedPrimaryKey && lockedInThisCall == 0 {
 				txn.resetPrimary(false)
@@ -1575,7 +1574,7 @@ func (txn *KVTxn) lockKeysWithSharedLockUpgrade(
 	}
 
 	for _, key := range upgradeKeys {
-		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, [][]byte{key}, nil, true)
+		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, [][]byte{key}, true)
 		if err != nil {
 			if assignedPrimaryKey && lockedInThisCall == 0 {
 				txn.resetPrimary(false)
