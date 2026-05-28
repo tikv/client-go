@@ -1428,6 +1428,9 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			metrics.LockResolverCountWithResolveLockLite.Inc()
 			lreq.Keys = [][]byte{l.Key}
 		} else if !resultRequired && lr.enableTiKVSideAsyncResolve.Load() {
+			if intest.InTest && !config.NextGen {
+				panic("TiKV side async resolve should only be enabled in next-gen cluster")
+			}
 			lreq.IsAsync = true
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
