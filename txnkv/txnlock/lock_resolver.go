@@ -87,6 +87,9 @@ type LockResolver struct {
 	// The Cancel function is to cancel these goroutines for passing goleak test.
 	asyncResolveCtx    context.Context
 	asyncResolveCancel func()
+
+	// enableTiKVSideAsyncResolve indicates whether to enable TiKV side async resolve.
+	enableTiKVSideAsyncResolve atomic.Bool
 }
 
 // ResolvingLock stands for current resolving locks' information
@@ -109,6 +112,8 @@ func NewLockResolver(store storage) *LockResolver {
 	r.mu.resolvingConcurrency = make(map[uint64]int)
 	r.mu.recentResolved = list.New()
 	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
+	// only next-gen supports TiKV side async resolve currently.
+	r.enableTiKVSideAsyncResolve.Store(config.NextGen)
 	return r
 }
 
@@ -620,13 +625,15 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			}
 		} else {
 			asyncResolve := false
+			resultRequired := true
 			if forRead {
+				resultRequired = false
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
 				asyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
-					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
+					err := lr.resolveLock(asyncBo, l, status, lite, resultRequired, map[locate.RegionVerID]struct{}{})
 					if err != nil {
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
@@ -637,7 +644,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				}
 			}
 			if !asyncResolve {
-				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
+				err = lr.resolveLock(bo, l, status, lite, resultRequired, cleanRegions)
 			}
 		}
 		return status, err
@@ -1383,7 +1390,7 @@ func resolveActionLabel(status TxnStatus) string {
 	return "rollback"
 }
 
-func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
+func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, resultRequired bool, cleanRegions map[locate.RegionVerID]struct{}) error {
 	util.EvalFailpoint("resolveLock")
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
@@ -1420,6 +1427,11 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			// prevent from scanning the whole region in this case.
 			metrics.LockResolverCountWithResolveLockLite.Inc()
 			lreq.Keys = [][]byte{l.Key}
+		} else if !resultRequired && lr.enableTiKVSideAsyncResolve.Load() {
+			if intest.InTest && !config.NextGen {
+				panic("TiKV side async resolve should only be enabled in next-gen cluster")
+			}
+			lreq.IsAsync = true
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
