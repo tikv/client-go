@@ -1731,18 +1731,18 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	if len(keys) == 0 && len(upgradeKeys) == 0 {
 		return nil
 	}
-	var lockOnlyIfExistsKey []byte
-	if len(keys) > 0 {
-		lockOnlyIfExistsKey = keys[0]
-	} else {
-		lockOnlyIfExistsKey = upgradeKeys[0]
-	}
 	if lockCtx.LockOnlyIfExists {
+		var lockKey []byte
+		if len(keys) > 0 {
+			lockKey = keys[0]
+		} else {
+			lockKey = upgradeKeys[0]
+		}
 		if !lockCtx.ReturnValues {
 			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     lockOnlyIfExistsKey,
+				LockKey:     lockKey,
 			}
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
@@ -1752,7 +1752,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     lockOnlyIfExistsKey,
+				LockKey:     lockKey,
 			}
 		}
 	}
