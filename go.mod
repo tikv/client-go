@@ -59,3 +59,6 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary: pin to feature branch. Revert once tikv/pd#10611 is merged and tagged.
+replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260518130251-22b311d178de
