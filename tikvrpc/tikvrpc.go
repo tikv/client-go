@@ -271,12 +271,12 @@ type Request struct {
 	rev uint32
 }
 
-var defaultRequestOrigin atomic.Uint32
+var defaultRequestOrigin atomic.Int32
 
 // SetDefaultRequestOrigin sets the process-wide request origin used when an RPC
 // context does not carry an explicit origin.
 func SetDefaultRequestOrigin(origin kvrpcpb.RequestOrigin) {
-	defaultRequestOrigin.Store(uint32(origin))
+	defaultRequestOrigin.Store(int32(origin))
 }
 
 // GetDefaultRequestOrigin returns the process-wide default request origin.
@@ -872,6 +872,7 @@ type MPPStreamResponse struct {
 // Parameter `rpcCtx` use `kvrpcpb.Context` instead of `*kvrpcpb.Context` to avoid concurrent modification by shallow copy.
 func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 	fillDefaultRequestOrigin(&rpcCtx)
+	req.Context = rpcCtx
 	ctx := &rpcCtx
 	cmd := req.Type
 	// CmdCopStream and CmdCop share the same request type.

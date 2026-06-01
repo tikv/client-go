@@ -60,9 +60,10 @@ func TestBatchResponse(t *testing.T) {
 }
 
 func TestDefaultRequestOrigin(t *testing.T) {
+	previousOrigin := GetDefaultRequestOrigin()
 	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginTiDB)
 	t.Cleanup(func() {
-		SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginUnknown)
+		SetDefaultRequestOrigin(previousOrigin)
 	})
 
 	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
@@ -70,6 +71,7 @@ func TestDefaultRequestOrigin(t *testing.T) {
 
 	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
 	require.True(t, AttachContext(req, kvrpcpb.Context{}))
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Context.GetRequestOrigin())
 	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Get().GetContext().GetRequestOrigin())
 
 	for _, tc := range []struct {
@@ -112,6 +114,7 @@ func TestDefaultRequestOrigin(t *testing.T) {
 		})
 	}
 
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginUnknown)
 	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
 		RequestOrigin: kvrpcpb.RequestOrigin_RequestOriginTiDB,
 	})
