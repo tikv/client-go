@@ -66,7 +66,7 @@ func TestDefaultRequestOrigin(t *testing.T) {
 	})
 
 	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
-	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Context.GetRequestOrigin())
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 
 	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
 	require.True(t, AttachContext(req, kvrpcpb.Context{}))
@@ -115,7 +115,7 @@ func TestDefaultRequestOrigin(t *testing.T) {
 	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
 		RequestOrigin: kvrpcpb.RequestOrigin_RequestOriginTiDB,
 	})
-	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Context.GetRequestOrigin())
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 }
 
 // https://github.com/pingcap/tidb/issues/51921
