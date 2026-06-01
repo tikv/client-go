@@ -1,13 +1,13 @@
 module integration_tests
 
-go 1.25.8
+go 1.25.10
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260224061312-3586c08f7d29
+	github.com/pingcap/kvproto v0.0.0-20260608025309-50b863799195
 	github.com/pingcap/tidb v1.1.0-beta.0.20250106104940-3ac9806e2a76
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0

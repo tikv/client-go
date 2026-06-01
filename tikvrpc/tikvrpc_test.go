@@ -45,6 +45,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBatchResponse(t *testing.T) {
@@ -52,6 +53,68 @@ func TestBatchResponse(t *testing.T) {
 	batchResp, err := FromBatchCommandsResponse(resp)
 	assert.Nil(t, batchResp)
 	assert.NotNil(t, err)
+}
+
+func TestDefaultRequestOrigin(t *testing.T) {
+	previousOrigin := GetDefaultRequestOrigin()
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginTiDB)
+	t.Cleanup(func() {
+		SetDefaultRequestOrigin(previousOrigin)
+	})
+
+	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
+
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
+	require.True(t, AttachContext(req, kvrpcpb.Context{}))
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Get().GetContext().GetRequestOrigin())
+
+	for _, tc := range []struct {
+		name   string
+		req    *Request
+		origin func(*Request) kvrpcpb.RequestOrigin
+	}{
+		{
+			name: "scan_lock",
+			req:  NewRequest(CmdScanLock, &kvrpcpb.ScanLockRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.ScanLock().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "cleanup",
+			req:  NewRequest(CmdCleanup, &kvrpcpb.CleanupRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.Cleanup().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "check_txn_status",
+			req:  NewRequest(CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.CheckTxnStatus().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "check_secondary_locks",
+			req:  NewRequest(CmdCheckSecondaryLocks, &kvrpcpb.CheckSecondaryLocksRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.CheckSecondaryLocks().GetContext().GetRequestOrigin()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, AttachContext(tc.req, kvrpcpb.Context{}))
+			require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, tc.origin(tc.req))
+		})
+	}
+
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginUnknown)
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		RequestOrigin: kvrpcpb.RequestOrigin_RequestOriginTiDB,
+	})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 }
 
 // https://github.com/pingcap/tidb/issues/51921
