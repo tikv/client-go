@@ -71,7 +71,7 @@ func TestDefaultRequestOrigin(t *testing.T) {
 
 	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
 	require.True(t, AttachContext(req, kvrpcpb.Context{}))
-	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Context.GetRequestOrigin())
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Get().GetContext().GetRequestOrigin())
 
 	for _, tc := range []struct {
