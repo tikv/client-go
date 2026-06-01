@@ -39,11 +39,11 @@ func (c *hookedGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID st
 	return c.inner.DeleteGCBarrier(ctx, barrierID)
 }
 
-func (c *hookedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *hookedGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	if c.getGCStatesHook != nil {
 		return c.getGCStatesHook(c.inner, ctx)
 	}
-	return c.inner.GetGCState(ctx)
+	return c.inner.GetGCState(ctx, opts...)
 }
 
 func (c *hookedGCStatesClient) SetGlobalGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GlobalGCBarrierInfo, error) {
@@ -54,7 +54,7 @@ func (c *hookedGCStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrie
 	panic("unimplemented")
 }
 
-func (c *hookedGCStatesClient) GetAllKeyspacesGCStates(ctx context.Context) (pdgc.ClusterGCStates, error) {
+func (c *hookedGCStatesClient) GetAllKeyspacesGCStates(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.ClusterGCStates, error) {
 	panic("unimplemented")
 }
 
