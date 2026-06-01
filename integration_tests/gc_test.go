@@ -28,7 +28,7 @@ import (
 
 type hookedGCStatesClient struct {
 	inner           pdgc.GCStatesClient
-	getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error)
+	getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error)
 }
 
 func (c *hookedGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
@@ -41,7 +41,7 @@ func (c *hookedGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID st
 
 func (c *hookedGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	if c.getGCStatesHook != nil {
-		return c.getGCStatesHook(c.inner, ctx)
+		return c.getGCStatesHook(c.inner, ctx, opts...)
 	}
 	return c.inner.GetGCState(ctx, opts...)
 }
@@ -58,7 +58,7 @@ func (c *hookedGCStatesClient) GetAllKeyspacesGCStates(ctx context.Context, opts
 	panic("unimplemented")
 }
 
-func hookGCStatesClientForStore(store *tikv.StoreProbe, getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error)) {
+func hookGCStatesClientForStore(store *tikv.StoreProbe, getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error)) {
 	store.ReplaceGCStatesClient(&hookedGCStatesClient{
 		inner:           store.GetGCStatesClient(),
 		getGCStatesHook: getGCStatesHook,
@@ -230,7 +230,7 @@ func (s *testGCWithTiKVSuite) TestLoadTxnSafePointFallback() {
 	base := state.TxnSafePoint
 
 	callCounter := 0
-	hook := func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error) {
+	hook := func(inner pdgc.GCStatesClient, ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 		callCounter += 1
 		return pdgc.GCState{}, status.Errorf(codes.Unimplemented, "simulated unimplemented error")
 	}
@@ -292,7 +292,7 @@ func (s *testGCWithTiKVSuite) TestCompatibleTxnSafePointLoaderValueParsing() {
 
 	s.prepareClients(storeNullKeyspace)
 	store := s.stores[0]
-	hook := func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error) {
+	hook := func(inner pdgc.GCStatesClient, ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 		return pdgc.GCState{}, status.Errorf(codes.Unimplemented, "simulated unimplemented error")
 	}
 	hookGCStatesClientForStore(store, hook)
