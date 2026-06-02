@@ -851,10 +851,6 @@ github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c h1:RGWPOewvK
 github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c/go.mod h1:X0CRv0ky0k6m906ixxpzmDRLvX58TFUKS2eePweuyxk=
 github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=
 github.com/Masterminds/semver v1.5.0/go.mod h1:MB6lktGJrhw8PrUyiEoblNEGEQ+RzHPF078ddwwvV3Y=
-github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20260601112735-92902581ea8e h1:ck/U0BpN6yShgOjBrK4JnA/FN9tlcswB4Jb+tF5kEwg=
-github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20260601112735-92902581ea8e/go.mod h1:IGHc9T4L6nJsUbMrO9sLdgl3EBULTWVIePogbcTZgzU=
-github.com/MyonKeminta/tidb/pkg/parser v0.0.0-20260601112735-92902581ea8e h1:xd0LLS2+OGXg51oKb7fNfo3ZFzBLh/48qwmtEi9cyCQ=
-github.com/MyonKeminta/tidb/pkg/parser v0.0.0-20260601112735-92902581ea8e/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/VividCortex/ewma v1.1.1/go.mod h1:2Tkkvm3sRDVXaiyucHiACn4cqf7DpdyLvmxzcbUokwA=
 github.com/VividCortex/ewma v1.2.0 h1:f58SaIzcDXrSy3kWaHNvuJgJ3Nmz59Zji6XoJR/q1ow=
@@ -1459,6 +1455,10 @@ github.com/pingcap/metering_sdk v0.0.0-20260324055927-14fead745f1d h1:5JCgncG9X7
 github.com/pingcap/metering_sdk v0.0.0-20260324055927-14fead745f1d/go.mod h1:HMNxmg0/lrn3SPGJ6LTZqP0WwEpcXMu9s/4TWJbzT8w=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 h1:Q9CMGKUztbM0RWHdQu0pD9b9OC47sbISRiMvf9vJ2RY=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3/go.mod h1:tyo4AX5P7udiSKN0Mv3nD9DcUnuLLmFfE22+dEs4vbU=
+github.com/pingcap/tidb v1.1.0-beta.0.20260602090337-41f830fc6374 h1:npZIYfrghMoR/PjPEPce5+4pICRB1TVofCET76gsBro=
+github.com/pingcap/tidb v1.1.0-beta.0.20260602090337-41f830fc6374/go.mod h1:XFwitEgE10D4RRzDH/XS7pUMbREZ+km52XgpMoqcQlc=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20260317213042-b1525070ca3e h1:eHtFDQynLMsHBpHrt0DstEjWMUldgW6C2vFkLhHctqM=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20260317213042-b1525070ca3e/go.mod h1:K5X1FVP5k4EvzAlnUUAwAxV58thzPpl7bU5g6mg48Cg=
 github.com/pingcap/tipb v0.0.0-20260515142222-a4d204a193b4 h1:7kN995aOhNamG8IOnN7Rj6nNqq+F3Z2AyfPGjCNdqoI=
 github.com/pingcap/tipb v0.0.0-20260515142222-a4d204a193b4/go.mod h1:RM8iRcMalzOthG2XJxnNBniM4xFGb/lDwHUwqkaVzt4=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
