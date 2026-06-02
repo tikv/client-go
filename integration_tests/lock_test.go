@@ -1004,6 +1004,283 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	s.Equal(committedLocks, committed)
 }
 
+func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
+	if *withTiKV {
+		s.T().Skip("this test validates client-side ResolveLock request planning and avoids real TiKV split timing")
+	}
+
+	originalConf := *config.GetGlobalConfig()
+	testConf := originalConf
+	const resolveLiteThreshold = uint64(8)
+	testConf.TiKVClient.ResolveLockLiteThreshold = resolveLiteThreshold
+	config.StoreGlobalConfig(&testConf)
+	defer config.StoreGlobalConfig(&originalConf)
+
+	// Prewrite all keys but commit only the primary key. The secondary locks stay
+	// unresolved and become the inputs to ResolveLocksWithOpts below.
+	prepareTxn := func(primary []byte, secondaryKeys [][]byte, txnSize int) (uint64, uint64, []*txnkv.Lock) {
+		txn, err := s.store.Begin()
+		s.Nil(err)
+		s.Nil(txn.Set(primary, []byte("primary_value")))
+		for i, key := range secondaryKeys {
+			s.Nil(txn.Set(key, []byte(fmt.Sprintf("secondary_value_%d", i))))
+		}
+
+		committer, err := txn.NewCommitter(1)
+		s.Nil(err)
+		committer.SetPrimaryKey(primary)
+		committer.SetTxnSize(txnSize)
+		committer.SetLockTTL(3000)
+		s.Nil(committer.PrewriteAllMutations(context.Background()))
+
+		commitTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		s.Nil(err)
+		committer.SetCommitTS(commitTS)
+		s.Nil(committer.CommitMutations(context.Background()))
+
+		locks := make([]*txnkv.Lock, 0, len(secondaryKeys))
+		for _, key := range secondaryKeys {
+			locks = append(locks, s.mustGetLock(key))
+		}
+		return txn.StartTS(), commitTS, locks
+	}
+
+	pinLockTxnSize := func(locks []*txnkv.Lock, txnSize uint64) {
+		for _, lock := range locks {
+			lock.TxnSize = txnSize
+		}
+	}
+
+	runCase := func(name string, forRead bool) {
+		s.Run(name, func() {
+			key := func(suffix string) []byte {
+				return []byte(fmt.Sprintf("batch_lite_%s_%s", name, suffix))
+			}
+			scanStartKey := key("")
+			scanEndKey := []byte(fmt.Sprintf("batch_lite_%s_\xff", name))
+
+			// Split the keyspace so the multi-key lite transaction is resolved
+			// by one ResolveLock request per region.
+			splitKey := key("multi_m")
+			_, err := s.store.SplitRegions(context.Background(), [][]byte{splitKey}, false, nil)
+			s.Nil(err)
+
+			// A small transaction with multiple locks spanning two regions. It
+			// should be batched by txn and then split into region-level
+			// ResolveLock requests.
+			multiKeyTxnKeys := [][]byte{
+				key("multi_a1"),
+				key("multi_a2"),
+				key("multi_z1"),
+			}
+			multiKeyTxnID, multiKeyCommitTS, multiKeyLocks := prepareTxn(
+				key("multi_primary"),
+				multiKeyTxnKeys,
+				len(multiKeyTxnKeys)+1,
+			)
+
+			// A small transaction with one lock. It should keep the old
+			// single-key lite resolve shape.
+			singleKeyTxnKeys := [][]byte{key("single_secondary")}
+			singleKeyTxnID, singleKeyCommitTS, singleKeyLocks := prepareTxn(
+				key("single_primary"),
+				singleKeyTxnKeys,
+				len(singleKeyTxnKeys)+1,
+			)
+
+			// A large transaction. It should bypass the batched-lite path and
+			// use the original region-level resolve with empty Keys.
+			regionLevelTxnKeys := [][]byte{key("region_secondary")}
+			regionLevelTxnID, regionLevelCommitTS, regionLevelLocks := prepareTxn(
+				key("region_primary"),
+				regionLevelTxnKeys,
+				int(resolveLiteThreshold)+1,
+			)
+
+			// Pin the resolver branch condition directly on the Lock inputs.
+			// This keeps the test stable even if the default lite threshold changes.
+			pinLockTxnSize(multiKeyLocks, resolveLiteThreshold-1)
+			pinLockTxnSize(singleKeyLocks, resolveLiteThreshold-1)
+			pinLockTxnSize(regionLevelLocks, resolveLiteThreshold+1)
+
+			boForLocate := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
+			loc1, err := s.store.GetRegionCache().LocateKey(boForLocate, multiKeyTxnKeys[0])
+			s.Nil(err)
+			loc2, err := s.store.GetRegionCache().LocateKey(boForLocate, multiKeyTxnKeys[2])
+			s.Nil(err)
+			s.NotEqual(loc1.Region.GetID(), loc2.Region.GetID())
+
+			resolver := s.store.NewLockResolver()
+			defer resolver.Close()
+			const expectedResolveReqCount = 4
+			asyncResolveTaskCountBefore := resolver.AsyncResolveTaskCount()
+
+			// Capture ResolveLock RPCs after RegionRequestSender attaches region
+			// context. The hook blocks ResolveLock requests so the test can
+			// distinguish client-side async resolve from synchronous resolve.
+			var resolveReqMu sync.Mutex
+			var resolveReqs []*tikvrpc.Request
+			unblockResolveReqs := make(chan struct{})
+			var unblockResolveReqsOnce sync.Once
+			unblockResolveReqsFn := func() {
+				unblockResolveReqsOnce.Do(func() {
+					close(unblockResolveReqs)
+				})
+			}
+			defer unblockResolveReqsFn()
+			s.Nil(failpoint.Enable("tikvclient/beforeSendReqToRegion", "return"))
+			defer func() {
+				s.Nil(failpoint.Disable("tikvclient/beforeSendReqToRegion"))
+			}()
+
+			ctx := util.WithInternalSourceType(context.Background(), fmt.Sprintf("batch_lite_resolve_%s", name))
+			ctx = context.WithValue(ctx, "sendReqToRegionHook", func(req *tikvrpc.Request) {
+				if req.Type == tikvrpc.CmdResolveLock {
+					resolveReqMu.Lock()
+					resolveReqs = append(resolveReqs, req)
+					resolveReqMu.Unlock()
+					if !forRead {
+						s.Equal(asyncResolveTaskCountBefore, resolver.AsyncResolveTaskCount())
+					}
+					<-unblockResolveReqs
+				}
+			})
+			getResolveReqs := func() []*tikvrpc.Request {
+				resolveReqMu.Lock()
+				defer resolveReqMu.Unlock()
+				return append([]*tikvrpc.Request(nil), resolveReqs...)
+			}
+			scanRemainingLocks := func() ([]*txnkv.Lock, error) {
+				scanTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+				if err != nil {
+					return nil, err
+				}
+				return s.store.ScanLocks(context.Background(), scanStartKey, scanEndKey, scanTS)
+			}
+
+			callerStartTS := uint64(0)
+			if forRead {
+				callerStartTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+				s.Nil(err)
+			}
+
+			bo := tikv.NewBackofferWithVars(ctx, getMaxBackoff, nil)
+			locks := make([]*txnkv.Lock, 0, len(multiKeyLocks)+len(singleKeyLocks)+len(regionLevelLocks))
+			locks = append(locks, multiKeyLocks...)
+			locks = append(locks, singleKeyLocks...)
+			locks = append(locks, regionLevelLocks...)
+			if forRead {
+				resolver.SetAsyncResolveContext(ctx)
+			}
+			type resolveCallResult struct {
+				res txnlock.ResolveLockResult
+				err error
+			}
+			resolveDone := make(chan resolveCallResult, 1)
+			go func() {
+				res, err := resolver.ResolveLocksWithOpts(bo, txnlock.ResolveLocksOptions{
+					CallerStartTS: callerStartTS,
+					Locks:         locks,
+					ForRead:       forRead,
+				})
+				resolveDone <- resolveCallResult{res: res, err: err}
+			}()
+
+			waitResolveDone := func() resolveCallResult {
+				select {
+				case result := <-resolveDone:
+					return result
+				case <-time.After(5 * time.Second):
+					s.FailNow("ResolveLocksWithOpts did not return in time")
+					return resolveCallResult{}
+				}
+			}
+
+			if forRead {
+				// forRead uses client-side async resolve: ResolveLocksWithOpts
+				// should return while the ResolveLock RPCs are still blocked.
+				callResult := waitResolveDone()
+				s.Nil(callResult.err)
+				s.Equal(int64(0), callResult.res.TTL)
+				s.Eventually(func() bool {
+					return len(getResolveReqs()) >= expectedResolveReqCount
+				}, 5*time.Second, 10*time.Millisecond)
+				s.Equal(asyncResolveTaskCountBefore+expectedResolveReqCount, resolver.AsyncResolveTaskCount())
+				unblockResolveReqsFn()
+				s.Eventually(func() bool {
+					return resolver.AsyncResolveTaskCount() == asyncResolveTaskCountBefore
+				}, 5*time.Second, 10*time.Millisecond)
+			} else {
+				// Non-read resolve is synchronous: the call should be blocked by
+				// the first ResolveLock request until the hook is released.
+				s.Eventually(func() bool {
+					return len(getResolveReqs()) > 0
+				}, 5*time.Second, 10*time.Millisecond)
+				s.Equal(asyncResolveTaskCountBefore, resolver.AsyncResolveTaskCount())
+				select {
+				case callResult := <-resolveDone:
+					s.FailNow("synchronous ResolveLocksWithOpts returned before the blocked ResolveLock request was released", callResult)
+				case <-time.After(100 * time.Millisecond):
+				}
+				unblockResolveReqsFn()
+				callResult := waitResolveDone()
+				s.Nil(callResult.err)
+				s.Equal(int64(0), callResult.res.TTL)
+			}
+
+			reqsByTxn := make(map[uint64][]*tikvrpc.Request)
+			for _, req := range getResolveReqs() {
+				s.Equal(util.RequestSourceFromCtx(ctx), req.RequestSource)
+				resolveLock := req.ResolveLock()
+				reqsByTxn[resolveLock.StartVersion] = append(reqsByTxn[resolveLock.StartVersion], req)
+			}
+
+			s.Len(reqsByTxn, 3)
+
+			// The multi-key lite txn is grouped by region. One region has two
+			// keys, and the other has one key.
+			multiKeyReqs := reqsByTxn[multiKeyTxnID]
+			s.Len(multiKeyReqs, 2)
+			var multiKeyResolvedKeys [][]byte
+			var multiKeyResolvedRegions []uint64
+			for _, req := range multiKeyReqs {
+				resolveLock := req.ResolveLock()
+				s.Equal(multiKeyCommitTS, resolveLock.CommitVersion)
+				s.False(resolveLock.GetIsAsync())
+				s.NotEmpty(resolveLock.Keys)
+				multiKeyResolvedKeys = append(multiKeyResolvedKeys, resolveLock.Keys...)
+				multiKeyResolvedRegions = append(multiKeyResolvedRegions, req.RegionId)
+			}
+			s.ElementsMatch(multiKeyTxnKeys, multiKeyResolvedKeys)
+			s.ElementsMatch([]uint64{loc1.Region.GetID(), loc2.Region.GetID()}, multiKeyResolvedRegions)
+
+			// The single-key lite txn still sends a single-key ResolveLock request.
+			singleKeyReqs := reqsByTxn[singleKeyTxnID]
+			s.Len(singleKeyReqs, 1)
+			s.Equal(singleKeyCommitTS, singleKeyReqs[0].ResolveLock().CommitVersion)
+			s.False(singleKeyReqs[0].ResolveLock().GetIsAsync())
+			s.ElementsMatch(singleKeyTxnKeys, singleKeyReqs[0].ResolveLock().Keys)
+
+			// The large txn keeps the original region-level resolve shape.
+			regionLevelReqs := reqsByTxn[regionLevelTxnID]
+			s.Len(regionLevelReqs, 1)
+			s.Equal(regionLevelCommitTS, regionLevelReqs[0].ResolveLock().CommitVersion)
+			s.Equal(forRead && config.NextGen, regionLevelReqs[0].ResolveLock().GetIsAsync())
+			s.Empty(regionLevelReqs[0].ResolveLock().Keys)
+
+			// Finally verify the ResolveLock requests actually clear every lock
+			// created by this test, including the keys that were grouped by
+			// region above.
+			remainingLocks, err := scanRemainingLocks()
+			s.Nil(err)
+			s.Empty(remainingLocks)
+		})
+	}
+
+	runCase("write", false)
+	runCase("for_read", true)
+}
+
 func (s *testLockSuite) TestLockWaitTimeLimit() {
 	k1 := []byte("k1")
 	k2 := []byte("k2")
