@@ -1413,7 +1413,7 @@ func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys
 
 	if len(keys) == 1 {
 		if intest.InTest {
-			if bytes.Compare(l.Key, keys[0]) != 0 {
+			if !bytes.Equal(l.Key, keys[0]) {
 				panic(fmt.Sprintf("the only key in keys should be the same as l.Key, but got %v and %v", l.Key, keys[0]))
 			}
 		}

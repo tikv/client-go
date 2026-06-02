@@ -2046,6 +2046,13 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 		t.Skip()
 	}
 
+	originalConf := *config.GetGlobalConfig()
+	testConf := originalConf
+	const resolveLiteThreshold = uint64(16)
+	testConf.TiKVClient.ResolveLockLiteThreshold = resolveLiteThreshold
+	config.StoreGlobalConfig(&testConf)
+	defer config.StoreGlobalConfig(&originalConf)
+
 	for _, commitPrimary := range []bool{true, false} {
 		name := "primary_rollback"
 		if commitPrimary {
@@ -2075,7 +2082,7 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 				keys = append(keys, []byte(fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
 				values = append(values, []byte(fmt.Sprintf("value_%s_%03d", name, i)))
 			}
-			require.Greater(t, uint64(len(keys)), config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold)
+			require.Greater(t, uint64(len(keys)), resolveLiteThreshold)
 
 			// prewrite
 			txn, err := store.Begin()
