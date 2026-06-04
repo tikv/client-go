@@ -37,10 +37,6 @@ func TestSharedLock(t *testing.T) {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
 		return
 	}
-	if config.NextGen {
-		t.Skip("skipping TestSharedLock because next-gen doesn't support shared lock yet")
-		return
-	}
 	suite.Run(t, new(testSharedLockSuite))
 }
 
@@ -197,6 +193,10 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestResolveSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support resolving shared locks yet")
+	}
+
 	txn1 := s.begin()
 
 	pk := []byte("TestResolveSharedLock_pk")
@@ -243,6 +243,10 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestScanSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support scanning shared locks yet")
+	}
+
 	pk1 := []byte("TestScanSharedLock_pk_1")
 	pk2 := []byte("TestScanSharedLock_pk_2")
 	pk3 := []byte("TestScanSharedLock_pk_3")
@@ -286,6 +290,10 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestGCSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support GC resolving shared locks yet")
+	}
+
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 1000) // 1000ms, increased for test stability in busy environments
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
@@ -347,6 +355,10 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support shared lock commit/rollback lifecycle yet")
+	}
+
 	for _, commit := range []bool{true, false} {
 		txn1 := s.begin()
 		txn2 := s.begin()
@@ -405,6 +417,10 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 }
 
 func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support resolving expired shared locks yet")
+	}
+
 	// Set short ManagedLockTTL so locks expire quickly
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
@@ -465,6 +481,10 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen cloud-engine TiKV does not support ForceLock")
+	}
+
 	pk1 := []byte("TestForceLockRetryOnSharedLock_pk1")
 	pk2 := []byte("TestForceLockRetryOnSharedLock_pk2")
 	key := []byte("TestForceLockRetryOnSharedLock_key")
