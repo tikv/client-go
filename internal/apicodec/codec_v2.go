@@ -929,6 +929,10 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 		if err != nil {
 			return nil, err
 		}
+		keyError.Deadlock.DeadlockKey, err = c.DecodeKey(keyError.Deadlock.DeadlockKey)
+		if err != nil {
+			return nil, err
+		}
 		for _, wait := range keyError.Deadlock.WaitChain {
 			wait.Key, err = c.DecodeKey(wait.Key)
 			if err != nil {
@@ -950,6 +954,12 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 	}
 	if keyError.AssertionFailed != nil {
 		keyError.AssertionFailed.Key, err = c.DecodeKey(keyError.AssertionFailed.Key)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if keyError.PrimaryMismatch != nil {
+		keyError.PrimaryMismatch.LockInfo, err = c.decodeLockInfo(keyError.PrimaryMismatch.LockInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -996,6 +1006,12 @@ func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, err
 	}
 	for i := range info.Secondaries {
 		info.Secondaries[i], err = c.DecodeKey(info.Secondaries[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range info.SharedLockInfos {
+		info.SharedLockInfos[i], err = c.decodeLockInfo(info.SharedLockInfos[i])
 		if err != nil {
 			return nil, err
 		}
