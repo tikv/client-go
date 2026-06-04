@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
+	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/codec"
@@ -323,11 +325,10 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 }
 
 func (suite *testCodecV2Suite) TestDecodeKeyError() {
-	re := suite.Require()
 	errors := []struct {
 		name     string
 		err      *kvrpcpb.KeyError
-		validate func(*kvrpcpb.KeyError)
+		validate func(*require.Assertions, *kvrpcpb.KeyError)
 	}{
 		{
 			name: "TxnLockNotFound",
@@ -336,8 +337,81 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 					Key: append(keyspacePrefix, []byte("key1")...),
 				},
 			},
-			validate: func(decoded *kvrpcpb.KeyError) {
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
 				re.Equal([]byte("key1"), decoded.TxnLockNotFound.Key)
+			},
+		},
+		{
+			name: "LockedSharedLockInfos",
+			err: &kvrpcpb.KeyError{
+				Locked: &kvrpcpb.LockInfo{
+					Key:         append(keyspacePrefix, []byte("outer-key")...),
+					PrimaryLock: append(keyspacePrefix, []byte("outer-primary")...),
+					Secondaries: [][]byte{
+						append(keyspacePrefix, []byte("outer-secondary")...),
+					},
+					LockType: kvrpcpb.Op_SharedLock,
+					SharedLockInfos: []*kvrpcpb.LockInfo{
+						{
+							Key:         append(keyspacePrefix, []byte("inner-key")...),
+							PrimaryLock: append(keyspacePrefix, []byte("inner-primary")...),
+							Secondaries: [][]byte{
+								append(keyspacePrefix, []byte("inner-secondary")...),
+							},
+							LockType: kvrpcpb.Op_Lock,
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("outer-key"), decoded.Locked.Key)
+				re.Equal([]byte("outer-primary"), decoded.Locked.PrimaryLock)
+				re.Equal([][]byte{[]byte("outer-secondary")}, decoded.Locked.Secondaries)
+				re.Len(decoded.Locked.SharedLockInfos, 1)
+				inner := decoded.Locked.SharedLockInfos[0]
+				re.Equal([]byte("inner-key"), inner.Key)
+				re.Equal([]byte("inner-primary"), inner.PrimaryLock)
+				re.Equal([][]byte{[]byte("inner-secondary")}, inner.Secondaries)
+			},
+		},
+		{
+			name: "PrimaryMismatchLockInfo",
+			err: &kvrpcpb.KeyError{
+				PrimaryMismatch: &kvrpcpb.PrimaryMismatch{
+					LockInfo: &kvrpcpb.LockInfo{
+						Key:         append(keyspacePrefix, []byte("mismatch-key")...),
+						PrimaryLock: append(keyspacePrefix, []byte("mismatch-primary")...),
+						Secondaries: [][]byte{
+							append(keyspacePrefix, []byte("mismatch-secondary")...),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				lockInfo := decoded.PrimaryMismatch.LockInfo
+				re.Equal([]byte("mismatch-key"), lockInfo.Key)
+				re.Equal([]byte("mismatch-primary"), lockInfo.PrimaryLock)
+				re.Equal([][]byte{[]byte("mismatch-secondary")}, lockInfo.Secondaries)
+			},
+		},
+		{
+			name: "DeadlockDeadlockKey",
+			err: &kvrpcpb.KeyError{
+				Deadlock: &kvrpcpb.Deadlock{
+					LockKey:     append(keyspacePrefix, []byte("lock-key")...),
+					DeadlockKey: append(keyspacePrefix, []byte("deadlock-key")...),
+					WaitChain: []*deadlockpb.WaitForEntry{
+						{
+							Key: append(keyspacePrefix, []byte("wait-key")...),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("lock-key"), decoded.Deadlock.LockKey)
+				re.Equal([]byte("deadlock-key"), decoded.Deadlock.DeadlockKey)
+				re.Len(decoded.Deadlock.WaitChain, 1)
+				re.Equal([]byte("wait-key"), decoded.Deadlock.WaitChain[0].Key)
 			},
 		},
 		{
@@ -355,7 +429,7 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 					},
 				},
 			},
-			validate: func(decoded *kvrpcpb.KeyError) {
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
 				re.Equal([]byte("key1"), decoded.TxnLockNotFound.Key)
 				re.Equal(1, len(decoded.DebugInfo.MvccInfo))
 				re.Equal([]byte("key1"), decoded.DebugInfo.MvccInfo[0].Key)
@@ -365,9 +439,13 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 
 	codec := suite.codec
 	for _, keyErr := range errors {
-		decoded, err := codec.decodeKeyError(keyErr.err)
-		re.NoError(err)
-		keyErr.validate(decoded)
+		keyErr := keyErr
+		suite.Run(keyErr.name, func() {
+			re := suite.Require()
+			decoded, err := codec.decodeKeyError(keyErr.err)
+			re.NoError(err)
+			keyErr.validate(re, decoded)
+		})
 	}
 }
 
