@@ -1357,7 +1357,11 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 
 func (lr *LockResolver) newAsyncResolveBackoffer(originalBo *retry.Backoffer) *retry.Backoffer {
 	// Async cleanup must not inherit the caller's cancellation, but it should
-	// keep request metadata such as RequestSource for observability.
+	// keep RequestSource for observability.
+	// This intentionally preserves the existing for-read async resolve behavior:
+	// resource group attribution is not copied to the detached cleanup context here.
+	// Whether background lock cleanup should be charged to the triggering request's resource group is a separate
+	// policy decision.
 	asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, originalBo.GetCtx().Value(util.RequestSourceKey))
 	return retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
 }
@@ -1365,50 +1369,47 @@ func (lr *LockResolver) newAsyncResolveBackoffer(originalBo *retry.Backoffer) *r
 // batchLiteResolveLocks resolves small-transaction locks that have already had
 // their primary status checked. keys must all belong to l.TxnID.
 func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys [][]byte, status TxnStatus, forRead bool) error {
-	logAsyncErr := func(err error, fallbackSync bool) {
+	logErr := func(err error, failedKeys [][]byte) {
 		if err == nil {
 			return
 		}
-		keysForLog := make([]string, len(keys))
-		for i, key := range keys {
-			keysForLog[i] = redact.Key(key)
+		failedKeysForLog := make([]string, len(failedKeys))
+		for i, key := range failedKeys {
+			failedKeysForLog[i] = redact.Key(key)
 		}
-		logutil.BgLogger().Info("failed to batch resolve lock lite asynchronously",
+		logutil.BgLogger().Info("failed to batch resolve lock lite",
 			zap.String("lock", l.String()),
-			zap.Strings("keys", keysForLog),
+			zap.Strings("keys", failedKeysForLog),
 			zap.Uint64("commitTS", status.CommitTS()),
-			zap.Bool("fallbackSync", fallbackSync),
+			zap.Bool("forRead", forRead),
 			zap.Error(err),
 		)
 	}
 
-	asyncResolveOrNot := func(f func(*retry.Backoffer) error) error {
-		// Read callers can continue once the lock is known to be readable or
-		// ignorable, so the physical cleanup can run in the background.
+	inplaceOrScheduleAsync := func(bo *retry.Backoffer, f func(*retry.Backoffer) error) (err error) {
 		isAsync := false
 		if forRead {
-			isAsync = lr.asyncResolvePool.tryAsyncResolve(
-				func() {
-					logAsyncErr(f(lr.newAsyncResolveBackoffer(bo)), false)
-				},
-				metrics.LockResolverAsyncRunningTasksForReadResolve,
-			)
+			asyncBo := lr.newAsyncResolveBackoffer(bo)
+			isAsync = lr.asyncResolvePool.tryAsyncResolve(func() {
+				// do not return error when forRead
+				_ = f(asyncBo)
+			}, metrics.LockResolverAsyncRunningTasksForReadResolve)
 
 			if !isAsync {
 				metrics.LockResolverCountWithReadAsyncResolveFallback.Inc()
 			}
 		}
 
+		// isAsync is false means either it is not for read or the async resolve
+		// task is rejected. For reads, the lock status is already known, so the
+		// physical cleanup is best-effort even when it runs inline.
 		if !isAsync {
-			// asyncResolvePool is full or !forRead, and we need to resolve lock synchronously.
-			err := f(bo)
-			if err != nil && forRead {
-				logAsyncErr(err, true)
+			if err = f(bo); err != nil && forRead {
+				err = nil
 			}
-			return err
 		}
 
-		return nil
+		return
 	}
 
 	if len(keys) == 1 {
@@ -1417,28 +1418,39 @@ func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys
 				panic(fmt.Sprintf("the only key in keys should be the same as l.Key, but got %v and %v", l.Key, keys[0]))
 			}
 		}
-		return asyncResolveOrNot(func(asyncBo *retry.Backoffer) error {
-			return lr.resolveLock(asyncBo, l, status, true, true, nil)
+		return inplaceOrScheduleAsync(bo, func(asyncBo *retry.Backoffer) error {
+			if err := lr.resolveLock(asyncBo, l, status, true, true, nil); err != nil {
+				logErr(err, keys)
+				return err
+			}
+			return nil
 		})
 	}
 
-	regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
-	if err != nil {
-		return err
-	}
-
-	// Multiple lite keys are resolved with exact key lists per region. This
-	// avoids one RPC per key while still avoiding a whole-region resolve scan.
-	for region, regionKeys := range regions {
-		err = asyncResolveOrNot(func(asyncBo *retry.Backoffer) error {
-			return lr.resolveRegionLocks(asyncBo, l, region, regionKeys, status)
-		})
+	return inplaceOrScheduleAsync(bo, func(asyncBo *retry.Backoffer) error {
+		regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(asyncBo, keys, nil)
 		if err != nil {
+			logErr(err, keys)
 			return err
 		}
-	}
 
-	return nil
+		// Multiple lite keys are resolved with exact key lists per region. This
+		// avoids one RPC per key while still avoiding a whole-region resolve scan.
+		for region, regionKeys := range regions {
+			err = inplaceOrScheduleAsync(asyncBo, func(asyncBo *retry.Backoffer) error {
+				if err := lr.resolveRegionLocks(asyncBo, l, region, regionKeys, status); err != nil {
+					logErr(err, regionKeys)
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 // resolveRegionLocks is essentially the same as resolveLock, but we resolve all keys in the same region at the same time.
