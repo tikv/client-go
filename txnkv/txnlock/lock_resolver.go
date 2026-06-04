@@ -1438,6 +1438,7 @@ func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys
 		// avoids one RPC per key while still avoiding a whole-region resolve scan.
 		for region, regionKeys := range regions {
 			err = inplaceOrScheduleAsync(asyncBo, func(asyncBo *retry.Backoffer) error {
+				metrics.LockResolverCountWithResolveLockLite.Inc()
 				if err := lr.resolveRegionLocks(asyncBo, l, region, regionKeys, status); err != nil {
 					logErr(err, regionKeys)
 					return err

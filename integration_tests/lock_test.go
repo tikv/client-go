@@ -1113,7 +1113,9 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 			resolver := s.store.NewLockResolver()
 			defer resolver.Close()
 			const expectedResolveReqCount = 4
+			const expectedLiteResolveReqCount = 3
 			asyncResolveTaskCountBefore := resolver.AsyncResolveTaskCount()
+			resolveLockLiteBefore := testutil.ToFloat64(metrics.LockResolverCountWithResolveLockLite)
 
 			// Capture ResolveLock RPCs after RegionRequestSender attaches region
 			// context. The hook blocks ResolveLock requests so the test can
@@ -1236,6 +1238,7 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 			}
 
 			s.Len(reqsByTxn, 3)
+			s.Equal(resolveLockLiteBefore+expectedLiteResolveReqCount, testutil.ToFloat64(metrics.LockResolverCountWithResolveLockLite))
 
 			// The multi-key lite txn is grouped by region. One region has two
 			// keys, and the other has one key.
