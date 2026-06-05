@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [master]
+    branches: [master, release-nextgen-20250815]
   pull_request:
-    branches: [master]
+    branches: [master, release-nextgen-20250815]
 
 jobs:
   integration-local:
@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.1
 
@@ -31,10 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.1
 
@@ -50,10 +50,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.1
 
@@ -64,14 +64,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v8.5.6
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v8.5.6
           path: /tikv-server
 
       - name: Run PD & TiKV
@@ -96,10 +96,10 @@ jobs:
         api_version: [v1ttl, v2]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.1
 
@@ -110,14 +110,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v8.5.6
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v8.5.6
           path: /tikv-server
 
       - name: Run PD & TiKV
@@ -135,14 +135,14 @@ jobs:
         working-directory: integration_tests/raw
 
   integration-next-gen-tikv:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') && !startsWith(github.ref_name, 'release-') && !startsWith(github.base_ref, 'release-') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.1
 
