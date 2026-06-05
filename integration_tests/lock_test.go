@@ -1284,6 +1284,66 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 	runCase("for_read", true)
 }
 
+func (s *testLockSuite) TestBatchLiteResolveLocksForReadIgnoresInlineCleanupError() {
+	if *withTiKV {
+		s.T().Skip("this test relies on client-side failpoints for deterministic cleanup errors")
+	}
+
+	// This test covers the for-read fallback path where client-side async
+	// cleanup is rejected and the cleanup runs inline. Once CheckTxnStatus has
+	// confirmed the transaction status, the read can already proceed, so a later
+	// physical cleanup error should be swallowed instead of being returned to
+	// ResolveLocksForRead.
+	key := []byte("batch_lite_for_read_fallback_key")
+	primaryKey := []byte("batch_lite_for_read_fallback_primary")
+	startTS, _ := s.lockKey(key, []byte("value"), primaryKey, []byte("primary_value"), 3000, true, false)
+	lock := s.mustGetLock(key)
+	lock.TxnSize = 1
+
+	callerStartTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+
+	resolver := s.store.NewLockResolver()
+	defer resolver.Close()
+	// A zero-sized pool rejects client-side async cleanup and forces the
+	// fallback path to execute cleanup inline.
+	resolver.SetAsyncResolvePoolSize(0)
+
+	injectResolveFailure := true
+	resolveFailureInjected := false
+	s.Nil(failpoint.Enable("tikvclient/beforeSendReqToRegion", "return"))
+	defer func() {
+		s.Nil(failpoint.Disable("tikvclient/beforeSendReqToRegion"))
+		if resolveFailureInjected {
+			s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+		}
+	}()
+
+	ctx := context.WithValue(context.Background(), "sendReqToRegionHook", func(req *tikvrpc.Request) {
+		if req.Type == tikvrpc.CmdCheckTxnStatus && injectResolveFailure && !resolveFailureInjected {
+			// Inject the timeout only after the status check request is sent, so
+			// the injected error belongs to the following cleanup ResolveLock RPC.
+			resolveFailureInjected = true
+			s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `return("timeout")`))
+		}
+	})
+	bo := tikv.NewBackofferWithVars(ctx, getMaxBackoff, nil)
+	ttl, canIgnore, canAccess, err := resolver.ResolveLocksForRead(bo, callerStartTS, []*txnkv.Lock{lock}, true)
+	s.Nil(err)
+	s.Equal(int64(0), ttl)
+	s.Empty(canIgnore)
+	s.Equal([]uint64{startTS}, canAccess)
+	s.True(resolveFailureInjected)
+
+	injectResolveFailure = false
+	s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+	resolveFailureInjected = false
+	remainingLock := s.mustGetLock(key)
+	cleanupResolver := s.store.NewLockResolver()
+	defer cleanupResolver.Close()
+	s.Nil(cleanupResolver.ForceResolveLock(context.Background(), remainingLock))
+}
+
 func (s *testLockSuite) TestLockWaitTimeLimit() {
 	k1 := []byte("k1")
 	k2 := []byte("k2")

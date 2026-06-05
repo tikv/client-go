@@ -1401,10 +1401,12 @@ func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys
 		}
 
 		// isAsync is false means either it is not for read or the async resolve
-		// task is rejected. For reads, the lock status is already known, so the
-		// physical cleanup is best-effort even when it runs inline.
+		// task is rejected.
 		if !isAsync {
 			if err = f(bo); err != nil && forRead {
+				// Do not return error for read to make a some behavior with the async cleanup,
+				// so that the only difference between async and async-fallback path is whether the cleanup is
+				// performed in-place or not.
 				err = nil
 			}
 		}

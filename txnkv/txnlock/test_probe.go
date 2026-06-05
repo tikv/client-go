@@ -91,6 +91,12 @@ func (l LockResolverProbe) SetAsyncResolveContext(ctx context.Context) {
 	l.asyncResolveCtx, l.asyncResolveCancel = context.WithCancel(ctx)
 }
 
+// SetAsyncResolvePoolSize replaces the async resolve pool with a bounded one.
+func (l LockResolverProbe) SetAsyncResolvePoolSize(size int) {
+	l.asyncResolvePool.Close()
+	l.asyncResolvePool = newAsyncResolveTaskPool(make(chan struct{}, size))
+}
+
 // AsyncResolveTaskCount returns the number of running or queued async resolve tasks.
 func (l LockResolverProbe) AsyncResolveTaskCount() int {
 	return len(l.asyncResolvePool.semaphore)
