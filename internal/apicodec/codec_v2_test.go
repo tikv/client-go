@@ -177,7 +177,11 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 				},
 			},
 			validate: func(encoded *tikvrpc.Request) {
-				re.Equal(append(keyspacePrefix, []byte("compact-start")...), encoded.Compact().StartKey)
+				// Compact cursors are TiFlash RowKeyValue cursors, not API v2 storage keys.
+				// TiFlash carries API v2 context separately through ApiVersion and KeyspaceId.
+				re.Equal([]byte("compact-start"), encoded.Compact().StartKey)
+				re.Equal(kvrpcpb.APIVersion_V2, encoded.Compact().ApiVersion)
+				re.Equal(testKeyspaceID, encoded.Compact().KeyspaceId)
 			},
 		},
 	}
@@ -501,8 +505,16 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 				DebugInfo: &kvrpcpb.DebugInfo{
 					MvccInfo: []*kvrpcpb.MvccDebugInfo{
 						{
-							Key:  append(keyspacePrefix, []byte("key1")...),
-							Mvcc: &kvrpcpb.MvccInfo{},
+							Key: append(keyspacePrefix, []byte("key1")...),
+							Mvcc: &kvrpcpb.MvccInfo{
+								Lock: &kvrpcpb.MvccLock{
+									Primary: append(keyspacePrefix, []byte("debug-primary")...),
+									Secondaries: [][]byte{
+										append(keyspacePrefix, []byte("debug-secondary-1")...),
+										append(keyspacePrefix, []byte("debug-secondary-2")...),
+									},
+								},
+							},
 						},
 					},
 				},
@@ -511,6 +523,11 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 				re.Equal([]byte("key1"), decoded.TxnLockNotFound.Key)
 				re.Equal(1, len(decoded.DebugInfo.MvccInfo))
 				re.Equal([]byte("key1"), decoded.DebugInfo.MvccInfo[0].Key)
+				re.Equal([]byte("debug-primary"), decoded.DebugInfo.MvccInfo[0].Mvcc.Lock.Primary)
+				re.Equal([][]byte{
+					[]byte("debug-secondary-1"),
+					[]byte("debug-secondary-2"),
+				}, decoded.DebugInfo.MvccInfo[0].Mvcc.Lock.Secondaries)
 			},
 		},
 	}
@@ -700,6 +717,15 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				Resp: &kvrpcpb.MvccGetByStartTsResponse{
 					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
 					Key:         suite.codec.EncodeKey([]byte("mvcc-key")),
+					Info: &kvrpcpb.MvccInfo{
+						Lock: &kvrpcpb.MvccLock{
+							Primary: suite.codec.EncodeKey([]byte("mvcc-primary")),
+							Secondaries: [][]byte{
+								suite.codec.EncodeKey([]byte("mvcc-secondary-1")),
+								suite.codec.EncodeKey([]byte("mvcc-secondary-2")),
+							},
+						},
+					},
 				},
 			},
 			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
@@ -708,6 +734,43 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
 				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
 				re.Equal([]byte("mvcc-key"), resp.Key)
+				re.Equal([]byte("mvcc-primary"), resp.Info.Lock.Primary)
+				re.Equal([][]byte{
+					[]byte("mvcc-secondary-1"),
+					[]byte("mvcc-secondary-2"),
+				}, resp.Info.Lock.Secondaries)
+			},
+		},
+		{
+			name: "CmdMvccGetByKey",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdMvccGetByKey,
+				Req:  &kvrpcpb.MvccGetByKeyRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.MvccGetByKeyResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Info: &kvrpcpb.MvccInfo{
+						Lock: &kvrpcpb.MvccLock{
+							Primary: suite.codec.EncodeKey([]byte("mvcc-by-key-primary")),
+							Secondaries: [][]byte{
+								suite.codec.EncodeKey([]byte("mvcc-by-key-secondary-1")),
+								suite.codec.EncodeKey([]byte("mvcc-by-key-secondary-2")),
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.MvccGetByKeyResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+				re.Equal([]byte("mvcc-by-key-primary"), resp.Info.Lock.Primary)
+				re.Equal([][]byte{
+					[]byte("mvcc-by-key-secondary-1"),
+					[]byte("mvcc-by-key-secondary-2"),
+				}, resp.Info.Lock.Secondaries)
 			},
 		},
 		{
@@ -754,8 +817,10 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			},
 			resp: &tikvrpc.Response{
 				Resp: &kvrpcpb.CompactResponse{
-					CompactedStartKey: suite.codec.EncodeKey([]byte("compacted-start")),
-					CompactedEndKey:   suite.codec.EncodeKey([]byte("compacted-end")),
+					// Compact cursors are TiFlash RowKeyValue cursors, not API v2 storage keys.
+					// TiFlash carries API v2 context separately through ApiVersion and KeyspaceId.
+					CompactedStartKey: []byte("compacted-start"),
+					CompactedEndKey:   []byte("compacted-end"),
 				},
 			},
 			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
@@ -775,6 +840,29 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			test.validate(re, decoded)
 		})
 	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeMvccInfoPreservesEmptyLockKeys() {
+	re := suite.Require()
+	info := &kvrpcpb.MvccInfo{
+		Lock: &kvrpcpb.MvccLock{
+			Primary: []byte{},
+			Secondaries: [][]byte{
+				{},
+				suite.codec.EncodeKey([]byte("mvcc-secondary")),
+			},
+		},
+	}
+
+	decoded, err := suite.codec.decodeMvccInfo(info)
+	re.NoError(err)
+	re.Same(info, decoded)
+	re.NotNil(decoded.Lock.Primary)
+	re.Empty(decoded.Lock.Primary)
+	re.Len(decoded.Lock.Secondaries, 2)
+	re.NotNil(decoded.Lock.Secondaries[0])
+	re.Empty(decoded.Lock.Secondaries[0])
+	re.Equal([]byte("mvcc-secondary"), decoded.Lock.Secondaries[1])
 }
 
 func (suite *testCodecV2Suite) TestGetKeyspaceID() {

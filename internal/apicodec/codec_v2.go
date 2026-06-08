@@ -310,12 +310,6 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeKey(r.Key)
 		req.Req = &r
-	case tikvrpc.CmdCompact:
-		r := *req.Compact()
-		if len(r.StartKey) > 0 {
-			r.StartKey = c.EncodeKey(r.StartKey)
-		}
-		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
 		r.SplitKeys = c.encodeKeys(r.SplitKeys)
@@ -668,6 +662,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		r.Info, err = c.decodeMvccInfo(r.Info)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdMvccGetByStartTs:
 		r := resp.Resp.(*kvrpcpb.MvccGetByStartTsResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -680,6 +678,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 				return nil, err
 			}
 		}
+		r.Info, err = c.decodeMvccInfo(r.Info)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdLockWaitInfo:
 		r := resp.Resp.(*kvrpcpb.GetLockWaitInfoResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -688,20 +690,6 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 		for i := range r.Entries {
 			r.Entries[i].Key, err = c.DecodeKey(r.Entries[i].Key)
-			if err != nil {
-				return nil, err
-			}
-		}
-	case tikvrpc.CmdCompact:
-		r := resp.Resp.(*kvrpcpb.CompactResponse)
-		if len(r.CompactedStartKey) > 0 {
-			r.CompactedStartKey, err = c.DecodeKey(r.CompactedStartKey)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if len(r.CompactedEndKey) > 0 {
-			r.CompactedEndKey, err = c.DecodeKey(r.CompactedEndKey)
 			if err != nil {
 				return nil, err
 			}
@@ -1080,6 +1068,10 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 			if mvccInfo.Key, err = c.DecodeKey(mvccInfo.Key); err != nil {
 				return nil, err
 			}
+			mvccInfo.Mvcc, err = c.decodeMvccInfo(mvccInfo.Mvcc)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return keyError, nil
@@ -1094,6 +1086,33 @@ func (c *codecV2) decodeKeyErrors(keyErrors []*kvrpcpb.KeyError) ([]*kvrpcpb.Key
 		}
 	}
 	return keyErrors, nil
+}
+
+func (c *codecV2) decodeMvccInfo(info *kvrpcpb.MvccInfo) (*kvrpcpb.MvccInfo, error) {
+	if info == nil {
+		return nil, nil
+	}
+	lock := info.Lock
+	if lock == nil {
+		return info, nil
+	}
+	var err error
+	if len(lock.Primary) > 0 {
+		lock.Primary, err = c.DecodeKey(lock.Primary)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range lock.Secondaries {
+		if len(lock.Secondaries[i]) == 0 {
+			continue
+		}
+		lock.Secondaries[i], err = c.DecodeKey(lock.Secondaries[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return info, nil
 }
 
 func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, error) {
