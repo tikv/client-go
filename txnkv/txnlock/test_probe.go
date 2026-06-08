@@ -15,6 +15,8 @@
 package txnlock
 
 import (
+	"context"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -81,6 +83,23 @@ func (l LockResolverProbe) GetSecondariesFromTxnStatus(status TxnStatus) [][]byt
 // SetMeetLockCallback is called whenever it meets locks.
 func (l LockResolverProbe) SetMeetLockCallback(f func([]*Lock)) {
 	l.testingKnobs.meetLock = f
+}
+
+// SetAsyncResolveContext replaces the context used by async resolve tasks.
+func (l LockResolverProbe) SetAsyncResolveContext(ctx context.Context) {
+	l.asyncResolveCancel()
+	l.asyncResolveCtx, l.asyncResolveCancel = context.WithCancel(ctx)
+}
+
+// SetAsyncResolvePoolSize replaces the async resolve pool with a bounded one.
+func (l LockResolverProbe) SetAsyncResolvePoolSize(size int) {
+	l.asyncResolvePool.Close()
+	l.asyncResolvePool = newAsyncResolveTaskPool(make(chan struct{}, size))
+}
+
+// AsyncResolveTaskCount returns the number of running or queued async resolve tasks.
+func (l LockResolverProbe) AsyncResolveTaskCount() int {
+	return len(l.asyncResolvePool.semaphore)
 }
 
 // CheckAllSecondaries checks the secondary locks of an async commit transaction to find out the final
