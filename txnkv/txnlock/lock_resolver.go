@@ -563,24 +563,24 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 	// TODO: Maybe put it in LockResolver and share by all txns.
 	cleanTxns := make(map[uint64]map[locate.RegionVerID]struct{})
 	pessimisticCleanTxns := make(map[uint64]map[locate.RegionVerID]struct{})
-	var resolve func(*Lock, bool) (TxnStatus, error)
-	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
+	var resolve func(*Lock, bool) (TxnStatus, bool, error)
+	resolve = func(l *Lock, forceSyncCommit bool) (_ TxnStatus, needBatchLiteResolve bool, _ error) {
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
 
 		if _, ok := errors.Cause(err).(primaryMismatch); ok {
 			if !l.IsPessimistic() {
 				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
-				return TxnStatus{}, err
+				return TxnStatus{}, false, err
 			}
 			// Pessimistic rollback the pessimistic lock as it points to an invalid primary.
 			status, err = TxnStatus{}, nil
 		} else if err != nil {
-			return TxnStatus{}, err
+			return TxnStatus{}, false, err
 		}
 		ttlExpired := (lr.store == nil) || (lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope}))
 		expiredAsyncCommitLocks := status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit && ttlExpired
 		if status.ttl != 0 && !expiredAsyncCommitLocks {
-			return status, nil
+			return status, false, nil
 		}
 
 		// If the lock is non-async-commit type:
@@ -602,14 +602,14 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			// resolveAsyncCommitLock will resolve all locks of the transaction, so we needn't resolve
 			// it again if it has been resolved once.
 			if exists {
-				return status, nil
+				return status, false, nil
 			}
 			// status of async-commit transaction is determined by resolveAsyncCommitLock.
 			status, err = lr.resolveAsyncCommitLock(bo, l, status, forRead)
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {
-				status, err = resolve(l, true)
+				status, needBatchLiteResolve, err = resolve(l, true)
 			}
-			return status, err
+			return status, needBatchLiteResolve, err
 		}
 		if l.IsPessimistic() {
 			// pessimistic locks don't block read so it needn't be async.
@@ -624,12 +624,16 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolvePessimisticLock(bo, l, false, nil)
 			}
 		} else {
+			if lite || l.TxnSize < lr.resolveLockLiteThreshold {
+				// Avoid sending one lite ResolveLock request per lock.
+				// Defer it so locks from the same transaction can be batched later.
+				return status, true, err
+			}
 			asyncResolve := false
 			resultRequired := true
 			if forRead {
 				resultRequired = false
-				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
-				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
+				asyncBo := lr.newAsyncResolveBackoffer(bo)
 				asyncResolve = lr.asyncResolvePool.tryAsyncResolve(func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
@@ -647,21 +651,45 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolveLock(bo, l, status, lite, resultRequired, cleanRegions)
 			}
 		}
-		return status, err
+		return status, false, err
 	}
 
 	var canIgnore, canAccess []uint64
+	type batchLiteResolveTxn struct {
+		txnStatus TxnStatus
+		firstLock *Lock
+		keys      [][]byte
+	}
+	// TxnID -> locks that should use the lite ResolveLock path. They are
+	// collected first so a transaction with multiple encountered locks sends at
+	// most one ResolveLock request per region instead of one request per key.
+	var batchLiteResolveTxnList map[uint64]*batchLiteResolveTxn
 	for _, l := range locks {
 		if l.IsShared() {
 			logutil.Logger(bo.GetCtx()).Warn("cannot resolve a shared lock directly, should extract the inner locks and resolve them one by one", zap.Stack("stack"))
 			return ResolveLockResult{}, errors.New("misuse of resolveLocks: trying to resolve a shared lock directly")
 		}
-		status, err := resolve(l, false)
+		status, batchLiteResolve, err := resolve(l, false)
 		if err != nil {
 			msBeforeTxnExpired.update(0)
 			return ResolveLockResult{
 				TTL: msBeforeTxnExpired.value(),
 			}, err
+		}
+		if batchLiteResolve {
+			if batchLiteResolveTxnList == nil {
+				batchLiteResolveTxnList = make(map[uint64]*batchLiteResolveTxn)
+			}
+			txn, ok := batchLiteResolveTxnList[l.TxnID]
+			if ok {
+				txn.keys = append(txn.keys, l.Key)
+			} else {
+				batchLiteResolveTxnList[l.TxnID] = &batchLiteResolveTxn{
+					txnStatus: status,
+					firstLock: l,
+					keys:      [][]byte{l.Key},
+				}
+			}
 		}
 		if !forRead {
 			if status.ttl != 0 {
@@ -688,6 +716,19 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			msBeforeTxnExpired.update(msBeforeLockExpired)
 		}
 	}
+
+	// Resolve all collected lite locks after the status pass. For read requests,
+	// this cleanup may be scheduled in the async resolve pool; for write or
+	// result-required requests it is resolved synchronously.
+	for _, txn := range batchLiteResolveTxnList {
+		if err = lr.batchLiteResolveLocks(bo, txn.firstLock, txn.keys, txn.txnStatus, forRead); err != nil {
+			msBeforeTxnExpired.update(0)
+			return ResolveLockResult{
+				TTL: msBeforeTxnExpired.value(),
+			}, err
+		}
+	}
+
 	if msBeforeTxnExpired.value() > 0 {
 		metrics.LockResolverCountWithWaitExpired.Inc()
 	}
@@ -1314,6 +1355,107 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 	return &shared, nil
 }
 
+func (lr *LockResolver) newAsyncResolveBackoffer(originalBo *retry.Backoffer) *retry.Backoffer {
+	// Async cleanup must not inherit the caller's cancellation, but it should
+	// keep RequestSource for observability.
+	// This intentionally preserves the existing for-read async resolve behavior:
+	// resource group attribution is not copied to the detached cleanup context here.
+	// Whether background lock cleanup should be charged to the triggering request's resource group is a separate
+	// policy decision.
+	asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, originalBo.GetCtx().Value(util.RequestSourceKey))
+	return retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
+}
+
+// batchLiteResolveLocks resolves small-transaction locks that have already had
+// their primary status checked. keys must all belong to l.TxnID.
+func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys [][]byte, status TxnStatus, forRead bool) error {
+	logErr := func(err error, failedKeys [][]byte) {
+		if err == nil {
+			return
+		}
+		failedKeysForLog := make([]string, len(failedKeys))
+		for i, key := range failedKeys {
+			failedKeysForLog[i] = redact.Key(key)
+		}
+		logutil.BgLogger().Info("failed to batch resolve lock lite",
+			zap.String("lock", l.String()),
+			zap.Strings("keys", failedKeysForLog),
+			zap.Uint64("commitTS", status.CommitTS()),
+			zap.Bool("forRead", forRead),
+			zap.Error(err),
+		)
+	}
+
+	inplaceOrScheduleAsync := func(bo *retry.Backoffer, f func(*retry.Backoffer) error) (err error) {
+		isAsync := false
+		if forRead {
+			asyncBo := lr.newAsyncResolveBackoffer(bo)
+			isAsync = lr.asyncResolvePool.tryAsyncResolve(func() {
+				// do not return error when forRead
+				_ = f(asyncBo)
+			}, metrics.LockResolverAsyncRunningTasksForReadResolve)
+
+			if !isAsync {
+				metrics.LockResolverCountWithReadAsyncResolveFallback.Inc()
+			}
+		}
+
+		// isAsync is false means either it is not for read or the async resolve
+		// task is rejected.
+		if !isAsync {
+			if err = f(bo); err != nil && forRead {
+				// Do not return error for read to make a some behavior with the async cleanup,
+				// so that the only difference between async and async-fallback path is whether the cleanup is
+				// performed in-place or not.
+				err = nil
+			}
+		}
+
+		return
+	}
+
+	if len(keys) == 1 {
+		if intest.InTest {
+			if !bytes.Equal(l.Key, keys[0]) {
+				panic(fmt.Sprintf("the only key in keys should be the same as l.Key, but got %v and %v", l.Key, keys[0]))
+			}
+		}
+		return inplaceOrScheduleAsync(bo, func(asyncBo *retry.Backoffer) error {
+			if err := lr.resolveLock(asyncBo, l, status, true, true, nil); err != nil {
+				logErr(err, keys)
+				return err
+			}
+			return nil
+		})
+	}
+
+	return inplaceOrScheduleAsync(bo, func(asyncBo *retry.Backoffer) error {
+		regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(asyncBo, keys, nil)
+		if err != nil {
+			logErr(err, keys)
+			return err
+		}
+
+		// Multiple lite keys are resolved with exact key lists per region. This
+		// avoids one RPC per key while still avoiding a whole-region resolve scan.
+		for region, regionKeys := range regions {
+			err = inplaceOrScheduleAsync(asyncBo, func(asyncBo *retry.Backoffer) error {
+				metrics.LockResolverCountWithResolveLockLite.Inc()
+				if err := lr.resolveRegionLocks(asyncBo, l, region, regionKeys, status); err != nil {
+					logErr(err, regionKeys)
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
 // resolveRegionLocks is essentially the same as resolveLock, but we resolve all keys in the same region at the same time.
 func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region locate.RegionVerID, keys [][]byte, status TxnStatus) error {
 	lreq := &kvrpcpb.ResolveLockRequest{
@@ -1324,6 +1466,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	}
 	lreq.Keys = keys
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
+		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 		},
