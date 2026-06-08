@@ -2,26 +2,27 @@ name: Compatibility Test
 
 on:
   push:
-    branches: [master]
+    branches: [master, release-nextgen-20251011]
 
 jobs:
   tidb-compatibility:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: "1.23.2"
 
       - name: Checkout Client-Go
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           path: client-go
 
       - name: Checkout TiDB
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           repository: pingcap/tidb
+          ref: release-nextgen-20251011
           path: tidb
 
       - name: Check build
@@ -32,7 +33,7 @@ jobs:
         working-directory: tidb
 
       - name: Checkout go-ycsb
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           repository: pingcap/go-ycsb
           path: go-ycsb
