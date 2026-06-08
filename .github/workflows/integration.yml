@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [master, "feature/*"]
+    branches: [master, "feature/*", "release-nextgen-*"]
   pull_request:
-    branches: [master, "feature/*"]
+    branches: [master, "feature/*", "release-nextgen-*"]
 
 jobs:
   integration-local:
@@ -137,6 +137,9 @@ jobs:
   integration-next-gen-tikv:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -149,18 +152,54 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
-      - name: Fetch PD
+      - name: Resolve Next-Gen Image Tags
+        id: resolve-nextgen-tags
+        shell: bash
+        run: |
+          target_branch="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
+
+          case "${target_branch}" in
+            release-nextgen-*)
+              pd_tag="${target_branch}"
+              tikv_tag="${target_branch}"
+              ;;
+            *)
+              pd_tag="master-nextgen"
+              tikv_tag="cloud-engine-nextgen"
+              ;;
+          esac
+
+          echo "pd_tag=${pd_tag}" >> "${GITHUB_OUTPUT}"
+          echo "tikv_tag=${tikv_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: pingcap-testing-account
+          workload_identity_provider: projects/890604261603/locations/global/workloadIdentityPools/github-tikv/providers/github-oidc
+          service_account: tidbx-gar-reader@pingcap-testing-account.iam.gserviceaccount.com
+          token_format: access_token
+
+      - name: Login to GAR
+        uses: docker/login-action@v3
+        with:
+          registry: us-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Fetch Next-Gen PD
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: us-docker.pkg.dev/pingcap-testing-account/tidbx/tikv/pd/image:${{ steps.resolve-nextgen-tags.outputs.pd_tag }}
           path: /pd-server
 
       - name: Fetch Next-Gen TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: gcr.io/pingcap-public/dbaas/tikv:dedicated-next-gen
+          image: us-docker.pkg.dev/pingcap-testing-account/tidbx/tikv/tikv/image:${{ steps.resolve-nextgen-tags.outputs.tikv_tag }}
           path: /tikv-server
 
       - name: Run MinIO, PD & Next-Gen TiKV
@@ -178,7 +217,7 @@ jobs:
           ./pd-server --config pd_next_gen.toml > pd.log 2>&1 &
           sleep 5
           ./tikv-server -C tikv_next_gen.toml --pd-endpoints="127.0.0.1:2379" --addr="127.0.0.1:20160" --data-dir=${{ github.workspace }}/integration_tests/tikv-data > tikv.log 2>&1 &
-          
+
           echo "Waiting for servers to start..."
           sleep 15
 
