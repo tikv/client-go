@@ -228,7 +228,7 @@ func DefaultTiKVClient() TiKVClient {
 		},
 		CoprReqTimeout: 60 * time.Second,
 
-		ResolveLockLiteThreshold:   256,
+		ResolveLockLiteThreshold:   512,
 		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
 		EnableReplicaSelectorV2:    true,
 		RUV2:                       DefaultRUV2TiKVConfig(),
