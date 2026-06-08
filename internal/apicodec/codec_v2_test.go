@@ -102,6 +102,46 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 				re.Equal(append(keyspacePrefix, []byte("key1")...), encoded.Commit().PrimaryKey)
 			},
 		},
+		{
+			name: "CmdFlush",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdFlush,
+				Req: &kvrpcpb.FlushRequest{
+					Mutations: []*kvrpcpb.Mutation{
+						{
+							Op:  kvrpcpb.Op_Put,
+							Key: []byte("key1"),
+						},
+						{
+							Op:  kvrpcpb.Op_Del,
+							Key: []byte("key2"),
+						},
+					},
+					PrimaryKey: []byte("primary"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Len(encoded.Flush().Mutations, 2)
+				re.Equal(append(keyspacePrefix, []byte("key1")...), encoded.Flush().Mutations[0].Key)
+				re.Equal(append(keyspacePrefix, []byte("key2")...), encoded.Flush().Mutations[1].Key)
+				re.Equal(append(keyspacePrefix, []byte("primary")...), encoded.Flush().PrimaryKey)
+			},
+		},
+		{
+			name: "CmdBufferBatchGet",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdBufferBatchGet,
+				Req: &kvrpcpb.BufferBatchGetRequest{
+					Keys: [][]byte{[]byte("key1"), []byte("key2")},
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal([][]byte{
+					append(keyspacePrefix, []byte("key1")...),
+					append(keyspacePrefix, []byte("key2")...),
+				}, encoded.BufferBatchGet().Keys)
+			},
+		},
 	}
 
 	for _, req := range requests {
@@ -445,6 +485,101 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 			decoded, err := codec.decodeKeyError(keyErr.err)
 			re.NoError(err)
 			keyErr.validate(re, decoded)
+		})
+	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseHotPathCommands() {
+	makeRegionError := func(key, start, end []byte) *errorpb.Error {
+		encodedStart, encodedEnd := suite.codec.EncodeRegionRange(start, end)
+		return &errorpb.Error{
+			KeyNotInRegion: &errorpb.KeyNotInRegion{
+				Key:      suite.codec.EncodeKey(key),
+				StartKey: encodedStart,
+				EndKey:   encodedEnd,
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		req      *tikvrpc.Request
+		resp     *tikvrpc.Response
+		validate func(*require.Assertions, *tikvrpc.Response)
+	}{
+		{
+			name: "CmdFlush",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdFlush,
+				Req:  &kvrpcpb.FlushRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.FlushResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Errors: []*kvrpcpb.KeyError{
+						{
+							TxnLockNotFound: &kvrpcpb.TxnLockNotFound{
+								Key: suite.codec.EncodeKey([]byte("lock-key")),
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.FlushResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+				re.Len(resp.Errors, 1)
+				re.Equal([]byte("lock-key"), resp.Errors[0].TxnLockNotFound.Key)
+			},
+		},
+		{
+			name: "CmdBufferBatchGet",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdBufferBatchGet,
+				Req:  &kvrpcpb.BufferBatchGetRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.BufferBatchGetResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Error: &kvrpcpb.KeyError{
+						TxnLockNotFound: &kvrpcpb.TxnLockNotFound{
+							Key: suite.codec.EncodeKey([]byte("response-lock")),
+						},
+					},
+					Pairs: []*kvrpcpb.KvPair{
+						{
+							Key: suite.codec.EncodeKey([]byte("pair-key")),
+							Error: &kvrpcpb.KeyError{
+								TxnLockNotFound: &kvrpcpb.TxnLockNotFound{
+									Key: suite.codec.EncodeKey([]byte("pair-lock")),
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.BufferBatchGetResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+				re.Equal([]byte("response-lock"), resp.Error.TxnLockNotFound.Key)
+				re.Len(resp.Pairs, 1)
+				re.Equal([]byte("pair-key"), resp.Pairs[0].Key)
+				re.Equal([]byte("pair-lock"), resp.Pairs[0].Error.TxnLockNotFound.Key)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		suite.Run(test.name, func() {
+			re := suite.Require()
+			decoded, err := suite.codec.DecodeResponse(test.req, test.resp)
+			re.NoError(err)
+			test.validate(re, decoded)
 		})
 	}
 }

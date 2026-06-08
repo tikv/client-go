@@ -205,6 +205,17 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.CheckSecondaryLocks()
 		r.Keys = c.encodeKeys(r.Keys)
 		req.Req = &r
+	case tikvrpc.CmdFlush:
+		r := *req.Flush()
+		r.Mutations = c.encodeMutations(r.Mutations)
+		if len(r.PrimaryKey) > 0 {
+			r.PrimaryKey = c.EncodeKey(r.PrimaryKey)
+		}
+		req.Req = &r
+	case tikvrpc.CmdBufferBatchGet:
+		r := *req.BufferBatchGet()
+		r.Keys = c.encodeKeys(r.Keys)
+		req.Req = &r
 
 	// Raw Request Types.
 	case tikvrpc.CmdRawGet:
@@ -482,6 +493,30 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 			return nil, err
 		}
 		r.Locks, err = c.decodeLockInfos(r.Locks)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdFlush:
+		r := resp.Resp.(*kvrpcpb.FlushResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Errors, err = c.decodeKeyErrors(r.Errors)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdBufferBatchGet:
+		r := resp.Resp.(*kvrpcpb.BufferBatchGetResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Pairs, err = c.decodePairs(r.Pairs)
+		if err != nil {
+			return nil, err
+		}
+		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
