@@ -216,6 +216,14 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.BufferBatchGet()
 		r.Keys = c.encodeKeys(r.Keys)
 		req.Req = &r
+	case tikvrpc.CmdFlashbackToVersion:
+		r := *req.FlashbackToVersion()
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
+		req.Req = &r
+	case tikvrpc.CmdPrepareFlashbackToVersion:
+		r := *req.PrepareFlashbackToVersion()
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
+		req.Req = &r
 
 	// Raw Request Types.
 	case tikvrpc.CmdRawGet:
@@ -301,6 +309,12 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeKey(r.Key)
+		req.Req = &r
+	case tikvrpc.CmdCompact:
+		r := *req.Compact()
+		if len(r.StartKey) > 0 {
+			r.StartKey = c.EncodeKey(r.StartKey)
+		}
 		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
@@ -520,6 +534,18 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+	case tikvrpc.CmdFlashbackToVersion:
+		r := resp.Resp.(*kvrpcpb.FlashbackToVersionResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdPrepareFlashbackToVersion:
+		r := resp.Resp.(*kvrpcpb.PrepareFlashbackToVersionResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	// RawKV Responses.
 	// Most of these responses does not require treatment aside from Region Error decoding.
 	// Exceptions are Response with keys attach to them, like RawScan and RawBatchGet,
@@ -612,6 +638,12 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+	case tikvrpc.CmdCheckLockObserver:
+		r := resp.Resp.(*kvrpcpb.CheckLockObserverResponse)
+		r.Locks, err = c.decodeLockInfos(r.Locks)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdCop:
 		r := resp.Resp.(*coprocessor.Response)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -635,6 +667,44 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
 		if err != nil {
 			return nil, err
+		}
+	case tikvrpc.CmdMvccGetByStartTs:
+		r := resp.Resp.(*kvrpcpb.MvccGetByStartTsResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		if len(r.Key) > 0 {
+			r.Key, err = c.DecodeKey(r.Key)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case tikvrpc.CmdLockWaitInfo:
+		r := resp.Resp.(*kvrpcpb.GetLockWaitInfoResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		for i := range r.Entries {
+			r.Entries[i].Key, err = c.DecodeKey(r.Entries[i].Key)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case tikvrpc.CmdCompact:
+		r := resp.Resp.(*kvrpcpb.CompactResponse)
+		if len(r.CompactedStartKey) > 0 {
+			r.CompactedStartKey, err = c.DecodeKey(r.CompactedStartKey)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if len(r.CompactedEndKey) > 0 {
+			r.CompactedEndKey, err = c.DecodeKey(r.CompactedEndKey)
+			if err != nil {
+				return nil, err
+			}
 		}
 	case tikvrpc.CmdSplitRegion:
 		r := resp.Resp.(*kvrpcpb.SplitRegionResponse)

@@ -142,6 +142,44 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 				}, encoded.BufferBatchGet().Keys)
 			},
 		},
+		{
+			name: "CmdFlashbackToVersion",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdFlashbackToVersion,
+				Req: &kvrpcpb.FlashbackToVersionRequest{
+					StartKey: []byte("start"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal(append(keyspacePrefix, []byte("start")...), encoded.FlashbackToVersion().StartKey)
+				re.Equal(keyspaceEndKey, encoded.FlashbackToVersion().EndKey)
+			},
+		},
+		{
+			name: "CmdPrepareFlashbackToVersion",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdPrepareFlashbackToVersion,
+				Req: &kvrpcpb.PrepareFlashbackToVersionRequest{
+					StartKey: []byte("prepare-start"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal(append(keyspacePrefix, []byte("prepare-start")...), encoded.PrepareFlashbackToVersion().StartKey)
+				re.Equal(keyspaceEndKey, encoded.PrepareFlashbackToVersion().EndKey)
+			},
+		},
+		{
+			name: "CmdCompact",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCompact,
+				Req: &kvrpcpb.CompactRequest{
+					StartKey: []byte("compact-start"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal(append(keyspacePrefix, []byte("compact-start")...), encoded.Compact().StartKey)
+			},
+		},
 	}
 
 	for _, req := range requests {
@@ -569,6 +607,161 @@ func (suite *testCodecV2Suite) TestDecodeResponseHotPathCommands() {
 				re.Len(resp.Pairs, 1)
 				re.Equal([]byte("pair-key"), resp.Pairs[0].Key)
 				re.Equal([]byte("pair-lock"), resp.Pairs[0].Error.TxnLockNotFound.Key)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		suite.Run(test.name, func() {
+			re := suite.Require()
+			decoded, err := suite.codec.DecodeResponse(test.req, test.resp)
+			re.NoError(err)
+			test.validate(re, decoded)
+		})
+	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
+	makeRegionError := func(key, start, end []byte) *errorpb.Error {
+		encodedStart, encodedEnd := suite.codec.EncodeRegionRange(start, end)
+		return &errorpb.Error{
+			KeyNotInRegion: &errorpb.KeyNotInRegion{
+				Key:      suite.codec.EncodeKey(key),
+				StartKey: encodedStart,
+				EndKey:   encodedEnd,
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		req      *tikvrpc.Request
+		resp     *tikvrpc.Response
+		validate func(*require.Assertions, *tikvrpc.Response)
+	}{
+		{
+			name: "CmdCheckLockObserver",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCheckLockObserver,
+				Req:  &kvrpcpb.CheckLockObserverRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.CheckLockObserverResponse{
+					Locks: []*kvrpcpb.LockInfo{
+						{
+							Key:         suite.codec.EncodeKey([]byte("observer-key")),
+							PrimaryLock: suite.codec.EncodeKey([]byte("observer-primary")),
+							Secondaries: [][]byte{suite.codec.EncodeKey([]byte("observer-secondary"))},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.CheckLockObserverResponse)
+				re.Len(resp.Locks, 1)
+				re.Equal([]byte("observer-key"), resp.Locks[0].Key)
+				re.Equal([]byte("observer-primary"), resp.Locks[0].PrimaryLock)
+				re.Equal([][]byte{[]byte("observer-secondary")}, resp.Locks[0].Secondaries)
+			},
+		},
+		{
+			name: "CmdLockWaitInfo",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdLockWaitInfo,
+				Req:  &kvrpcpb.GetLockWaitInfoRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.GetLockWaitInfoResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Entries: []*deadlockpb.WaitForEntry{
+						{
+							Key: suite.codec.EncodeKey([]byte("wait-key")),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.GetLockWaitInfoResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+				re.Len(resp.Entries, 1)
+				re.Equal([]byte("wait-key"), resp.Entries[0].Key)
+			},
+		},
+		{
+			name: "CmdMvccGetByStartTs",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdMvccGetByStartTs,
+				Req:  &kvrpcpb.MvccGetByStartTsRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.MvccGetByStartTsResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Key:         suite.codec.EncodeKey([]byte("mvcc-key")),
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.MvccGetByStartTsResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+				re.Equal([]byte("mvcc-key"), resp.Key)
+			},
+		},
+		{
+			name: "CmdFlashbackToVersion",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdFlashbackToVersion,
+				Req:  &kvrpcpb.FlashbackToVersionRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.FlashbackToVersionResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.FlashbackToVersionResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+			},
+		},
+		{
+			name: "CmdPrepareFlashbackToVersion",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdPrepareFlashbackToVersion,
+				Req:  &kvrpcpb.PrepareFlashbackToVersionRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.PrepareFlashbackToVersionResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.PrepareFlashbackToVersionResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Equal([]byte("range-start"), resp.RegionError.KeyNotInRegion.StartKey)
+				re.Equal([]byte("range-end"), resp.RegionError.KeyNotInRegion.EndKey)
+			},
+		},
+		{
+			name: "CmdCompact",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCompact,
+				Req:  &kvrpcpb.CompactRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.CompactResponse{
+					CompactedStartKey: suite.codec.EncodeKey([]byte("compacted-start")),
+					CompactedEndKey:   suite.codec.EncodeKey([]byte("compacted-end")),
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.CompactResponse)
+				re.Equal([]byte("compacted-start"), resp.CompactedStartKey)
+				re.Equal([]byte("compacted-end"), resp.CompactedEndKey)
 			},
 		},
 	}
