@@ -35,6 +35,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -174,4 +175,24 @@ func None[T interface{}]() Option[T] {
 
 func (o Option[T]) Inner() *T {
 	return o.inner
+}
+
+func GetMaxStartKey(lhs []byte, rhs []byte) []byte {
+	if bytes.Compare(lhs, rhs) > 0 {
+		return lhs
+	}
+	return rhs
+}
+
+func GetMinEndKey(lhs []byte, rhs []byte) []byte {
+	if len(rhs) == 0 {
+		return lhs
+	}
+	if len(lhs) == 0 {
+		return rhs
+	}
+	if bytes.Compare(lhs, rhs) < 0 {
+		return lhs
+	}
+	return rhs
 }

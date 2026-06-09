@@ -43,6 +43,16 @@ type RequestInfo struct {
 	bypass bool
 }
 
+// NewRequestInfo builds request information from precomputed resource-control fields.
+func NewRequestInfo(writeBytes int64, storeID uint64, replicaNumber int64, bypass bool) *RequestInfo {
+	return &RequestInfo{
+		writeBytes:    writeBytes,
+		storeID:       storeID,
+		replicaNumber: replicaNumber,
+		bypass:        bypass,
+	}
+}
+
 func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessLocationType {
 	switch accessType {
 	case kv.AccessLocalZone:
