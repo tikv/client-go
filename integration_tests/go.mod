@@ -14,8 +14,8 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20260112052152-1d3c5ec76bf8
-	github.com/tikv/pd/client v0.0.0-20260310072508-b936d55fc33e
+	github.com/tikv/client-go/v2 v2.0.8-0.20260521074709-0df8691a666e
+	github.com/tikv/pd/client v0.0.0-20260609141937-b01426f6b08b
 	go.uber.org/goleak v1.3.0
 )
 
@@ -68,7 +68,7 @@ require (
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250106104940-3ac9806e2a76 // indirect
-	github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a // indirect
+	github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus/common v0.65.0 // indirect
@@ -95,7 +95,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.44.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
@@ -120,6 +120,6 @@ replace (
 )
 
 replace (
-	github.com/pingcap/tidb => github.com/lcwangchao/tidb v1.1.0-beta.0.20260126055322-e31e3f51a340
-	github.com/pingcap/tidb/pkg/parser => github.com/lcwangchao/tidb/pkg/parser v0.0.0-20260126055322-e31e3f51a340
+	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260609154603-fd57a2c1d5a7
+	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260609154603-fd57a2c1d5a7
 )
