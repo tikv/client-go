@@ -35,6 +35,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -57,7 +58,7 @@ type testingKnobs interface {
 
 type storeRegistry interface {
 	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
-	fetchAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error)
+	fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error)
 }
 
 type storeCache interface {
@@ -123,7 +124,7 @@ func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64) (*metapb.Sto
 	return c.pdClient.GetStore(ctx, id)
 }
 
-func (c *storeCacheImpl) fetchAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
+func (c *storeCacheImpl) fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	return c.pdClient.GetAllStores(ctx, opts...)
 }
 
@@ -1138,7 +1139,7 @@ type storeCacheUpdater struct {
 }
 
 func (u *storeCacheUpdater) tick(ctx context.Context, now time.Time) bool {
-	storeList, err := u.stores.fetchAllStores(ctx, pd.WithExcludeTombstone())
+	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone())
 	if err != nil {
 		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
 		return false
