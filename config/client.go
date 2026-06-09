@@ -121,6 +121,21 @@ type TiKVClient struct {
 
 	// RUV2 is the RU v2 TiKV-side weights used to calculate TiKV RU values from ExecDetailsV2.RuV2.
 	RUV2 RUV2TiKVConfig `toml:"ru-v2" json:"ru-v2"`
+
+	// TxnChunkWriterAddr is the address of the txn chunk writer for file-based txn.
+	TxnChunkWriterAddr string `toml:"txn-chunk-writer-addr" json:"txn-chunk-writer-addr"`
+	// TxnChunkWriterConcurrency is the concurrency to request the txn chunk writer for file-based txn.
+	TxnChunkWriterConcurrency uint `toml:"txn-chunk-writer-concurrency" json:"txn-chunk-writer-concurrency"`
+	// TxnChunkMaxSize is the maximum size of a txn chunk of file-based txn.
+	TxnChunkMaxSize uint64 `toml:"txn-chunk-max-size" json:"txn-chunk-max-size"`
+	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
+	TxnFileMinMutationSize uint64 `toml:"txn-file-min-mutation-size" json:"txn-file-min-mutation-size"`
+	// TxnFileRUDiscountRatio is the discount ratio of resource unit for file-based txn.
+	// Will be ignored if it's <= 0 or >= 1.
+	TxnFileRUDiscountRatio float64 `toml:"txn-file-ru-discount-ratio" json:"txn-file-ru-discount-ratio"`
+	// TxnFileRequestSourceWhitelist is the whitelist of request source types (RequestSource.RequestSourceType) that can use file-based txn.
+	// For internal requests only. External requests can always use file-based txn.
+	TxnFileRequestSourceWhitelist []string `toml:"txn-file-request-source-whitelist" json:"txn-file-request-source-whitelist"`
 }
 
 // RUV2TiKVConfig is the configuration for RU v2 TiKV-side weight calculation.
@@ -232,6 +247,12 @@ func DefaultTiKVClient() TiKVClient {
 		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
 		EnableReplicaSelectorV2:    true,
 		RUV2:                       DefaultRUV2TiKVConfig(),
+
+		TxnChunkWriterConcurrency:     4,
+		TxnChunkMaxSize:               128 * 1024 * 1024,
+		TxnFileMinMutationSize:        16 * 1024 * 1024,
+		TxnFileRUDiscountRatio:        0.125, // filed-based txn costs 1/8 RU of normal txn.
+		TxnFileRequestSourceWhitelist: []string{},
 	}
 }
 

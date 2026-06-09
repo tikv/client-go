@@ -208,6 +208,7 @@ type Lock struct {
 	UseAsyncCommit  bool
 	LockForUpdateTS uint64
 	MinCommitTS     uint64
+	IsTxnFile       bool
 }
 
 func (l *Lock) IsPessimistic() bool {
@@ -242,6 +243,7 @@ func NewLock(l *kvrpcpb.LockInfo) *Lock {
 		UseAsyncCommit:  l.UseAsyncCommit,
 		LockForUpdateTS: l.LockForUpdateTs,
 		MinCommitTS:     l.MinCommitTs,
+		IsTxnFile:       l.IsTxnFile,
 	}
 }
 
@@ -296,6 +298,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	expiredLocks := locks
 
 	txnInfos := make(map[uint64]uint64)
+	txnFileIDs := make(map[uint64]bool)
 	startTime := time.Now()
 	for _, l := range expiredLocks {
 		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
@@ -357,6 +360,9 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		}
 
 		txnInfos[l.TxnID] = status.commitTS
+		if l.IsTxnFile {
+			txnFileIDs[l.TxnID] = true
+		}
 	}
 	logutil.BgLogger().Info("BatchResolveLocks: lookup txn status",
 		zap.Duration("cost time", time.Since(startTime)),
@@ -365,8 +371,9 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	listTxnInfos := make([]*kvrpcpb.TxnInfo, 0, len(txnInfos))
 	for txnID, status := range txnInfos {
 		listTxnInfos = append(listTxnInfos, &kvrpcpb.TxnInfo{
-			Txn:    txnID,
-			Status: status,
+			Txn:       txnID,
+			Status:    status,
+			IsTxnFile: txnFileIDs[txnID],
 		})
 	}
 
@@ -1008,6 +1015,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	var status TxnStatus
 
 	resolvingPessimisticLock := lockInfo != nil && lockInfo.IsPessimistic()
+	isTxnFile := lockInfo != nil && lockInfo.IsTxnFile
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
 		LockTs:                   txnID,
@@ -1017,6 +1025,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
 		VerifyIsPrimary:          true,
+		IsTxnFile:                isTxnFile,
 	}, kvrpcpb.Context{
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -1460,6 +1469,7 @@ func (lr *LockResolver) batchLiteResolveLocks(bo *retry.Backoffer, l *Lock, keys
 func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region locate.RegionVerID, keys [][]byte, status TxnStatus) error {
 	lreq := &kvrpcpb.ResolveLockRequest{
 		StartVersion: l.TxnID,
+		IsTxnFile:    l.IsTxnFile,
 	}
 	if status.IsCommitted() {
 		lreq.CommitVersion = status.CommitTS()
@@ -1560,6 +1570,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
+			IsTxnFile:    l.IsTxnFile,
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()

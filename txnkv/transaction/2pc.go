@@ -40,6 +40,7 @@ import (
 	errors2 "errors"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,6 +204,8 @@ type twoPhaseCommitter struct {
 		primaryOp                    kvrpcpb.Op
 		pipelinedStart, pipelinedEnd []byte
 	}
+
+	txnFileCtx txnFileCtx
 }
 
 type memBufferMutations struct {
@@ -335,6 +338,38 @@ type CommitterMutations interface {
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
 	NeedConstraintCheckInPrewrite(i int) bool
+}
+
+func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte /* firstDataKey */, bool) {
+	isInRange := func(pos int) bool {
+		return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
+	}
+	isOpForWrite := func(op kvrpcpb.Op) bool {
+		return op != kvrpcpb.Op_CheckNotExists &&
+			op != kvrpcpb.Op_Lock &&
+			op != kvrpcpb.Op_PessimisticLock
+	}
+
+	pos := sort.Search(mutations.Len(), func(i int) bool {
+		return bytes.Compare(mutations.GetKey(i), start) >= 0
+	})
+	if isInRange(pos) {
+		var firstDataKey []byte
+		for {
+			// Always return primary key if it's in the range.
+			if pos == 0 || isOpForWrite(mutations.GetOp(pos)) {
+				firstDataKey = mutations.GetKey(pos)
+				break
+			}
+
+			pos++
+			if !isInRange(pos) {
+				break
+			}
+		}
+		return firstDataKey, true
+	}
+	return nil, false
 }
 
 // PlainMutations contains transaction operations.
@@ -780,6 +815,9 @@ func (c *twoPhaseCommitter) primary() []byte {
 	if len(c.primaryKey) == 0 {
 		if c.mutations != nil {
 			return c.mutations.GetKey(0)
+		}
+		if c.txnFileCtx.slice.Len() > 0 {
+			return c.txnFileCtx.slice.chunkRanges[0].smallest
 		}
 		return nil
 	}
@@ -1370,7 +1408,7 @@ func keepAlive(
 			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(
-				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTSMgr.get(),
+				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTSMgr.get(), c.txnFileCtx.slice.Len() > 0,
 			)
 			if err != nil {
 				keepFail++
@@ -1509,12 +1547,14 @@ func sendTxnHeartBeat(
 	primary []byte,
 	startTS, ttl uint64,
 	minCommitTS uint64,
+	isTxnFile bool,
 ) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
 		AdviseLockTtl: ttl,
 		MinCommitTs:   minCommitTS,
+		IsTxnFile:     isTxnFile,
 	})
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)
