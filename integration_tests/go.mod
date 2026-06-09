@@ -7,7 +7,11 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20260310054046-9c8b3586e4b2
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
+<<<<<<< HEAD
 	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
+=======
+	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
+>>>>>>> f2ffb0f8 (tikvrpc: add default request origin (#1975))
 	github.com/pingcap/tidb v1.1.0-beta.0.20260317213042-b1525070ca3e
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0

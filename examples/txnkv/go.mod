@@ -3,7 +3,11 @@ module txnkv
 go 1.25.8
 
 require (
+<<<<<<< HEAD
 	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
+=======
+	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
+>>>>>>> f2ffb0f8 (tikvrpc: add default request origin (#1975))
 	github.com/tikv/client-go/v2 v2.0.0
 )
 
