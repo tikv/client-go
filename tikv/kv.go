@@ -66,7 +66,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/intest"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/gc"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -368,10 +367,8 @@ func NewKVStore(
 	}()
 
 	txnSafePoint, err := store.loadTxnSafePoint(context.Background())
-	if intest.InTest {
-		if uuid == "TestErrorHalfwayInNewKVStore" {
-			err = errors.New("mock error for TestErrorHalfwayInNewKVStore")
-		}
+	if _, e := util.EvalFailpoint("mockErrorHalfwayInNewKVStore"); e == nil {
+		err = errors.New("mock error for TestErrorHalfwayInNewKVStore")
 	}
 	if err != nil {
 		return nil, errors.WithStack(err)

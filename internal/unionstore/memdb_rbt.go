@@ -112,8 +112,12 @@ func (db *rbtDBWithContext) Release(handle int) {
 	db.RBT.Release(handle)
 }
 
-func (db *rbtDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.RBT.Get(k)
+func (db *rbtDBWithContext) Get(_ context.Context, k []byte, _ ...kv.GetOption) (kv.ValueEntry, error) {
+	val, err := db.RBT.Get(k)
+	if err != nil {
+		return kv.ValueEntry{}, err
+	}
+	return kv.NewValueEntry(val, 0), nil
 }
 
 func (db *rbtDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
@@ -130,11 +134,11 @@ func (db *rbtDBWithContext) GetMemDB() *MemDB {
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.
-func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte, _ ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
 	if db.Len() == 0 {
-		return map[string][]byte{}, nil
+		return map[string]kv.ValueEntry{}, nil
 	}
-	m := make(map[string][]byte, len(keys))
+	m := make(map[string]kv.ValueEntry, len(keys))
 	for _, k := range keys {
 		v, err := db.Get(ctx, k)
 		if err != nil {
@@ -198,7 +202,7 @@ func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *rbtDBWithContext) SnapshotGetter() Getter {
+func (db *rbtDBWithContext) SnapshotGetter() kv.Getter {
 	return db.RBT.GetSnapshot()
 }
 

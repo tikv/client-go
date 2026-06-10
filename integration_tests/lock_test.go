@@ -557,10 +557,10 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	// transaction 2 is committed
 	v, err := txn.Get(context.Background(), []byte("k3"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v3")))
+	s.True(bytes.Equal(v.Value, []byte("v3")))
 	v, err = txn.Get(context.Background(), []byte("k4"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v4")))
+	s.True(bytes.Equal(v.Value, []byte("v4")))
 }
 
 func (s *testLockSuite) TestNewLockZeroTTL() {

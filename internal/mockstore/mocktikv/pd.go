@@ -93,7 +93,8 @@ type pdClient struct {
 	// txn safe point set by `AdvanceTxnSafePoint`.
 	txnSafePoint uint64
 	// Represents the GC barriers for blocking GC from advancing.
-	gcBarriers map[string]uint64
+	gcBarriers       map[string]uint64
+	globalGCBarriers map[string]uint64
 	// As there are still usages of SafePointKV, the txn safe point will still be put in the SavePointKV.
 	gcStatesMu sync.Mutex
 
@@ -108,9 +109,10 @@ type pdClient struct {
 // from a Cluster.
 func NewPDClient(cluster *Cluster, ops ...MockPDOption) *pdClient {
 	mockCli := &pdClient{
-		cluster:    cluster,
-		gcBarriers: make(map[string]uint64),
-		groups:     make(map[string]*rmpb.ResourceGroup),
+		cluster:          cluster,
+		gcBarriers:       make(map[string]uint64),
+		globalGCBarriers: make(map[string]uint64),
+		groups:           make(map[string]*rmpb.ResourceGroup),
 	}
 
 	mockCli.groups[defaultResourceGroupName] = &rmpb.ResourceGroup{
@@ -302,7 +304,7 @@ func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyR
 	return regions, nil
 }
 
-func (c *pdClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (c *pdClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -536,6 +538,15 @@ func (c gcInternalController) AdvanceTxnSafePoint(ctx context.Context, target ui
 			minGCBarrierTS = ts
 		}
 	}
+	for name, ts := range c.inner.globalGCBarriers {
+		if ts == 0 {
+			panic("found 0 in barrier ts of global GC barriers")
+		}
+		if ts < minGCBarrierTS || minGCBarrierTS == 0 {
+			minGCBarrierName = name
+			minGCBarrierTS = ts
+		}
+	}
 
 	if minGCBarrierTS != 0 && minGCBarrierTS < res.NewTxnSafePoint {
 		res.NewTxnSafePoint = minGCBarrierTS
@@ -638,27 +649,89 @@ func (c gcStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (
 	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime), nil
 }
 
-func (c gcStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	if c.keyspaceID != constants.NullKeyspaceID {
-		panic("unimplemented")
-	}
-
+func (c gcStatesClient) SetGlobalGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GlobalGCBarrierInfo, error) {
 	startTime := time.Now()
 
 	c.inner.gcStatesMu.Lock()
 	defer c.inner.gcStatesMu.Unlock()
 
-	res := pdgc.GCState{
-		KeyspaceID:   c.keyspaceID,
-		TxnSafePoint: c.inner.txnSafePoint,
-		GCSafePoint:  c.inner.gcSafePoint,
+	if barrierTS == 0 || barrierID == "" || ttl <= 0 {
+		return nil, errors.New("invalid arguments")
+	}
+
+	if barrierTS < c.inner.txnSafePoint {
+		return nil, errors.Errorf("trying to set a global GC barrier on ts %d which is already behind the txn safe point %d", barrierTS, c.inner.txnSafePoint)
+	}
+
+	res := pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime)
+	c.inner.globalGCBarriers[barrierID] = barrierTS
+	return res, nil
+}
+
+func (c gcStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrierID string) (*pdgc.GlobalGCBarrierInfo, error) {
+	startTime := time.Now()
+
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
+
+	barrierTS, exists := c.inner.globalGCBarriers[barrierID]
+	if !exists {
+		return nil, nil
+	}
+
+	delete(c.inner.globalGCBarriers, barrierID)
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime), nil
+}
+
+func (c gcStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
+		panic("unimplemented")
+	}
+
+	startTime := time.Now()
+	options := pdgc.DefaultGCStatesAPIOptions()
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
+
+	return c.buildGCStateLocked(startTime, options.ExcludeGCBarriers), nil
+}
+
+func (c gcStatesClient) GetAllKeyspacesGCStates(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.ClusterGCStates, error) {
+	startTime := time.Now()
+	options := pdgc.DefaultGCStatesAPIOptions()
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
+
+	gcStates := map[uint32]pdgc.GCState{
+		constants.NullKeyspaceID: c.buildGCStateLocked(startTime, options.ExcludeGCBarriers),
+	}
+	if options.ExcludeGlobalGCBarriers {
+		return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(gcStates), nil
+	}
+
+	globalGCBarriers := make([]*pdgc.GlobalGCBarrierInfo, 0, len(c.inner.globalGCBarriers))
+	for barrierID, barrierTS := range c.inner.globalGCBarriers {
+		globalGCBarriers = append(globalGCBarriers, pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime))
+	}
+	return pdgc.NewClusterGCStatesWithGlobalGCBarriers(gcStates, globalGCBarriers), nil
+}
+
+func (c gcStatesClient) buildGCStateLocked(startTime time.Time, excludeGCBarriers bool) pdgc.GCState {
+	if excludeGCBarriers {
+		return pdgc.NewGCStateWithoutGCBarriers(c.keyspaceID, c.inner.txnSafePoint, c.inner.gcSafePoint)
 	}
 
 	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(c.inner.gcBarriers))
 	for barrierID, barrierTS := range c.inner.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime))
 	}
-	res.GCBarriers = gcBarriers
-
-	return res, nil
+	return pdgc.NewGCStateWithGCBarriers(c.keyspaceID, c.inner.txnSafePoint, c.inner.gcSafePoint, gcBarriers)
 }

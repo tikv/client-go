@@ -130,6 +130,44 @@ func (ed *TiKVExecDetails) String() string {
 	return buf.String()
 }
 
+func cloneRUV2(ru *kvrpcpb.RUV2) *kvrpcpb.RUV2 {
+	if ru == nil {
+		return nil
+	}
+	cloned := *ru
+	if ru.ExecutorInputs != nil {
+		execInputs := *ru.ExecutorInputs
+		cloned.ExecutorInputs = &execInputs
+	}
+	return &cloned
+}
+
+func mergeRUV2(dst, src *kvrpcpb.RUV2) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.KvEngineCacheMiss += src.KvEngineCacheMiss
+	dst.CoprocessorExecutorIterations += src.CoprocessorExecutorIterations
+	dst.CoprocessorResponseBytes += src.CoprocessorResponseBytes
+	dst.RaftstoreStoreWriteTriggerWbBytes += src.RaftstoreStoreWriteTriggerWbBytes
+	dst.StorageProcessedKeysBatchGet += src.StorageProcessedKeysBatchGet
+	dst.StorageProcessedKeysGet += src.StorageProcessedKeysGet
+	dst.ReadRpcCount += src.ReadRpcCount
+	dst.WriteRpcCount += src.WriteRpcCount
+	if src.ExecutorInputs != nil {
+		if dst.ExecutorInputs == nil {
+			dst.ExecutorInputs = &kvrpcpb.ExecutorInputs{}
+		}
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTableScan
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTopN += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchTopN
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchLimit += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchLimit
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSimpleAggr
+		dst.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr += src.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchFastHashAggr
+	}
+}
+
 // ReqDetailInfo contains diagnose information about `TiKVExecDetails`, region, store and backoff.
 type ReqDetailInfo struct {
 	ReqTotalTime time.Duration
@@ -783,6 +821,15 @@ type RUDetails struct {
 	readRU         *uatomic.Float64
 	writeRU        *uatomic.Float64
 	ruWaitDuration *uatomic.Duration
+	// tiflashRU stores RRU+WRU of Tiflash.
+	tiflashRU *uatomic.Float64
+	// tikvRUV2 stores TiKV RU v2 value in scaled units.
+	tikvRUV2 *uatomic.Float64
+	// rawRUV2Mu protects rawRUV2, which accumulates raw TiKV RU v2 counters
+	// for TiDB to drain incrementally into statement-level RUV2 metrics.
+	rawRUV2Mu sync.Mutex
+	// rawRUV2 stores pending raw TiKV RU v2 counters since the last DrainRUV2 call.
+	rawRUV2 *kvrpcpb.RUV2
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -791,6 +838,8 @@ func NewRUDetails() *RUDetails {
 		readRU:         uatomic.NewFloat64(0),
 		writeRU:        uatomic.NewFloat64(0),
 		ruWaitDuration: uatomic.NewDuration(0),
+		tiflashRU:      uatomic.NewFloat64(0),
+		tikvRUV2:       uatomic.NewFloat64(0),
 	}
 }
 
@@ -801,16 +850,24 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 		readRU:         uatomic.NewFloat64(rru),
 		writeRU:        uatomic.NewFloat64(wru),
 		ruWaitDuration: uatomic.NewDuration(waitDur),
+		tiflashRU:      uatomic.NewFloat64(0),
+		tikvRUV2:       uatomic.NewFloat64(0),
 	}
 }
 
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
-	return &RUDetails{
+	cloned := &RUDetails{
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
+		tiflashRU:      uatomic.NewFloat64(rd.tiflashRU.Load()),
+		tikvRUV2:       uatomic.NewFloat64(rd.tikvRUV2.Load()),
 	}
+	rd.rawRUV2Mu.Lock()
+	cloned.rawRUV2 = cloneRUV2(rd.rawRUV2)
+	rd.rawRUV2Mu.Unlock()
+	return cloned
 }
 
 // Merge implements the RuntimeStats interface.
@@ -818,6 +875,9 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.readRU.Add(other.readRU.Load())
 	rd.writeRU.Add(other.writeRU.Load())
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
+	rd.tiflashRU.Add(other.tiflashRU.Load())
+	rd.tikvRUV2.Add(other.tikvRUV2.Load())
+	rd.AddRUV2(other.getRawRUV2())
 }
 
 // String implements fmt.Stringer interface.
@@ -840,6 +900,59 @@ func (rd *RUDetails) RUWaitDuration() time.Duration {
 	return rd.ruWaitDuration.Load()
 }
 
+// TiflashRU returns the Tiflash RU (RRU+WRU) accumulated in the client.
+func (rd *RUDetails) TiflashRU() float64 {
+	return rd.tiflashRU.Load()
+}
+
+// TiKVRUV2 returns the TiKV RU v2 value accumulated in the client.
+func (rd *RUDetails) TiKVRUV2() float64 {
+	return rd.tikvRUV2.Load()
+}
+
+// AddTiKVRUV2 adds a delta (scaled) to the accumulated TiKV RU v2 value.
+func (rd *RUDetails) AddTiKVRUV2(delta float64) {
+	if rd == nil || delta == 0 {
+		return
+	}
+	rd.tikvRUV2.Add(delta)
+}
+
+func (rd *RUDetails) getRawRUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	return cloneRUV2(rd.rawRUV2)
+}
+
+// AddRUV2 accumulates raw TiKV RU v2 counters in RUDetails.
+func (rd *RUDetails) AddRUV2(delta *kvrpcpb.RUV2) {
+	if rd == nil || delta == nil {
+		return
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	if rd.rawRUV2 == nil {
+		rd.rawRUV2 = cloneRUV2(delta)
+		return
+	}
+	mergeRUV2(rd.rawRUV2, delta)
+}
+
+// DrainRUV2 returns the accumulated raw TiKV RU v2 counters and clears them.
+func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
+	if rd == nil {
+		return nil
+	}
+	rd.rawRUV2Mu.Lock()
+	defer rd.rawRUV2Mu.Unlock()
+	drained := cloneRUV2(rd.rawRUV2)
+	rd.rawRUV2 = nil
+	return drained
+}
+
 // Update updates the RU runtime stats with the given consumption info.
 func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
 	if rd == nil || consumption == nil {
@@ -848,4 +961,14 @@ func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Dur
 	rd.readRU.Add(consumption.RRU)
 	rd.writeRU.Add(consumption.WRU)
 	rd.ruWaitDuration.Add(waitDuration)
+}
+
+// UpdateTiFlash updates the Tiflash RU (RRU+WRU) with the given consumption info.
+func (rd *RUDetails) UpdateTiFlash(consumption *rmpb.Consumption) {
+	if rd == nil || consumption == nil {
+		return
+	}
+	rd.readRU.Add(consumption.RRU)
+	rd.writeRU.Add(consumption.WRU)
+	rd.tiflashRU.Add(consumption.RRU + consumption.WRU)
 }

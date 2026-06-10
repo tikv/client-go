@@ -647,6 +647,9 @@ func (s *mockTikvGrpcServer) PhysicalScanLock(context.Context, *kvrpcpb.Physical
 func (s *mockTikvGrpcServer) Coprocessor(context.Context, *coprocessor.Request) (*coprocessor.Response, error) {
 	return nil, errors.New("unreachable")
 }
+func (s *mockTikvGrpcServer) GetEstimateTiCICount(context.Context, *coprocessor.TiCIEstimateCountRequest) (*coprocessor.TiCIEstimateCountResponse, error) {
+	return nil, errors.New("unreachable")
+}
 func (s *mockTikvGrpcServer) BatchCoprocessor(*coprocessor.BatchRequest, tikvpb.Tikv_BatchCoprocessorServer) error {
 	return errors.New("unreachable")
 }

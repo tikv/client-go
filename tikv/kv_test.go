@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
@@ -277,6 +278,10 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 
 func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
 	// this is a leak test, TestMain will check goroutine leak
+	require.NoError(s.T(), failpoint.Enable("tikvclient/mockErrorHalfwayInNewKVStore", "return"))
+	defer func() {
+		require.NoError(s.T(), failpoint.Disable("tikvclient/mockErrorHalfwayInNewKVStore"))
+	}()
 	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
 	require.Error(s.T(), err)
 }
