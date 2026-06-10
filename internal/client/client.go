@@ -73,6 +73,7 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/mem"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -265,6 +266,7 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	//nolint:staticcheck
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -318,6 +320,10 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
 
+		// grpc-go v1.66 switched the default proto codec to CodecV2. Keep the old
+		// codec behavior until tipb/kvproto no longer rely on sharedBytes ownership.
+		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
+
 		opts = append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
@@ -339,8 +345,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
+		if !cfg.TiKVClient.GrpcSharedBufferPool {
+			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
