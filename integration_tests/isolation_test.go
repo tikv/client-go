@@ -122,7 +122,7 @@ func (s *testIsolationSuite) GetWithRetry(k []byte) readRecord {
 		if err == nil {
 			return readRecord{
 				startTS: txn.StartTS(),
-				value:   val,
+				value:   val.Value,
 			}
 		}
 		var e *kverr.ErrRetryable

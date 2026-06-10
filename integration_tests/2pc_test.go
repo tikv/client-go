@@ -126,7 +126,7 @@ func (s *testCommitterSuite) checkValues(m map[string]string) {
 	for k, v := range m {
 		val, err := txn.Get(context.TODO(), []byte(k))
 		s.Nil(err)
-		s.Equal(string(val), v)
+		s.Equal(string(val.Value), v)
 	}
 }
 
@@ -669,7 +669,7 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 	s.Nil(err)
 	val, err := txn2.Get(bo.GetCtx(), []byte("x"))
 	s.Nil(err)
-	s.True(bytes.Equal(val, []byte("v")))
+	s.True(bytes.Equal(val.Value, []byte("v")))
 }
 
 func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
@@ -1769,7 +1769,7 @@ func (s *testCommitterSuite) TestDeleteYourWriteCauseGhostPrimary() {
 	s.store.ClearTxnLatches()
 	v, err := txn2.Get(context.Background(), k3)
 	s.Nil(err) // should resolve lock and read txn1 k3 result instead of rollback it.
-	s.Equal(v[0], byte(2))
+	s.Equal(v.Value[0], byte(2))
 	bk <- struct{}{}
 	txn1Done.Wait()
 }
@@ -2547,10 +2547,10 @@ func (s *testCommitterSuite) TestFailCommitTimeout() {
 	txn2 := s.begin()
 	value, err := txn2.Get(context.TODO(), []byte("a"))
 	s.Nil(err)
-	s.Greater(len(value), 0)
+	s.Greater(len(value.Value), 0)
 	_, err = txn2.Get(context.TODO(), []byte("b"))
 	s.Nil(err)
-	s.Greater(len(value), 0)
+	s.Greater(len(value.Value), 0)
 }
 
 // TestCommitMultipleRegions tests commit multiple regions.

@@ -319,14 +319,14 @@ func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.
 	return c.client.BatchScanRegions(ctx, keyRanges, limit, opts...)
 }
 
-func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*metapb.Store, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, errors.WithStack(errStopped)
 	}
-	return c.client.GetStore(ctx, storeID)
+	return c.client.GetStore(ctx, storeID, opts...)
 }
 
 func (c *mockPDClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {

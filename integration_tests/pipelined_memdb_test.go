@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -62,7 +63,7 @@ func (s *testPipelinedMemDBSuite) SetupTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("", nil, nil)
+	client, pdClient, cluster, err := unistore.New("", nil, 0, nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)
@@ -118,7 +119,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 		// txn can always read its own writes
 		val, err := txn.Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(value, val))
+		s.True(bytes.Equal(value, val.Value))
 		// txn1 cannot see it
 		_, err = txn1.Get(ctx, key)
 		s.True(tikverr.IsErrNotFound(err))
@@ -135,7 +136,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 		expect := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
 		val, err := txn1.Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(expect, val))
+		s.True(bytes.Equal(expect, val.Value))
 	}
 }
 
@@ -156,7 +157,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 		expect := key
 		val, err := txn.GetMemBuffer().Get(ctx, key)
 		s.Nil(err)
-		s.True(bytes.Equal(val, expect))
+		s.True(bytes.Equal(val.Value, expect))
 	}
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	s.Nil(txn.Rollback())
@@ -309,7 +310,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 		txn, err := s.store.Begin(tikv.WithStartTS(startTS), tikv.WithDefaultPipelinedTxn())
 		s.Nil(err)
 		defer func() { s.Nil(txn.Rollback()) }()
-		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier)
+		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier, kv.BatchGetOptions{})
 		s.Nil(err)
 		return len(storageBufferedValues) == 0
 	}, 10*time.Second, 10*time.Millisecond, "rollback should cleanup locks in time")
@@ -339,7 +340,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 				panic("should not read remote buffer")
 			}
 		})
-		return txn.GetMemBuffer().Get(ctx, key)
+		entry, err := txn.GetMemBuffer().Get(ctx, key)
+		return entry.Value, err
 	}
 
 	prefetchKeys := make([][]byte, 0, 100)

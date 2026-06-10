@@ -224,7 +224,7 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 	if err != nil {
 		println(err.Error())
 	} else {
-		println(hex.EncodeToString(r))
+		println(hex.EncodeToString(r.Value))
 	}
 	s.True(tikverr.IsErrNotFound(err))
 

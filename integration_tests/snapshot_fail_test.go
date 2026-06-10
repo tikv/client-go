@@ -171,7 +171,7 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 		s.Require().Nil(failpoint.Enable("tikvclient/beforeSendPointGet", "1*off->pause"))
 		res, err := snapshot.Get(context.Background(), []byte("k2"))
 		s.Nil(err)
-		getCh <- res
+		getCh <- res.Value
 	}()
 	// The get should be blocked by the failpoint. But the lock should have been resolved.
 	select {

@@ -34,10 +34,13 @@
 
 package tikv
 
-import "github.com/tikv/client-go/v2/internal/unionstore"
+import (
+	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/kv"
+)
 
 // Getter is the interface for the Get method.
-type Getter = unionstore.Getter
+type Getter = kv.Getter
 
 // Iterator is the interface for a iterator on KV store.
 type Iterator = unionstore.Iterator
