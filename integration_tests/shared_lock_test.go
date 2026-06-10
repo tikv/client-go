@@ -454,7 +454,7 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	snapshot := s.store.GetSnapshot(txn2.CommitTS())
 	v, err := snapshot.Get(context.Background(), key)
 	s.Nil(err)
-	s.Equal(value, v.Value)
+	s.Equal(value, v)
 
 	// Step 6: Verify the shared lock is gone
 	locks = s.scanLocks(key, s.getTS())
