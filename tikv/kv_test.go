@@ -32,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/intest"
 	pdhttp "github.com/tikv/pd/client/http"
 )
 
@@ -277,6 +278,9 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 }
 
 func (s *testKVSuite) TestErrorHalfwayInNewKVStore() {
+	if !intest.InTest {
+		s.T().Skip("requires intest error injection")
+	}
 	// this is a leak test, TestMain will check goroutine leak
 	_, err := NewKVStore("TestErrorHalfwayInNewKVStore", s.store.pdClient, NewMockSafePointKV(), &mocktikv.RPCClient{})
 	require.Error(s.T(), err)

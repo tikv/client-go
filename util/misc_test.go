@@ -101,7 +101,7 @@ func TestTimeDetail(t *testing.T) {
 		KvGrpcWaitTime:    time.Millisecond * 7,
 		TotalRPCWallTime:  time.Millisecond * 8,
 	}
-	assert.Equal(t, "time_detail: {total_process_time: 2ms, total_suspend_time: 3ms, total_wait_time: 4ms, total_kv_read_wall_time: 5ms, tikv_wall_time: 6ms}", detail.String())
+	assert.Equal(t, "time_detail: {total_process_time: 2ms, total_suspend_time: 3ms, total_wait_time: 4ms, total_kv_read_wall_time: 5ms, tikv_grpc_process_time: 6ms, tikv_grpc_wait_time: 7ms, tikv_wall_time: 8ms}", detail.String())
 }
 
 func TestGetMaxStartKey(t *testing.T) {

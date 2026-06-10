@@ -61,11 +61,11 @@ type Variables struct {
 // NewVariables create a new Variables instance with default values.
 func NewVariables(killed *uint32) *Variables {
 	return &Variables{
-		BackoffLockFast:         DefBackoffLockFast,
-		BackOffWeight:           DefBackOffWeight,
-		Killed:                  killed,
-		DisableTxnFile:          false,
-		TxnFileMinMutationSize:  0,
+		BackoffLockFast:        DefBackoffLockFast,
+		BackOffWeight:          DefBackOffWeight,
+		Killed:                 killed,
+		DisableTxnFile:         false,
+		TxnFileMinMutationSize: 0,
 	}
 }
 

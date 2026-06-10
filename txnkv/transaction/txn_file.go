@@ -80,7 +80,7 @@ type chunkBatch struct {
 
 func (b chunkBatch) String() string {
 	return fmt.Sprintf("chunkBatch{region: %d, isPrimary: %t, txnChunkSlice: %v}",
-		b.region.Region.GetID(), b.isPrimary, b.txnChunkSlice.chunkIDs)
+		b.region.Region.GetID(), b.isPrimary, b.chunkIDs)
 }
 
 func (b *chunkBatch) getSampleKeys() [][]byte {
@@ -96,6 +96,12 @@ func (b *chunkBatch) getBatchTxnSize() uint64 {
 		batchTxnSize += ran.entries
 	}
 	return batchTxnSize
+}
+
+func markTxnFileRetryRequest(req *tikvrpc.Request, bo *retry.Backoffer) {
+	if bo.GetTotalSleep() > 0 {
+		req.IsRetryRequest = true
+	}
 }
 
 // txnChunkSlice should be sorted by txnChunkRange.smallest and no overlapping.
@@ -307,6 +313,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
 
@@ -463,6 +470,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	for {
 		resp, _, err := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutMedium)
@@ -552,6 +560,7 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	resp, _, err1 := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutShort)
 	if err1 != nil {

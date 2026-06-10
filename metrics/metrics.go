@@ -138,7 +138,6 @@ var (
 	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
 	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 
-
 	TiKVTxnFileRequestCounter        *prometheus.CounterVec
 	TiKVTxnFileWriteBytes            *prometheus.CounterVec
 	TiKVTxnFileMutationSizeHistogram *prometheus.HistogramVec
@@ -1061,7 +1060,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
-			TiKVTxnFileRequestCounter = prometheus.NewCounterVec(
+	TiKVTxnFileRequestCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,

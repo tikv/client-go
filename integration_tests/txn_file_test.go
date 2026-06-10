@@ -206,16 +206,16 @@ func TestTxnFilePrewriteTxnSizeAfterRegionRegroup(t *testing.T) {
 	var mu sync.Mutex
 	var captured []capturedPrewrite
 
-	hook := func(req *tikvrpc.Request, resp *tikvrpc.Response, sendErr error) {
+	hook := func(req *tikvrpc.Request, resp *tikvrpc.Response, sendErr error) (*tikvrpc.Response, error) {
 		if req.Type != tikvrpc.CmdPrewrite {
-			return
+			return resp, sendErr
 		}
 		inner, ok := req.Req.(*kvrpcpb.PrewriteRequest)
 		if !ok || len(inner.TxnFileChunks) == 0 {
-			return
+			return resp, sendErr
 		}
 		if sendErr != nil {
-			return
+			return resp, sendErr
 		}
 		chunks := make([]uint64, len(inner.TxnFileChunks))
 		copy(chunks, inner.TxnFileChunks)
@@ -229,19 +229,20 @@ func TestTxnFilePrewriteTxnSizeAfterRegionRegroup(t *testing.T) {
 		captured = append(captured, capturedPrewrite{
 			txnFileChunks: chunks,
 			txnSize:       inner.TxnSize,
-			isRetry:       req.Context.IsRetryRequest,
+			isRetry:       req.IsRetryRequest || req.Context.IsRetryRequest,
 			regionErr:     regionErr,
 		})
 		mu.Unlock()
+		return resp, sendErr
 	}
 
 	require.Nil(failpoint.Enable("tikvclient/mockRetrySendReqToRegion", "1*return(true)->return(false)"))
 	defer failpoint.Disable("tikvclient/mockRetrySendReqToRegion")
 	require.Nil(failpoint.Enable("tikvclient/invalidCacheAndRetry", "1*off->pause"))
 	defer failpoint.Disable("tikvclient/invalidCacheAndRetry")
-	require.Nil(failpoint.Enable("tikvclient/afterSendReqToRegion", "return"))
-	defer failpoint.Disable("tikvclient/afterSendReqToRegion")
-	ctx := context.WithValue(context.Background(), "sendReqToRegionFinishHook", hook)
+	require.Nil(failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
+	defer failpoint.Disable("tikvclient/onRPCFinishedHook")
+	ctx := context.WithValue(context.Background(), "onRPCFinishedHook", hook)
 
 	tx, err := store.Begin()
 	require.Nil(err)
