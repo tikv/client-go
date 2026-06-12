@@ -342,6 +342,9 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			resolveData, err := lr.checkAllSecondaries(bo, l, &status)
 			if err == nil {
 				txnInfos[l.TxnID] = resolveData.commitTs
+				if l.IsTxnFile {
+					txnFileIDs[l.TxnID] = true
+				}
 				continue
 			}
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {

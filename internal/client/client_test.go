@@ -227,13 +227,14 @@ func (c *chanClient) SendRequestAsync(ctx context.Context, addr string, req *tik
 }
 
 func TestCollapseResolveLock(t *testing.T) {
-	buildResolveLockReq := func(regionID uint64, startTS uint64, commitTS uint64, keys [][]byte, isAsync bool) *tikvrpc.Request {
+	buildResolveLockReq := func(regionID uint64, startTS uint64, commitTS uint64, keys [][]byte, isAsync bool, isTxnFile bool) *tikvrpc.Request {
 		region := &metapb.Region{Id: regionID}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{
 			StartVersion:  startTS,
 			CommitVersion: commitTS,
 			Keys:          keys,
 			IsAsync:       isAsync,
+			IsTxnFile:     isTxnFile,
 		})
 		tikvrpc.SetContextNoAttach(req, region, nil)
 		return req
@@ -253,7 +254,7 @@ func TestCollapseResolveLock(t *testing.T) {
 	ctx := context.Background()
 
 	// Collapse ResolveLock.
-	resolveLockReq := buildResolveLockReq(1, 10, 20, nil, false)
+	resolveLockReq := buildResolveLockReq(1, 10, 20, nil, false, false)
 	wg.Add(1)
 	go client.SendRequest(ctx, "", resolveLockReq, time.Second)
 	go client.SendRequest(ctx, "", resolveLockReq, time.Second)
@@ -268,7 +269,7 @@ func TestCollapseResolveLock(t *testing.T) {
 	}
 
 	// Collapse async ResolveLock separately.
-	asyncResolveLockReq := buildResolveLockReq(1, 10, 20, nil, true)
+	asyncResolveLockReq := buildResolveLockReq(1, 10, 20, nil, true, false)
 	wg.Add(1)
 	go client.SendRequest(ctx, "", asyncResolveLockReq, time.Second)
 	go client.SendRequest(ctx, "", asyncResolveLockReq, time.Second)
@@ -292,8 +293,21 @@ func TestCollapseResolveLock(t *testing.T) {
 		<-reqCh
 	}
 
+	// Don't collapse regular ResolveLock with txn-file ResolveLock.
+	txnFileResolveLockReq := buildResolveLockReq(1, 10, 20, nil, false, true)
+	require.NotEqual(t, resolveLockCollapseKey(resolveLockReq), resolveLockCollapseKey(txnFileResolveLockReq))
+	require.Equal(t, resolveLockCollapseKey(resolveLockReq)+"-f", resolveLockCollapseKey(txnFileResolveLockReq))
+	wg.Add(1)
+	go client.SendRequest(ctx, "", resolveLockReq, time.Second)
+	go client.SendRequest(ctx, "", txnFileResolveLockReq, time.Second)
+	time.Sleep(300 * time.Millisecond)
+	wg.Done()
+	for i := 0; i < 2; i++ {
+		<-reqCh
+	}
+
 	// Don't collapse ResolveLockLite.
-	resolveLockLiteReq := buildResolveLockReq(1, 10, 20, [][]byte{[]byte("foo")}, false)
+	resolveLockLiteReq := buildResolveLockReq(1, 10, 20, [][]byte{[]byte("foo")}, false, false)
 	wg.Add(1)
 	go client.SendRequest(ctx, "", resolveLockLiteReq, time.Second)
 	go client.SendRequest(ctx, "", resolveLockLiteReq, time.Second)
