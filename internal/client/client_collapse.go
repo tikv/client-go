@@ -129,14 +129,11 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 }
 
 func resolveLockCollapseKey(req *tikvrpc.Request) string {
+	// IsTxnFile is implied by StartVersion, so it does not need to be part of the collapse key.
 	resolveLock := req.ResolveLock()
-	key := strconv.FormatUint(req.RegionId, 10) + "-" +
+	return strconv.FormatUint(req.RegionId, 10) + "-" +
 		strconv.FormatUint(resolveLock.StartVersion, 10) + "-" +
 		strconv.FormatBool(resolveLock.GetIsAsync())
-	if resolveLock.GetIsTxnFile() {
-		key += "-f"
-	}
-	return key
 }
 
 func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.Group,
