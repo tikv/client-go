@@ -205,6 +205,25 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.CheckSecondaryLocks()
 		r.Keys = c.encodeKeys(r.Keys)
 		req.Req = &r
+	case tikvrpc.CmdFlush:
+		r := *req.Flush()
+		r.Mutations = c.encodeMutations(r.Mutations)
+		if len(r.PrimaryKey) > 0 {
+			r.PrimaryKey = c.EncodeKey(r.PrimaryKey)
+		}
+		req.Req = &r
+	case tikvrpc.CmdBufferBatchGet:
+		r := *req.BufferBatchGet()
+		r.Keys = c.encodeKeys(r.Keys)
+		req.Req = &r
+	case tikvrpc.CmdFlashbackToVersion:
+		r := *req.FlashbackToVersion()
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
+		req.Req = &r
+	case tikvrpc.CmdPrepareFlashbackToVersion:
+		r := *req.PrepareFlashbackToVersion()
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
+		req.Req = &r
 
 	// Raw Request Types.
 	case tikvrpc.CmdRawGet:
@@ -485,6 +504,42 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+	case tikvrpc.CmdFlush:
+		r := resp.Resp.(*kvrpcpb.FlushResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Errors, err = c.decodeKeyErrors(r.Errors)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdBufferBatchGet:
+		r := resp.Resp.(*kvrpcpb.BufferBatchGetResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Pairs, err = c.decodePairs(r.Pairs)
+		if err != nil {
+			return nil, err
+		}
+		r.Error, err = c.decodeKeyError(r.Error)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdFlashbackToVersion:
+		r := resp.Resp.(*kvrpcpb.FlashbackToVersionResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdPrepareFlashbackToVersion:
+		r := resp.Resp.(*kvrpcpb.PrepareFlashbackToVersionResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	// RawKV Responses.
 	// Most of these responses does not require treatment aside from Region Error decoding.
 	// Exceptions are Response with keys attach to them, like RawScan and RawBatchGet,
@@ -577,6 +632,12 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+	case tikvrpc.CmdCheckLockObserver:
+		r := resp.Resp.(*kvrpcpb.CheckLockObserverResponse)
+		r.Locks, err = c.decodeLockInfos(r.Locks)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdCop:
 		r := resp.Resp.(*coprocessor.Response)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -600,6 +661,38 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
 		if err != nil {
 			return nil, err
+		}
+		r.Info, err = c.decodeMvccInfo(r.Info)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdMvccGetByStartTs:
+		r := resp.Resp.(*kvrpcpb.MvccGetByStartTsResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		if len(r.Key) > 0 {
+			r.Key, err = c.DecodeKey(r.Key)
+			if err != nil {
+				return nil, err
+			}
+		}
+		r.Info, err = c.decodeMvccInfo(r.Info)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdLockWaitInfo:
+		r := resp.Resp.(*kvrpcpb.GetLockWaitInfoResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		for i := range r.Entries {
+			r.Entries[i].Key, err = c.DecodeKey(r.Entries[i].Key)
+			if err != nil {
+				return nil, err
+			}
 		}
 	case tikvrpc.CmdSplitRegion:
 		r := resp.Resp.(*kvrpcpb.SplitRegionResponse)
@@ -929,6 +1022,10 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 		if err != nil {
 			return nil, err
 		}
+		keyError.Deadlock.DeadlockKey, err = c.DecodeKey(keyError.Deadlock.DeadlockKey)
+		if err != nil {
+			return nil, err
+		}
 		for _, wait := range keyError.Deadlock.WaitChain {
 			wait.Key, err = c.DecodeKey(wait.Key)
 			if err != nil {
@@ -954,6 +1051,12 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 			return nil, err
 		}
 	}
+	if keyError.PrimaryMismatch != nil {
+		keyError.PrimaryMismatch.LockInfo, err = c.decodeLockInfo(keyError.PrimaryMismatch.LockInfo)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if keyError.TxnLockNotFound != nil {
 		keyError.TxnLockNotFound.Key, err = c.DecodeKey(keyError.TxnLockNotFound.Key)
 		if err != nil {
@@ -963,6 +1066,10 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 	if debugInfo := keyError.DebugInfo; debugInfo != nil {
 		for _, mvccInfo := range debugInfo.MvccInfo {
 			if mvccInfo.Key, err = c.DecodeKey(mvccInfo.Key); err != nil {
+				return nil, err
+			}
+			mvccInfo.Mvcc, err = c.decodeMvccInfo(mvccInfo.Mvcc)
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -981,6 +1088,33 @@ func (c *codecV2) decodeKeyErrors(keyErrors []*kvrpcpb.KeyError) ([]*kvrpcpb.Key
 	return keyErrors, nil
 }
 
+func (c *codecV2) decodeMvccInfo(info *kvrpcpb.MvccInfo) (*kvrpcpb.MvccInfo, error) {
+	if info == nil {
+		return nil, nil
+	}
+	lock := info.Lock
+	if lock == nil {
+		return info, nil
+	}
+	var err error
+	if len(lock.Primary) > 0 {
+		lock.Primary, err = c.DecodeKey(lock.Primary)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range lock.Secondaries {
+		if len(lock.Secondaries[i]) == 0 {
+			continue
+		}
+		lock.Secondaries[i], err = c.DecodeKey(lock.Secondaries[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return info, nil
+}
+
 func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, error) {
 	if info == nil {
 		return nil, nil
@@ -996,6 +1130,12 @@ func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, err
 	}
 	for i := range info.Secondaries {
 		info.Secondaries[i], err = c.DecodeKey(info.Secondaries[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range info.SharedLockInfos {
+		info.SharedLockInfos[i], err = c.decodeLockInfo(info.SharedLockInfos[i])
 		if err != nil {
 			return nil, err
 		}

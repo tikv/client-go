@@ -1,6 +1,6 @@
 module github.com/tikv/client-go/v2
 
-go 1.25.8
+go 1.25.10
 
 require (
 	github.com/VividCortex/ewma v1.2.0
@@ -15,14 +15,14 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
+	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71
+	github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10
@@ -30,8 +30,8 @@ require (
 	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/sync v0.19.0
-	google.golang.org/grpc v1.75.1
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/grpc v1.79.3
+	google.golang.org/protobuf v1.36.10
 	modernc.org/mathutil v1.7.1
 )
 
@@ -54,11 +54,11 @@ require (
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 // Temporary: pin to feature branch. Revert once tikv/pd#10611 is merged and tagged.
-replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260518130251-22b311d178de
+replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260616034003-32e7424b5586

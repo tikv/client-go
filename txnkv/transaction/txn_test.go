@@ -100,12 +100,16 @@ type testTxn struct {
 }
 
 func newTestTxn(t *testing.T, startTS uint64) *testTxn {
+	return newTestTxnWithOptions(t, startTS, &TxnOptions{StartTS: &startTS})
+}
+
+func newTestTxnWithOptions(t *testing.T, startTS uint64, options *TxnOptions) *testTxn {
 	pd := &mockPDClient{}
 	cache := locate.NewTestRegionCache()
 	cache.SetPDClient(pd)
 	store := &mockStore{cache: cache}
 	snapshot := txnsnapshot.NewTiKVSnapshot(store, startTS, 0)
-	txn, err := NewTiKVTxn(store, snapshot, startTS, &TxnOptions{StartTS: &startTS})
+	txn, err := NewTiKVTxn(store, snapshot, startTS, options)
 	require.NoError(t, err)
 	return &testTxn{
 		KVTxn:    txn,
@@ -204,6 +208,45 @@ func TestLockKeys(t *testing.T) {
 		require.True(t, flags.HasLockedInShareMode())
 	})
 
+	t.Run("PessimisticSharedRejectsAggressiveLocking", func(t *testing.T) {
+		key1 := []byte("k1")
+		key2 := []byte("k2")
+		txn := newTestTxn(t, 1)
+		txn.SetPessimistic(true)
+		txn.store.client.onSend = handlePessimisticLock
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		expectedLockType = kvrpcpb.Op_PessimisticLock
+		require.NoError(t, txn.lockKeys(context.TODO(), lockCtx, nil, key2))
+
+		txn.StartAggressiveLocking()
+		lockCtx.InShareMode = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, key1)
+		require.ErrorContains(t, err, "shared lock is not supported in aggressive/fair locking mode")
+		require.True(t, txn.IsInAggressiveLockingMode())
+		txn.CancelAggressiveLocking(context.Background())
+	})
+
+	t.Run("PessimisticSharedRejectsPipelinedTxn", func(t *testing.T) {
+		startTS := uint64(1)
+		key := []byte("k")
+		txn := newTestTxnWithOptions(t, startTS, &TxnOptions{
+			StartTS: &startTS,
+			PipelinedTxn: PipelinedTxnOptions{
+				Enable:                 true,
+				FlushConcurrency:       1,
+				ResolveLockConcurrency: 1,
+			},
+		})
+		txn.store.client.onSend = requireNoRequest
+		defer txn.pipelinedCancel()
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lockCtx.InShareMode = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, key)
+		require.ErrorContains(t, err, "shared lock is not supported in pipelined transaction")
+	})
+
 	t.Run("UpgradeSharedToExclusive", func(t *testing.T) {
 		key1 := []byte("k1")
 		key2 := []byte("k2")
@@ -243,5 +286,70 @@ func TestLockKeys(t *testing.T) {
 		case <-time.After(time.Second):
 			require.FailNow(t, "lockKeys holds rlock after returning error")
 		}
+	})
+}
+
+func TestSharedLockCommitterIncompatibilities(t *testing.T) {
+	t.Run("RejectSharedLockPrimaryKey", func(t *testing.T) {
+		key := []byte("shared-key")
+		txn := newTestTxn(t, 1)
+		txn.SetPessimistic(true)
+		txn.GetMemBuffer().UpdateFlags(key, kv.SetKeyLocked, kv.SetKeyLockedInShareMode)
+
+		committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+		require.NoError(t, err)
+		committer.primaryKey = key
+		err = committer.initKeysAndMutations(context.Background())
+		require.ErrorContains(t, err, "shared lock key cannot be used as transaction primary key")
+	})
+
+	t.Run("DisableAsyncCommitAndOnePC", func(t *testing.T) {
+		startTS := uint64(1)
+		newGlobalTxn := func() *testTxn {
+			txn := newTestTxnWithOptions(t, startTS, &TxnOptions{
+				TxnScope: oracle.GlobalTxnScope,
+				StartTS:  &startTS,
+			})
+			txn.SetPessimistic(true)
+			txn.SetEnableAsyncCommit(true)
+			txn.SetEnable1PC(true)
+			return txn
+		}
+
+		plainTxn := newGlobalTxn()
+		plainTxn.GetMemBuffer().UpdateFlags([]byte("primary-key"), kv.SetKeyLocked)
+		plainCommitter, err := TxnProbe{KVTxn: plainTxn.KVTxn}.NewCommitter(1)
+		require.NoError(t, err)
+		require.True(t, plainCommitter.CheckAsyncCommit())
+		require.True(t, plainCommitter.CheckOnePC())
+
+		sharedTxn := newGlobalTxn()
+		sharedTxn.GetMemBuffer().UpdateFlags([]byte("primary-key"), kv.SetKeyLocked)
+		sharedTxn.GetMemBuffer().UpdateFlags([]byte("shared-key"), kv.SetKeyLocked, kv.SetKeyLockedInShareMode)
+		sharedCommitter, err := TxnProbe{KVTxn: sharedTxn.KVTxn}.NewCommitter(1)
+		require.NoError(t, err)
+		require.False(t, sharedCommitter.CheckAsyncCommit())
+		require.False(t, sharedCommitter.CheckOnePC())
+	})
+
+	t.Run("RejectPipelinedFlush", func(t *testing.T) {
+		startTS := uint64(1)
+		key := []byte("shared-key")
+		txn := newTestTxnWithOptions(t, startTS, &TxnOptions{
+			StartTS: &startTS,
+			PipelinedTxn: PipelinedTxnOptions{
+				Enable:                 true,
+				FlushConcurrency:       1,
+				ResolveLockConcurrency: 1,
+			},
+		})
+		defer txn.pipelinedCancel()
+		require.NoError(t, txn.GetMemBuffer().SetWithFlags(key, []byte("value"), kv.SetKeyLocked, kv.SetKeyLockedInShareMode))
+
+		flushed, err := txn.GetMemBuffer().Flush(true)
+		require.NoError(t, err)
+		require.True(t, flushed)
+		err = txn.GetMemBuffer().FlushWait()
+		require.ErrorContains(t, err, "shared lock is not supported in pipelined transaction")
 	})
 }
