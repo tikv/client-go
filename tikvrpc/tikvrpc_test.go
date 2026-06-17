@@ -59,6 +59,58 @@ func TestBatchResponse(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+func TestAttachContextSetsRequestContext(t *testing.T) {
+	rpcCtx := kvrpcpb.Context{
+		RegionId:     123,
+		ApiVersion:   kvrpcpb.APIVersion_V2,
+		KeyspaceId:   456,
+		KeyspaceName: "test-keyspace",
+	}
+	nextRPCtx := kvrpcpb.Context{
+		RegionId:     789,
+		ApiVersion:   kvrpcpb.APIVersion_V2,
+		KeyspaceId:   101112,
+		KeyspaceName: "next-test-keyspace",
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *Request
+		ctx  func(*Request) *kvrpcpb.Context
+	}{
+		{
+			name: "get",
+			req:  NewRequest(CmdGet, &kvrpcpb.GetRequest{}),
+			ctx: func(req *Request) *kvrpcpb.Context {
+				return req.Get().GetContext()
+			},
+		},
+		{
+			name: "lock_wait_info",
+			req:  NewRequest(CmdLockWaitInfo, &kvrpcpb.GetLockWaitInfoRequest{}),
+			ctx: func(req *Request) *kvrpcpb.Context {
+				return req.LockWaitInfo().GetContext()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, AttachContext(tc.req, rpcCtx))
+			require.Equal(t, rpcCtx.GetRegionId(), tc.ctx(tc.req).GetRegionId())
+			require.Equal(t, rpcCtx.GetApiVersion(), tc.ctx(tc.req).GetApiVersion())
+			require.Equal(t, rpcCtx.GetKeyspaceId(), tc.ctx(tc.req).GetKeyspaceId())
+			require.Equal(t, rpcCtx.GetKeyspaceName(), tc.ctx(tc.req).GetKeyspaceName())
+
+			oldReq := tc.req.Req
+			require.True(t, AttachContext(tc.req, nextRPCtx))
+			require.NotSame(t, oldReq, tc.req.Req)
+			require.Equal(t, nextRPCtx.GetRegionId(), tc.ctx(tc.req).GetRegionId())
+			require.Equal(t, nextRPCtx.GetApiVersion(), tc.ctx(tc.req).GetApiVersion())
+			require.Equal(t, nextRPCtx.GetKeyspaceId(), tc.ctx(tc.req).GetKeyspaceId())
+			require.Equal(t, nextRPCtx.GetKeyspaceName(), tc.ctx(tc.req).GetKeyspaceName())
+		})
+	}
+}
+
 // https://github.com/pingcap/tidb/issues/51921
 func TestTiDB51921(t *testing.T) {
 	for _, r := range []*Request{
