@@ -93,22 +93,26 @@ func (s *testSplitSuite) begin() transaction.TxnProbe {
 	return txn
 }
 
+func (s *testSplitSuite) key(name string) []byte {
+	return encodeKey("~split", name)
+}
+
 func (s *testSplitSuite) split(regionID uint64, key []byte) {
 	newRegionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
 	s.cluster.Split(regionID, newRegionID, key, []uint64{peerID}, peerID)
 }
 
 func (s *testSplitSuite) TestSplitBatchGet() {
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, s.key("a"))
 	s.Require().Nil(err)
 
 	txn := s.begin()
 
-	keys := [][]byte{{'a'}, {'b'}, {'c'}}
+	keys := [][]byte{s.key("a"), s.key("b"), s.key("c")}
 	_, region, err := s.store.GetRegionCache().GroupKeysByRegion(s.bo, keys, nil)
 	s.Nil(err)
 
-	s.split(loc.Region.GetID(), []byte("b"))
+	s.split(loc.Region.GetID(), s.key("b"))
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	// mocktikv will panic if it meets a not-in-region key.
@@ -122,63 +126,65 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	})()
 
 	// init data
+	aKey, bKey, cKey := s.key("a"), s.key("b"), s.key("c")
+	keys := [][]byte{aKey, bKey, cKey}
 	txn := s.begin()
-	s.Nil(txn.Set([]byte("a"), []byte("a")))
-	s.Nil(txn.Set([]byte("c"), []byte("c")))
+	s.Nil(txn.Set(aKey, []byte("a")))
+	s.Nil(txn.Set(cKey, []byte("c")))
 	s.Nil(txn.Commit(context.TODO()))
 
 	// split by 'b' and invalidate the region so that BatchGet('a', 'b', 'c') has to handle 2 batches.
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, bKey)
 	s.Nil(err)
-	s.True(loc.Contains([]byte("a")))
-	s.True(loc.Contains([]byte("c")))
-	s.split(loc.Region.GetID(), []byte("b"))
+	s.True(loc.Contains(aKey))
+	s.True(loc.Contains(cKey))
+	s.split(loc.Region.GetID(), bKey)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	txn = s.begin()
-	m, err := txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	m, err := txn.GetSnapshot().BatchGet(context.TODO(), keys)
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
+	s.Equal([]byte("a"), m[string(aKey)].Value)
+	s.Equal([]byte("c"), m[string(cKey)].Value)
+	s.NotContains(m, string(bKey))
 
 	// split by 'c' without invalidating the old region, then BatchGet('a', 'b', 'c') will meet region error when handling batch{keys: ['b', 'c']}.
-	loc, err = s.store.GetRegionCache().LocateKey(s.bo, []byte("b"))
+	loc, err = s.store.GetRegionCache().LocateKey(s.bo, bKey)
 	s.Nil(err)
-	s.False(loc.Contains([]byte("a")))
-	s.True(loc.Contains([]byte("b")))
-	s.True(loc.Contains([]byte("c")))
-	s.split(loc.Region.GetID(), []byte("c"))
+	s.False(loc.Contains(aKey))
+	s.True(loc.Contains(bKey))
+	s.True(loc.Contains(cKey))
+	s.split(loc.Region.GetID(), cKey)
 
 	txn = s.begin()
-	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	m, err = txn.GetSnapshot().BatchGet(context.TODO(), keys)
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
+	s.Equal([]byte("a"), m[string(aKey)].Value)
+	s.Equal([]byte("c"), m[string(cKey)].Value)
+	s.NotContains(m, string(bKey))
 
 	// leave a lock on 'a' so that BatchGet('a', 'b', 'c') will meet lock error.
 	txnW := s.begin()
-	s.Nil(txnW.Set([]byte("a"), []byte("a")))
+	s.Nil(txnW.Set(aKey, []byte("a")))
 	commiter, err := txnW.NewCommitter(1)
 	s.Nil(err)
 	s.Nil(commiter.PrewriteAllMutations(context.TODO()))
 
 	txn = s.begin()
-	m, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	m, err = txn.GetSnapshot().BatchGet(context.TODO(), keys)
 	s.Nil(err)
 	s.Len(m, 2)
-	s.Equal([]byte("a"), m[string([]byte{'a'})].Value)
-	s.Equal([]byte("c"), m[string([]byte{'c'})].Value)
-	s.NotContains(m, string([]byte{'b'}))
+	s.Equal([]byte("a"), m[string(aKey)].Value)
+	s.Equal([]byte("c"), m[string(cKey)].Value)
+	s.NotContains(m, string(bKey))
 
 	// inject an error on sending request.
 	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
 	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
 	txn = s.begin()
-	_, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	_, err = txn.GetSnapshot().BatchGet(context.TODO(), keys)
 	s.Error(err)
 }
 
@@ -186,26 +192,27 @@ func (s *testSplitSuite) TestStaleEpoch() {
 	mockPDClient := &mockPDClient{client: s.store.GetRegionCache().PDClient()}
 	s.store.SetRegionCachePDClient(mockPDClient)
 
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
+	aKey, bKey, cKey := s.key("stale_a"), s.key("stale_b"), s.key("stale_c")
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, aKey)
 	s.Require().Nil(err)
 
 	txn := s.begin()
-	err = txn.Set([]byte("a"), []byte("a"))
+	err = txn.Set(aKey, []byte("a"))
 	s.Nil(err)
-	err = txn.Set([]byte("c"), []byte("c"))
+	err = txn.Set(cKey, []byte("c"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
 
 	// Initiate a split and disable the PD client. If it still works, the
 	// new region is updated from kvrpc.
-	s.split(loc.Region.GetID(), []byte("b"))
+	s.split(loc.Region.GetID(), bKey)
 	mockPDClient.disable()
 
 	txn = s.begin()
-	_, err = txn.Get(context.TODO(), []byte("a"))
+	_, err = txn.Get(context.TODO(), aKey)
 	s.Nil(err)
-	_, err = txn.Get(context.TODO(), []byte("c"))
+	_, err = txn.Get(context.TODO(), cKey)
 	s.Nil(err)
 }
 

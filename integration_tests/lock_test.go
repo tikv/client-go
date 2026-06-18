@@ -1302,8 +1302,8 @@ func (s *testLockSuite) TestBatchLiteResolveLocksForReadIgnoresInlineCleanupErro
 	// confirmed the transaction status, the read can already proceed, so a later
 	// physical cleanup error should be swallowed instead of being returned to
 	// ResolveLocksForRead.
-	key := []byte("batch_lite_for_read_fallback_key")
-	primaryKey := []byte("batch_lite_for_read_fallback_primary")
+	key := s.key("batch_lite_for_read_fallback_key")
+	primaryKey := s.key("batch_lite_for_read_fallback_primary")
 	startTS, _ := s.lockKey(key, []byte("value"), primaryKey, []byte("primary_value"), 3000, true, false)
 	lock := s.mustGetLock(key)
 	lock.TxnSize = 1
@@ -1353,8 +1353,8 @@ func (s *testLockSuite) TestBatchLiteResolveLocksForReadIgnoresInlineCleanupErro
 }
 
 func (s *testLockSuite) TestLockWaitTimeLimit() {
-	k1 := []byte("k1")
-	k2 := []byte("k2")
+	k1 := s.key("wait_limit_k1")
+	k2 := s.key("wait_limit_k2")
 
 	txn1, err := s.store.Begin()
 	s.Nil(err)
@@ -1487,10 +1487,10 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		s.T().Skip("NextGen does not support fair locking")
 	}
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
-		k1 := []byte("k1")
-		k2 := []byte("k2")
-		k3 := []byte("k3")
-		k4 := []byte("k4")
+		k1 := s.key("prewrite_check_k1")
+		k2 := s.key("prewrite_check_k2")
+		k3 := s.key("prewrite_check_k3")
+		k4 := s.key("prewrite_check_k4")
 		v1 := []byte("v1")
 		v2 := []byte("v2")
 
@@ -1663,9 +1663,9 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 		s.NoError(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
 	}()
 
-	k1 := []byte("k1")
-	k2 := []byte("k2")
-	k3 := []byte("k3")
+	k1 := s.key("rollback_read_k1")
+	k2 := s.key("rollback_read_k2")
+	k3 := s.key("rollback_read_k3")
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 
@@ -1964,8 +1964,8 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 	// Note: TiKV caps lock wait time at 1 second.
 
 	ctx := context.Background()
-	k1 := []byte("lock_max_execution_time_k1")
-	k2 := []byte("lock_max_execution_time_k2")
+	k1 := s.key("lock_max_execution_time_k1")
+	k2 := s.key("lock_max_execution_time_k2")
 
 	// Setup: Create a lock that will block our test transaction
 	txn1, err := s.store.Begin()

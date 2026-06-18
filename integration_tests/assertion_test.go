@@ -264,8 +264,8 @@ func (s *testAssertionSuite) TestAssertionErrorLessPriorToOtherError() {
 		s.NotContains(strings.ToLower(err.Error()), "assertion")
 	}
 
-	testOnce([]byte("kr1"), []byte("ki1"), false, false, false)
-	testOnce([]byte("kr2"), []byte("ki2"), true, false, false)
-	testOnce([]byte("kr3"), []byte("ki3"), true, true, false)
-	testOnce([]byte("kr4"), []byte("ki4"), true, false, true)
+	testOnce(encodeKey("~assertion", "kr1"), encodeKey("~assertion", "ki1"), false, false, false)
+	testOnce(encodeKey("~assertion", "kr2"), encodeKey("~assertion", "ki2"), true, false, false)
+	testOnce(encodeKey("~assertion", "kr3"), encodeKey("~assertion", "ki3"), true, true, false)
+	testOnce(encodeKey("~assertion", "kr4"), encodeKey("~assertion", "ki4"), true, false, true)
 }

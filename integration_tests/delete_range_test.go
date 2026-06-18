@@ -59,7 +59,7 @@ type testDeleteRangeSuite struct {
 func (s *testDeleteRangeSuite) SetupTest() {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
-	testutils.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
+	testutils.BootstrapWithMultiRegions(cluster, encodeKey("~delete_range", "b"), encodeKey("~delete_range", "c"), encodeKey("~delete_range", "d"))
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
@@ -72,10 +72,14 @@ func (s *testDeleteRangeSuite) TearDownTest() {
 	s.Require().Nil(err)
 }
 
+func (s *testDeleteRangeSuite) key(name string) []byte {
+	return encodeKey("~delete_range", name)
+}
+
 func (s *testDeleteRangeSuite) checkData(expectedData map[string]string) {
 	txn, err := s.store.Begin()
 	s.Nil(err)
-	it, err := txn.Iter([]byte("a"), nil)
+	it, err := txn.Iter(s.key("a"), nil)
 	s.Nil(err)
 
 	// Scan all data and save into a map
@@ -141,7 +145,7 @@ func (s *testDeleteRangeSuite) TestDeleteRange() {
 	// Generate a sequence of keys and random values
 	for _, i := range []byte("abcd") {
 		for j := byte('0'); j <= byte('9'); j++ {
-			key := []byte{i, j}
+			key := s.key(string([]byte{i, j}))
 			value := []byte{byte(rand.Intn(256)), byte(rand.Intn(256))}
 			testData[string(key)] = string(value)
 			err := txn.Set(key, value)
@@ -154,10 +158,10 @@ func (s *testDeleteRangeSuite) TestDeleteRange() {
 
 	s.checkData(testData)
 
-	s.mustDeleteRange([]byte("b"), []byte("c0"), testData, 2)
-	s.mustDeleteRange([]byte("d0"), []byte("d0"), testData, 0)
-	s.mustDeleteRange([]byte("d0\x00"), []byte("d1\x00"), testData, 1)
-	s.mustDeleteRange([]byte("c5"), []byte("d5"), testData, 2)
-	s.mustDeleteRange([]byte("a"), []byte("z"), testData, 4)
+	s.mustDeleteRange(s.key("b"), s.key("c0"), testData, 2)
+	s.mustDeleteRange(s.key("d0"), s.key("d0"), testData, 0)
+	s.mustDeleteRange(s.key("d0\x00"), s.key("d1\x00"), testData, 1)
+	s.mustDeleteRange(s.key("c5"), s.key("d5"), testData, 2)
+	s.mustDeleteRange(s.key("a"), s.key("z"), testData, 4)
 	s.mustDeleteRange(nil, nil, testData, 4)
 }
