@@ -1752,7 +1752,7 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 		s.NoError(failpoint.Disable("tikvclient/onRollback"))
 	}()
 
-	k1, k2, k3, k4 := []byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")
+	k1, k2, k3, k4 := s.key("k1"), s.key("k2"), s.key("k3"), s.key("k4")
 	v2, v3 := []byte("v2"), []byte("v3")
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
