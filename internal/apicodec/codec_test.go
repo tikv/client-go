@@ -47,6 +47,21 @@ func TestDecodeKey(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Empty(t, pfx)
 	assert.Empty(t, key)
+
+	pfx, key, err = DecodeKey([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 8, 9}, kvrpcpb.APIVersion_V3)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte{'x', 1, 2, 3, 4, 5, 6, 7}, pfx)
+	assert.Equal(t, []byte{8, 9}, key)
+
+	pfx, key, err = DecodeKey([]byte{'x', 1, 2, 3, 4, 5, 6, 7}, kvrpcpb.APIVersion_V3)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte{'x', 1, 2, 3, 4, 5, 6, 7}, pfx)
+	assert.Empty(t, key)
+
+	pfx, key, err = DecodeKey([]byte{'x', 1, 2, 3, 4, 5, 6}, kvrpcpb.APIVersion_V3)
+	assert.NotNil(t, err)
+	assert.Empty(t, pfx)
+	assert.Empty(t, key)
 }
 
 func TestEncodeUnknownRequest(t *testing.T) {

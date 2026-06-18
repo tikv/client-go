@@ -55,6 +55,7 @@ func BuildKeyspaceName(name string) string {
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
 	reqPool      sync.Pool
+	apiVersion   kvrpcpb.APIVersion
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
@@ -74,6 +75,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	}
 	codec := &codecV2{
 		// Region keys in CodecV2 are always encoded in memory comparable form.
+		apiVersion:   kvrpcpb.APIVersion_V2,
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
 	}
@@ -122,7 +124,7 @@ func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
-	return kvrpcpb.APIVersion_V2
+	return c.apiVersion
 }
 
 // EncodeRequest encodes with the given Codec.
