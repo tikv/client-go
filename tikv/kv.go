@@ -396,13 +396,8 @@ func NewPDClientWithKeyspaceIdentity(pdAddrs []string, identity *apipb.KeyspaceI
 	return newPDClient(pdAddrs, identity)
 }
 
-func newPDClient(pdAddrs []string, identity *apipb.KeyspaceIdentity) (pd.Client, error) {
+func buildPDClientOptions(identity *apipb.KeyspaceIdentity) []opt.ClientOption {
 	cfg := config.GetGlobalConfig()
-	security := pd.SecurityOption{
-		CAPath:   cfg.Security.ClusterSSLCA,
-		CertPath: cfg.Security.ClusterSSLCert,
-		KeyPath:  cfg.Security.ClusterSSLKey,
-	}
 	opts := []opt.ClientOption{
 		opt.WithGRPCDialOptions(
 			grpc.WithKeepaliveParams(
@@ -415,6 +410,20 @@ func newPDClient(pdAddrs []string, identity *apipb.KeyspaceIdentity) (pd.Client,
 		opt.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout) * time.Second),
 		opt.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
 	}
+	if identity != nil {
+		opts = append(opts, opt.WithEnableRouterClient(false))
+	}
+	return opts
+}
+
+func newPDClient(pdAddrs []string, identity *apipb.KeyspaceIdentity) (pd.Client, error) {
+	cfg := config.GetGlobalConfig()
+	security := pd.SecurityOption{
+		CAPath:   cfg.Security.ClusterSSLCA,
+		CertPath: cfg.Security.ClusterSSLCert,
+		KeyPath:  cfg.Security.ClusterSSLKey,
+	}
+	opts := buildPDClientOptions(identity)
 
 	var (
 		pdCli pd.Client
