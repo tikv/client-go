@@ -66,7 +66,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 
 	// Compose the key
 	k := func(i byte) []byte {
-		return append([]byte(keyPrefix), 'k', i)
+		return encodeKey("~assertion", fmt.Sprintf("%s_k_%d", keyPrefix, i))
 	}
 
 	// Prepare some data. Make k1, k3, k7 exist.
@@ -97,7 +97,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 			s.Nil(err)
 		} else if pessimistic {
 			// Since we don't want to lock the keys to be tested, set another key as the primary.
-			err = txn.LockKeysWithWaitTime(context.Background(), 10000, []byte("primary"))
+			err = txn.LockKeysWithWaitTime(context.Background(), 10000, encodeKey("~assertion", keyPrefix+"_primary"))
 			s.Nil(err)
 		}
 		for _, key := range keys {

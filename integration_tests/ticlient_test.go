@@ -62,7 +62,7 @@ type testTiclientSuite struct {
 
 func (s *testTiclientSuite) SetupSuite() {
 	s.store = NewTestStore(s.T())
-	s.prefix = fmt.Sprintf("ticlient_%d", time.Now().Unix())
+	s.prefix = fmt.Sprintf("~ticlient_%d", time.Now().Unix())
 }
 
 func (s *testTiclientSuite) TearDownSuite() {
@@ -148,7 +148,7 @@ func (s *testTiclientSuite) TestLargeRequest() {
 	largeValue := make([]byte, 9*1024*1024) // 9M value.
 	txn := s.beginTxn()
 	txn.GetUnionStore().SetEntrySizeLimit(1024*1024, 100*1024*1024)
-	err := txn.Set([]byte("key"), largeValue)
+	err := txn.Set(encodeKey("~ticlient", "large_request_key"), largeValue)
 	s.NotNil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)

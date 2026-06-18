@@ -64,6 +64,10 @@ func (s *testOnePCSuite) TearDownTest() {
 	s.testAsyncCommitCommon.tearDownTest()
 }
 
+func (s *testOnePCSuite) key(name string) []byte {
+	return encodeKey("~1pc", name)
+}
+
 func (s *testOnePCSuite) Test1PC() {
 	k1 := []byte("k1")
 	v1 := []byte("v1")
@@ -232,9 +236,9 @@ func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 func (s *testOnePCSuite) Test1PCLinearizability() {
 	t1 := s.begin()
 	t2 := s.begin()
-	err := t1.Set([]byte("a"), []byte("a1"))
+	err := t1.Set(s.key("linear_a"), []byte("a1"))
 	s.Nil(err)
-	err = t2.Set([]byte("b"), []byte("b1"))
+	err = t2.Set(s.key("linear_b"), []byte("b1"))
 	s.Nil(err)
 	// t2 commits earlier than t1
 	err = t2.Commit(context.Background())
@@ -253,7 +257,7 @@ func (s *testOnePCSuite) Test1PCWithMultiDC() {
 	}
 
 	localTxn := s.begin1PC()
-	err := localTxn.Set([]byte("a"), []byte("a1"))
+	err := localTxn.Set(s.key("multi_dc_a"), []byte("a1"))
 	localTxn.SetScope("bj")
 	s.Nil(err)
 	err = localTxn.Commit(context.Background())
@@ -261,7 +265,7 @@ func (s *testOnePCSuite) Test1PCWithMultiDC() {
 	s.False(localTxn.GetCommitter().IsOnePC())
 
 	globalTxn := s.begin1PC()
-	err = globalTxn.Set([]byte("b"), []byte("b1"))
+	err = globalTxn.Set(s.key("multi_dc_b"), []byte("b1"))
 	globalTxn.SetScope(oracle.GlobalTxnScope)
 	s.Nil(err)
 	err = globalTxn.Commit(context.Background())
@@ -274,7 +278,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// 2PC
 	txn := s.begin()
-	err := txn.Set([]byte("k"), []byte("v"))
+	err := txn.Set(s.key("counter_k"), []byte("v"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -286,7 +290,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// AsyncCommit
 	txn = s.beginAsyncCommit()
-	err = txn.Set([]byte("k1"), []byte("v1"))
+	err = txn.Set(s.key("counter_k1"), []byte("v1"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -298,7 +302,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// 1PC
 	txn = s.begin1PC()
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	err = txn.Set(s.key("counter_k2"), []byte("v2"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -314,7 +318,7 @@ func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
 		s.T().Skip("not supported in real TiKV")
 	}
 	txn := s.begin1PC()
-	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	s.Nil(txn.Set(s.key("undetermined_key"), []byte("value")))
 	s.Nil(failpoint.Enable(
 		"tikvclient/rpcPrewriteResult",
 		// it will make the prewrite in 1pc fail.
