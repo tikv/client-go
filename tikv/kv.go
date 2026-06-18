@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -387,15 +388,22 @@ func NewKVStore(
 
 // NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
+	return newPDClient(pdAddrs, nil)
+}
+
+// NewPDClientWithKeyspaceIdentity returns an unwrapped API V3 pd client.
+func NewPDClientWithKeyspaceIdentity(pdAddrs []string, identity *apipb.KeyspaceIdentity) (pd.Client, error) {
+	return newPDClient(pdAddrs, identity)
+}
+
+func newPDClient(pdAddrs []string, identity *apipb.KeyspaceIdentity) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
-	// init pd-client
-	pdCli, err := pd.NewClient(
-		caller.Component("client-go"),
-		pdAddrs, pd.SecurityOption{
-			CAPath:   cfg.Security.ClusterSSLCA,
-			CertPath: cfg.Security.ClusterSSLCert,
-			KeyPath:  cfg.Security.ClusterSSLKey,
-		},
+	security := pd.SecurityOption{
+		CAPath:   cfg.Security.ClusterSSLCA,
+		CertPath: cfg.Security.ClusterSSLCert,
+		KeyPath:  cfg.Security.ClusterSSLKey,
+	}
+	opts := []opt.ClientOption{
 		opt.WithGRPCDialOptions(
 			grpc.WithKeepaliveParams(
 				keepalive.ClientParameters{
@@ -404,9 +412,31 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 				},
 			),
 		),
-		opt.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
+		opt.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout) * time.Second),
 		opt.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
+	}
+
+	var (
+		pdCli pd.Client
+		err   error
 	)
+	if identity != nil {
+		pdCli, err = pd.NewClientWithKeyspaceIdentity(
+			context.Background(),
+			caller.Component("client-go"),
+			identity,
+			pdAddrs,
+			security,
+			opts...,
+		)
+	} else {
+		pdCli, err = pd.NewClient(
+			caller.Component("client-go"),
+			pdAddrs,
+			security,
+			opts...,
+		)
+	}
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

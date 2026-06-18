@@ -27,6 +27,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util"
+	pd "github.com/tikv/pd/client"
 )
 
 // Client is a txn client.
@@ -83,7 +84,13 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		o(opt)
 	}
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdClient, err := tikv.NewPDClient(pdAddrs)
+	newPDClient := tikv.NewPDClient
+	if opt.apiVersion == kvrpcpb.APIVersion_V3 {
+		newPDClient = func(pdAddrs []string) (pd.Client, error) {
+			return tikv.NewPDClientWithKeyspaceIdentity(pdAddrs, opt.keyspaceIdentity)
+		}
+	}
+	pdClient, err := newPDClient(pdAddrs)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
