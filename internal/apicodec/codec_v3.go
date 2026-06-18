@@ -61,9 +61,8 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 	binary.BigEndian.PutUint64(endKey, prefixVal+1)
 
 	keyspaceMeta := &keyspacepb.KeyspaceMeta{
-		Name:             BuildKeyspaceName(keyspaceName),
-		Id:               keyspaceID,
-		KeyspaceIdentity: identity,
+		Name:     BuildKeyspaceName(keyspaceName),
+		Keyspace: &keyspacepb.KeyspaceMeta_KeyspaceIdentity{KeyspaceIdentity: identity},
 	}
 	base := &codecV2{
 		apiVersion:   kvrpcpb.APIVersion_V3,

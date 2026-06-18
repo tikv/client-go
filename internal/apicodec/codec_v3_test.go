@@ -60,9 +60,8 @@ func TestCodecV3EncodeRequestKeepsUserKeys(t *testing.T) {
 
 	re.Equal([]byte("key"), encoded.Get().Key)
 	re.Equal(kvrpcpb.APIVersion_V3, encoded.ApiVersion)
-	re.Equal(uint32(9), encoded.KeyspaceId)
 	re.Equal("ks", encoded.KeyspaceName)
-	re.Equal(identity, encoded.KeyspaceIdentity)
+	re.Equal(identity, encoded.GetKeyspaceIdentity())
 }
 
 func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
