@@ -67,6 +67,10 @@ func (s *testIsolationSuite) SetupSuite() {
 	s.store = NewTestStore(s.T())
 }
 
+func (s *testIsolationSuite) key(name string) []byte {
+	return encodeKey("isolation", name)
+}
+
 func (s *testIsolationSuite) TearDownSuite() {
 	s.store.Close()
 }
@@ -147,7 +151,7 @@ func (s *testIsolationSuite) TestWriteWriteConflict() {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < setPerThread; j++ {
-				w := s.SetWithRetry([]byte("k"), []byte("v"))
+				w := s.SetWithRetry(s.key("k"), []byte("v"))
 				mu.Lock()
 				writes = append(writes, w)
 				mu.Unlock()
@@ -176,12 +180,12 @@ func (s *testIsolationSuite) TestReadWriteConflict() {
 		wg     sync.WaitGroup
 	)
 
-	s.SetWithRetry([]byte("k"), []byte("0"))
+	s.SetWithRetry(s.key("k"), []byte("0"))
 
 	writeDone := make(chan struct{})
 	go func() {
 		for i := 1; i <= writeCount; i++ {
-			w := s.SetWithRetry([]byte("k"), []byte(fmt.Sprintf("%d", i)))
+			w := s.SetWithRetry(s.key("k"), []byte(fmt.Sprintf("%d", i)))
 			writes = append(writes, w)
 			time.Sleep(time.Microsecond * 10)
 		}
@@ -198,7 +202,7 @@ func (s *testIsolationSuite) TestReadWriteConflict() {
 					return
 				default:
 				}
-				r := s.GetWithRetry([]byte("k"))
+				r := s.GetWithRetry(s.key("k"))
 				mu.Lock()
 				reads = append(reads, r)
 				mu.Unlock()

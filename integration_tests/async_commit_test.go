@@ -108,9 +108,13 @@ func (s *testAsyncCommitCommon) tearDownTest() {
 	s.store.Close()
 }
 
+func (s *testAsyncCommitCommon) key(name string) []byte {
+	return encodeKey("async_commit", name)
+}
+
 func (s *testAsyncCommitCommon) putAlphabets(enableAsyncCommit bool) {
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		s.putKV([]byte{ch}, []byte{ch}, enableAsyncCommit)
+		s.putKV(s.key(string(ch)), []byte{ch}, enableAsyncCommit)
 	}
 }
 
@@ -255,15 +259,15 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 
 	s.putAlphabets(true)
 
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, s.key("a"))
 	s.Nil(err)
 	newRegionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
-	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte("e"), []uint64{peerID}, peerID)
+	s.cluster.Split(loc.Region.GetID(), newRegionID, s.key("e"), []uint64{peerID}, peerID)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	// No locks to check, only primary key is locked, should be successful.
-	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, []byte("z"), []byte("z"), false)
-	lock := s.mustGetLock([]byte("z"))
+	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, s.key("z"), []byte("z"), false)
+	lock := s.mustGetLock(s.key("z"))
 	lock.UseAsyncCommit = true
 	ts, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
@@ -275,7 +279,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	s.Nil(err)
 	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	status, err = resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("z"), currentTS, currentTS, true, false, nil)
+	status, err = resolver.GetTxnStatus(s.bo, lock.TxnID, s.key("z"), currentTS, currentTS, true, false, nil)
 	s.Nil(err)
 	s.True(status.IsCommitted())
 	s.Equal(status.CommitTS(), ts)
@@ -297,14 +301,14 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 			}
 			var resp kvrpcpb.CheckSecondaryLocksResponse
 			for _, k := range req.Keys {
-				if bytes.Equal(k, []byte("a")) {
+				if bytes.Equal(k, s.key("a")) {
 					atomic.StoreInt64(&gotCheckA, 1)
 
 					resp = kvrpcpb.CheckSecondaryLocksResponse{
-						Locks:    []*kvrpcpb.LockInfo{{Key: []byte("a"), PrimaryLock: []byte("z"), LockVersion: ts, UseAsyncCommit: true}},
+						Locks:    []*kvrpcpb.LockInfo{{Key: s.key("a"), PrimaryLock: s.key("z"), LockVersion: ts, UseAsyncCommit: true}},
 						CommitTs: commitTs,
 					}
-				} else if bytes.Equal(k, []byte("i")) {
+				} else if bytes.Equal(k, s.key("i")) {
 					atomic.StoreInt64(&gotCheckB, 1)
 
 					resp = kvrpcpb.CheckSecondaryLocksResponse{
@@ -326,7 +330,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 				return nil, errors.Errorf("Bad commit version: %d, expected: %d", req.CommitVersion, commitTs)
 			}
 			for _, k := range req.Keys {
-				if bytes.Equal(k, []byte("a")) || bytes.Equal(k, []byte("z")) {
+				if bytes.Equal(k, s.key("a")) || bytes.Equal(k, s.key("z")) {
 					atomic.StoreInt64(&gotResolve, 1)
 				} else {
 					atomic.StoreInt64(&gotOther, 1)
@@ -338,10 +342,10 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	}
 	s.store.SetTiKVClient(&mock)
 
-	status = lockutil.NewLockStatus([][]byte{[]byte("a"), []byte("i")}, true, 0)
+	status = lockutil.NewLockStatus([][]byte{s.key("a"), s.key("i")}, true, 0)
 	lock = &txnkv.Lock{
-		Key:            []byte("a"),
-		Primary:        []byte("z"),
+		Key:            s.key("a"),
+		Primary:        s.key("z"),
 		TxnID:          ts,
 		LockType:       kvrpcpb.Op_Put,
 		UseAsyncCommit: true,
@@ -374,7 +378,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 			return nil, errors.Errorf("Bad commit version: %d, expected: 0", req.CommitVersion)
 		}
 		for _, k := range req.Keys {
-			if bytes.Equal(k, []byte("a")) || bytes.Equal(k, []byte("z")) {
+			if bytes.Equal(k, s.key("a")) || bytes.Equal(k, s.key("z")) {
 				atomic.StoreInt64(&gotResolve, 1)
 			} else {
 				atomic.StoreInt64(&gotOther, 1)
@@ -398,14 +402,14 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 func (s *testAsyncCommitSuite) TestRepeatableRead() {
 	var sessionID uint64 = 0
 	test := func(isPessimistic bool) {
-		s.putKV([]byte("k1"), []byte("v1"), true)
+		s.putKV(s.key("k1"), []byte("v1"), true)
 
 		sessionID++
 		ctx := context.WithValue(context.Background(), util.SessionID, sessionID)
 		txn1 := s.beginAsyncCommit()
 		txn1.SetPessimistic(isPessimistic)
-		s.mustGetFromTxn(txn1, []byte("k1"), []byte("v1"))
-		txn1.Set([]byte("k1"), []byte("v2"))
+		s.mustGetFromTxn(txn1, s.key("k1"), []byte("v1"))
+		txn1.Set(s.key("k1"), []byte("v2"))
 
 		for i := 0; i < 20; i++ {
 			_, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
@@ -413,18 +417,18 @@ func (s *testAsyncCommitSuite) TestRepeatableRead() {
 		}
 
 		txn2 := s.beginAsyncCommit()
-		s.mustGetFromTxn(txn2, []byte("k1"), []byte("v1"))
+		s.mustGetFromTxn(txn2, s.key("k1"), []byte("v1"))
 
 		err := txn1.Commit(ctx)
 		s.Nil(err)
 		// Check txn1 is committed in async commit.
 		s.True(txn1.IsAsyncCommit())
-		s.mustGetFromTxn(txn2, []byte("k1"), []byte("v1"))
+		s.mustGetFromTxn(txn2, s.key("k1"), []byte("v1"))
 		err = txn2.Rollback()
 		s.Nil(err)
 
 		txn3 := s.beginAsyncCommit()
-		s.mustGetFromTxn(txn3, []byte("k1"), []byte("v2"))
+		s.mustGetFromTxn(txn3, s.key("k1"), []byte("v2"))
 		err = txn3.Rollback()
 		s.Nil(err)
 	}
@@ -438,9 +442,9 @@ func (s *testAsyncCommitSuite) TestRepeatableRead() {
 func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability() {
 	t1 := s.beginAsyncCommitWithLinearizability()
 	t2 := s.beginAsyncCommitWithLinearizability()
-	err := t1.Set([]byte("a"), []byte("a1"))
+	err := t1.Set(s.key("a"), []byte("a1"))
 	s.Nil(err)
-	err = t2.Set([]byte("b"), []byte("b1"))
+	err = t2.Set(s.key("b"), []byte("b1"))
 	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	// t2 commits earlier than t1
@@ -461,7 +465,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 	}
 
 	localTxn := s.beginAsyncCommit()
-	err := localTxn.Set([]byte("a"), []byte("a1"))
+	err := localTxn.Set(s.key("a"), []byte("a1"))
 	localTxn.SetScope("bj")
 	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
@@ -470,7 +474,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 	s.False(localTxn.IsAsyncCommit())
 
 	globalTxn := s.beginAsyncCommit()
-	err = globalTxn.Set([]byte("b"), []byte("b1"))
+	err = globalTxn.Set(s.key("b"), []byte("b1"))
 	globalTxn.SetScope(oracle.GlobalTxnScope)
 	s.Nil(err)
 	err = globalTxn.Commit(ctx)
@@ -479,7 +483,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 }
 
 func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
-	keys := [][]byte{[]byte("k0"), []byte("k1")}
+	keys := [][]byte{s.key("k0"), s.key("k1")}
 	values := [][]byte{[]byte("v00"), []byte("v10")}
 	initTest := func() transaction.CommitterProbe {
 		t0 := s.begin()
@@ -595,7 +599,7 @@ func (m *mockResolveClient) SendRequest(ctx context.Context, addr string, req *t
 // However, async-commit locks can't be resolved until they expire. This test covers it.
 func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 	ctx := context.Background()
-	k := []byte("k")
+	k := s.key("k")
 
 	// Lock the key with an async-commit lock.
 	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
@@ -603,7 +607,7 @@ func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.SetPessimistic(true)
-	err = txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS()}, []byte("k1"))
+	err = txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS()}, s.key("k1"))
 	s.Nil(err)
 
 	txn.Set(k, k)
@@ -616,8 +620,8 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 
 	t1 := s.beginAsyncCommit()
 	t1.SetPessimistic(true)
-	t1.Set([]byte("a"), []byte("a"))
-	t1.Set([]byte("z"), []byte("z"))
+	t1.Set(s.key("a"), []byte("a"))
+	t1.Set(s.key("z"), []byte("z"))
 	committer, err := t1.NewCommitter(1)
 	s.Nil(err)
 	committer.SetUseAsyncCommit()
@@ -625,12 +629,12 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 	committer.SetMaxCommitTS(oracle.ComposeTS(oracle.ExtractPhysical(committer.GetStartTS())+1500, 0))
 	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(0, 1))
 	s.True(committer.IsAsyncCommit())
-	lock := s.mustGetLock([]byte("a"))
+	lock := s.mustGetLock(s.key("a"))
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	for {
 		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 		s.Nil(err)
-		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
+		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, s.key("a"), currentTS, currentTS, false, false, nil)
 		s.Nil(err)
 		if s.store.GetOracle().IsExpired(lock.TxnID, status.TTL(), &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 			break
@@ -662,8 +666,8 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLifecycleHooks() {
 			wg.Done()
 		},
 	})
-	t1.Set([]byte("a"), []byte("a"))
-	t1.Set([]byte("z"), []byte("z"))
+	t1.Set(s.key("a"), []byte("a"))
+	t1.Set(s.key("z"), []byte("z"))
 	s.Nil(t1.Commit(context.Background()))
 
 	s.Equal(reachedPre.Load(), true)

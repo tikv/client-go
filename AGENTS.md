@@ -33,6 +33,8 @@ Use Go's `testing` package with `testify/require`, `testify/assert`, and `testif
 
 Add or update package-level tests for every behavior change. Use `integration_tests/` when behavior depends on TiKV, PD, transactions, lock resolution, failpoints, or API-version behavior that mocks cannot cover. For concurrency-sensitive changes, run the race command before opening a PR.
 
+CSE is only used behind TiDB. Transactional integration tests that run against next-gen/CSE should generate keys through a TiDB-like mem-comparable helper such as `encodeKey(...)`, not raw ad-hoc keys like `[]byte("k")`. For split/range/order-sensitive tests, update data keys, split keys, range bounds, and expected keys together.
+
 ## Commit & Pull Request Guidelines
 
 Recent commits use concise, imperative subjects scoped by package or area, for example `apicodec: cover remaining API v2 key-bearing commands` or `txnkv: enable TiKV-side async resolve region lock for read path`. Follow that pattern and reference issues or PRs when relevant. This repository has DCO checks enabled; create commits with `git commit -s` so the commit message includes the required `Signed-off-by` trailer.
