@@ -25,7 +25,7 @@ Prefer existing error, retry, backoff, logging, metrics, and failpoint helpers i
 
 ## API v2 Codec Guidelines
 
-All API v2 commands that carry keys must have complete and consistent encode/decode handling in `internal/apicodec`. This includes keys, key ranges, lock information, region errors, and any request or response fields that carry encoded keys. When adding or modifying a key-bearing RPC, update both request and response paths, add table-driven coverage in `internal/apicodec`, and verify that encode/decode behavior is symmetric. Missing or one-sided handling can create key-format mismatches and correctness bugs, especially across TiKV and CSE paths.
+All API v2 commands that carry keys must have complete and consistent encode/decode handling in `internal/apicodec`. This includes keys, key ranges, lock information, region errors, and any request or response fields that carry encoded keys. When adding or modifying a key-bearing RPC, update both request and response paths, add table-driven coverage in `internal/apicodec`, and verify that encode/decode behavior is symmetric. Missing or one-sided handling can create key-format mismatches and correctness bugs, especially across TiKV and CSE paths. When adding or modifying a `tikvrpc.Cmd*` whose request has a context field, update `tikvrpc/gen.sh`, regenerate `tikvrpc/cmds_generated.go`, and add `AttachContext` coverage.
 
 ## Testing Guidelines
 
