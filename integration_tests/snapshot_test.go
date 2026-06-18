@@ -148,28 +148,29 @@ func (s *testSnapshotSuite) TestGetAndBatchGetWithReturnCommitTS() {
 		s.T().Skip("NextGen does not support WithReturnCommitTS option")
 	}
 
+	aKey, bKey, cKey, dKey, eKey := s.key("return_ts_a"), s.key("return_ts_b"), s.key("return_ts_c"), s.key("return_ts_d"), s.key("return_ts_e")
 	txn := s.beginTxn()
-	s.Nil(txn.Set([]byte("a"), []byte("a1")))
-	s.Nil(txn.Set([]byte("b"), []byte("b1")))
-	s.Nil(txn.Set([]byte("c"), []byte("c1")))
+	s.Nil(txn.Set(aKey, []byte("a1")))
+	s.Nil(txn.Set(bKey, []byte("b1")))
+	s.Nil(txn.Set(cKey, []byte("c1")))
 	s.Nil(txn.Commit(context.Background()))
 
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
 
-	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithReturnCommitTS())
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{aKey, bKey, dKey}, kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Len(entries, 2)
-	s.Equal([]byte("a1"), entries["a"].Value)
-	commitTS := entries["a"].CommitTS
+	s.Equal([]byte("a1"), entries[string(aKey)].Value)
+	commitTS := entries[string(aKey)].CommitTS
 	s.Greater(commitTS, uint64(0))
-	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries["b"])
+	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries[string(bKey)])
 
-	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithReturnCommitTS())
+	entry, err := snapshot.Get(context.Background(), cKey, kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
 
-	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithReturnCommitTS())
+	entry, err = snapshot.Get(context.Background(), eKey, kv.WithReturnCommitTS())
 	s.EqualError(err, tikverr.ErrNotExist.Error())
 	s.Equal(kv.ValueEntry{}, entry)
 }
@@ -513,7 +514,8 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 		cfg.EnableAsyncBatchGet = originAsyncEnable
 		config.StoreGlobalConfig(cfg)
 	}()
-	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	xKey, yKey, zKey := s.key("replica_x"), s.key("replica_y"), s.key("replica_z")
+	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{s.key("replica_y1")}, false, nil)
 	s.Nil(err)
 	for _, regionID := range regionIDs {
 		var loc *tikv.KeyLocation
@@ -570,8 +572,8 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 				}
 				return nil, kv.ReplicaReadLeader
 			})
-			txn.Get(context.Background(), []byte("x"))
-			txn.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+			txn.Get(context.Background(), xKey)
+			txn.BatchGet(context.Background(), [][]byte{yKey, zKey})
 			txn.Rollback()
 		}
 	}

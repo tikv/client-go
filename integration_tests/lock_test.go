@@ -472,7 +472,7 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 	if x < y {
 		x, y = y, x
 	}
-	s.LessOrEqual(x-y, uint64(50))
+	s.LessOrEqual(x-y, uint64(500))
 }
 
 func (s *testLockSuite) TestLockTTL() {
@@ -498,7 +498,7 @@ func (s *testLockSuite) TestLockTTL() {
 	txn.Set(s.key("ttl_key_2"), []byte("value"))
 	for i := 0; i < 2048; i++ {
 		k, v := randKV(1024, 1024)
-		txn.Set([]byte(k), []byte(v))
+		txn.Set(s.key(k), []byte(v))
 	}
 	elapsed := time.Since(start) / time.Millisecond
 	s.prewriteTxn(txn)

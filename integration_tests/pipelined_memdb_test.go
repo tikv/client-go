@@ -79,6 +79,10 @@ func (s *testPipelinedMemDBSuite) TearDownTest() {
 	s.store.Close()
 }
 
+func (s *testPipelinedMemDBSuite) key(name string) []byte {
+	return encodeKey("~pipelined_memdb", name)
+}
+
 func (s *testPipelinedMemDBSuite) mustGetLock(key []byte) *txnkv.Lock {
 	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
@@ -107,8 +111,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 	s.Nil(err)
 	s.True(txn.IsPipelined())
 	for i := 0; i < MinFlushKeys; i++ {
-		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		key := s.key(strconv.Itoa(i))
+		value := make([]byte, MinFlushSize/MinFlushKeys-len([]byte(strconv.Itoa(i)))+1)
 		txn.Set(key, value)
 		flushed, err := txn.GetMemBuffer().Flush(false)
 		s.Nil(err)
@@ -133,8 +137,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 	s.Nil(err)
 	defer txn1.Rollback()
 	for i := 0; i < MinFlushKeys; i++ {
-		key := []byte(strconv.Itoa(i))
-		expect := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		key := s.key(strconv.Itoa(i))
+		expect := make([]byte, MinFlushSize/MinFlushKeys-len([]byte(strconv.Itoa(i)))+1)
 		val, err := txn1.Get(ctx, key)
 		s.Nil(err)
 		s.True(bytes.Equal(expect, val.Value))
@@ -146,16 +150,16 @@ func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
-		value := key
+		key := s.key(strconv.Itoa(i))
+		value := []byte(strconv.Itoa(i))
 		txn.Set(key, value)
 		flushed, err := txn.GetMemBuffer().Flush(true)
 		s.Nil(err)
 		s.True(flushed)
 	}
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
-		expect := key
+		key := s.key(strconv.Itoa(i))
+		expect := []byte(strconv.Itoa(i))
 		val, err := txn.GetMemBuffer().Get(ctx, key)
 		s.Nil(err)
 		s.True(bytes.Equal(val.Value, expect))
@@ -167,14 +171,14 @@ func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 func (s *testPipelinedMemDBSuite) TestPipelinedFlushBlock() {
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
-	txn.Set([]byte("key1"), []byte("value1"))
+	txn.Set(s.key("key1"), []byte("value1"))
 
 	s.Nil(failpoint.Enable("tikvclient/beforePipelinedFlush", `pause`))
 	flushed, err := txn.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
 
-	txn.Set([]byte("key2"), []byte("value2"))
+	txn.Set(s.key("key2"), []byte("value2"))
 	flushReturned := make(chan struct{})
 	go func() {
 		flushed, err := txn.GetMemBuffer().Flush(true)
@@ -198,14 +202,14 @@ func (s *testPipelinedMemDBSuite) TestPipelinedFlushBlock() {
 func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
-	txn.Set([]byte("key1"), []byte("value1"))
+	txn.Set(s.key("key1"), []byte("value1"))
 	flushed, err := txn.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = txn.GetSnapshot().Get(ctx, []byte("key1"))
+	_, err = txn.GetSnapshot().Get(ctx, s.key("key1"))
 	s.True(tikverr.IsErrNotFound(err))
 	s.Nil(txn.Commit(context.Background()))
 
@@ -213,7 +217,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
 	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	defer txn.Rollback()
-	val, err := txn.Get(context.Background(), []byte("key1"))
+	val, err := txn.Get(context.Background(), s.key("key1"))
 	s.Nil(err)
 	s.Equal([]byte("value1"), val.Value)
 }
@@ -230,14 +234,14 @@ func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
 		startTS := txn.StartTS()
 		s.Nil(err)
 		for j := 0; j < 100; j++ {
-			key := []byte(strconv.Itoa(j))
-			value := key
+			key := s.key(strconv.Itoa(j))
+			value := []byte(strconv.Itoa(j))
 			txn.Set(key, value)
 		}
 		txn.Commit(context.Background())
 		ctx, cancel := context.WithCancel(context.Background())
 		bo := tikv.NewNoopBackoff(ctx)
-		loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("1"))
+		loc, err := s.store.GetRegionCache().LocateKey(bo, s.key("1"))
 		s.Nil(err)
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{StartVersion: startTS})
 		go func() {
@@ -253,8 +257,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
-		value := key
+		key := s.key(strconv.Itoa(i))
+		value := []byte(strconv.Itoa(i))
 		txn.Set(key, value)
 	}
 
@@ -264,7 +268,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 	}()
 	s.Nil(txn.Commit(context.Background()))
 	mockTableID := int64(999)
-	_, err = s.store.SplitRegions(context.Background(), [][]byte{[]byte("50")}, false, &mockTableID)
+	_, err = s.store.SplitRegions(context.Background(), [][]byte{s.key("50")}, false, &mockTableID)
 	// manually commit
 	done := make(chan struct{})
 	go func() {
@@ -272,7 +276,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
 		bo := retry.NewNoopBackoff(ctx)
-		committer.ResolveFlushedLocks(bo, []byte("1"), []byte("99"), true)
+		committer.ResolveFlushedLocks(bo, s.key("1"), s.key("99"), true)
 		close(done)
 	}()
 	// should be done within 10 seconds.
@@ -286,10 +290,10 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
+		key := s.key(strconv.Itoa(i))
 		val, err := txn.Get(context.Background(), key)
 		s.Nil(err)
-		s.Equal(key, val.Value)
+		s.Equal([]byte(strconv.Itoa(i)), val.Value)
 	}
 }
 
@@ -299,8 +303,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 	s.Nil(err)
 	keys := make([][]byte, 0, 100)
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
-		value := key
+		key := s.key(strconv.Itoa(i))
+		value := []byte(strconv.Itoa(i))
 		txn.Set(key, value)
 		keys = append(keys, key)
 	}
@@ -348,8 +352,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	prefetchResult := make(map[string][]byte, 100)
 	nonPrefetchKeys := make([][]byte, 0, 100)
 	for i := 0; i < 100; i++ {
-		key := []byte(strconv.Itoa(i))
-		value := key
+		key := s.key(strconv.Itoa(i))
+		value := []byte(strconv.Itoa(i))
 		txn.Set(key, value)
 		if i%2 == 0 {
 			prefetchKeys = append(prefetchKeys, key)
@@ -390,32 +394,32 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 
 	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
-	txn.Set([]byte("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
-	m, err := txn.BatchGet(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
+	txn.Set(s.key("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
+	m, err := txn.BatchGet(context.Background(), [][]byte{s.key("99"), s.key("100"), s.key("101")})
 	s.Nil(err)
-	s.Equal(m, map[string]kv.ValueEntry{"99": kv.NewValueEntry([]byte("99"), 0), "100": kv.NewValueEntry([]byte("100"), 0)})
+	s.Equal(m, map[string]kv.ValueEntry{string(s.key("99")): kv.NewValueEntry([]byte("99"), 0), string(s.key("100")): kv.NewValueEntry([]byte("100"), 0)})
 	cache := txn.GetSnapshot().SnapCache()
 	// batch get cache: [99 -> not exist, 100 -> 100, 101 -> not exist]
 	// snapshot cache: [99 -> 99, 101 -> not exist]
-	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	_, err = panicWhenReadingRemoteBuffer(s.key("99"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
-	s.Equal(cache["99"].Value, []byte("99"))
-	v, err := panicWhenReadingRemoteBuffer([]byte("100"))
+	s.Equal(cache[string(s.key("99"))].Value, []byte("99"))
+	v, err := panicWhenReadingRemoteBuffer(s.key("100"))
 	s.Nil(err)
 	s.Equal(v.Value, []byte("100"))
-	_, err = panicWhenReadingRemoteBuffer([]byte("101"))
+	_, err = panicWhenReadingRemoteBuffer(s.key("101"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
 	s.Equal(cache["101"].Value, []byte(nil))
 
-	txn.Delete([]byte("99"))
+	txn.Delete(s.key("99"))
 	mustFlush(txn)
 	s.Nil(txn.GetMemBuffer().FlushWait())
-	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
+	m, err = txn.BatchGet(context.Background(), [][]byte{s.key("99")})
 	s.Nil(err)
 	s.Equal(m, map[string]kv.ValueEntry{})
-	v, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	v, err = panicWhenReadingRemoteBuffer(s.key("99"))
 	s.Nil(err)
 	s.Equal(v.Value, []byte{})
 	txn.Rollback()
@@ -423,10 +427,10 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	// empty memdb should also cache the not exist result.
 	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	// batch get cache: [99 -> not exist]
-	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
+	m, err = txn.BatchGet(context.Background(), [][]byte{s.key("99")})
 	s.Nil(err)
-	s.Equal(m, map[string]kv.ValueEntry{"99": kv.NewValueEntry([]byte("99"), 0)})
-	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	s.Equal(m, map[string]kv.ValueEntry{string(s.key("99")): kv.NewValueEntry([]byte("99"), 0)})
+	_, err = panicWhenReadingRemoteBuffer(s.key("99"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
 	txn.Rollback()
@@ -439,18 +443,18 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
-	txn.Set([]byte("key1"), []byte("value1"))
+	txn.Set(s.key("key1"), []byte("value1"))
 	txnProbe := transaction.TxnProbe{KVTxn: txn}
 	flushed, err := txnProbe.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
 	s.Nil(txn.GetMemBuffer().FlushWait())
-	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), []byte("key1"))
+	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), s.key("key1"))
 
 	s.True(txnProbe.GetCommitter().IsTTLRunning())
 
 	// resolve the primary lock
-	locks := []*txnlock.Lock{s.mustGetLock([]byte("key1"))}
+	locks := []*txnlock.Lock{s.mustGetLock(s.key("key1"))}
 	lr := s.store.GetLockResolver()
 	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
 	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
@@ -463,7 +467,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 		return !txnProbe.GetCommitter().IsTTLRunning()
 	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after primary lock is resolved")
 
-	txn.Set([]byte("key2"), []byte("value2"))
+	txn.Set(s.key("key2"), []byte("value2"))
 	flushed, err = txn.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
@@ -489,13 +493,13 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
 
 	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
-	txn.Set([]byte("key1"), []byte("value1"))
+	txn.Set(s.key("key1"), []byte("value1"))
 	txnProbe := transaction.TxnProbe{KVTxn: txn}
 	flushed, err := txnProbe.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
 	s.Nil(txn.GetMemBuffer().FlushWait())
-	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), []byte("key1"))
+	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), s.key("key1"))
 
 	s.True(txnProbe.GetCommitter().IsTTLRunning())
 
@@ -503,7 +507,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
 		return !txnProbe.GetCommitter().IsTTLRunning()
 	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after max ttl")
 
-	txn.Set([]byte("key2"), []byte("value2"))
+	txn.Set(s.key("key2"), []byte("value2"))
 	flushed, err = txn.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
