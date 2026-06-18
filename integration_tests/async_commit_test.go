@@ -109,7 +109,7 @@ func (s *testAsyncCommitCommon) tearDownTest() {
 }
 
 func (s *testAsyncCommitCommon) key(name string) []byte {
-	return encodeKey("async_commit", name)
+	return encodeKey("~async_commit", name)
 }
 
 func (s *testAsyncCommitCommon) putAlphabets(enableAsyncCommit bool) {

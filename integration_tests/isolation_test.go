@@ -68,7 +68,7 @@ func (s *testIsolationSuite) SetupSuite() {
 }
 
 func (s *testIsolationSuite) key(name string) []byte {
-	return encodeKey("isolation", name)
+	return encodeKey("~isolation", name)
 }
 
 func (s *testIsolationSuite) TearDownSuite() {
