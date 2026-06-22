@@ -60,7 +60,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -2094,9 +2093,14 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 
 	s.NoError(blockerTxn.LockKeys(ctx, lockCtxBlocker, k1))
 	s.NoError(failpoint.Enable("tikvclient/tryResolveLock", "panic"))
-	failpointEnabled := true
+	resolveFailpointEnabled := true
+	s.NoError(failpoint.Enable("tikvclient/beforeSendReqToRegion", "1*sleep(50)"))
+	delayFailpointEnabled := true
 	defer func() {
-		if failpointEnabled {
+		if delayFailpointEnabled {
+			_ = failpoint.Disable("tikvclient/beforeSendReqToRegion")
+		}
+		if resolveFailpointEnabled {
 			_ = failpoint.Disable("tikvclient/tryResolveLock")
 		}
 	}()
@@ -2108,23 +2112,12 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 	startTime = time.Now()
 	lockCtx8 := kv.NewLockCtx(txn8.StartTS(), 800, startTime)
 	lockCtx8.MaxExecutionDeadline = startTime.Add(200 * time.Millisecond)
-	// This case exercises the post-lock-conflict max_execution_time check. The
-	// RPC interceptor waits until just after the deadline once TiKV has returned
-	// the blocking lock. The failpoint then proves the client reports max
-	// execution time exceeded before entering lock resolution.
-	txn8.SetRPCInterceptor(interceptor.NewRPCInterceptor("delay-after-pessimistic-lock-conflict", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
-		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			resp, err := next(target, req)
-			if req.Type == tikvrpc.CmdPessimisticLock && err == nil && resp != nil {
-				if lockResp, ok := resp.Resp.(*kvrpcpb.PessimisticLockResponse); ok && len(lockResp.Errors) > 0 {
-					if sleep := time.Until(lockCtx8.MaxExecutionDeadline) + 20*time.Millisecond; sleep > 0 {
-						time.Sleep(sleep)
-					}
-				}
-			}
-			return resp, err
-		}
-	}))
+	// This case exercises the post-lock-conflict max_execution_time check. Add a
+	// small one-shot delay after LockKeys calculates the TiKV wait timeout, so
+	// TiKV returns the blocking lock after the client-side deadline instead of
+	// racing it at a sub-millisecond boundary. The tryResolveLock failpoint then
+	// proves the client reports max execution time exceeded before entering lock
+	// resolution.
 
 	err = txn8.LockKeys(ctx, lockCtx8, k1)
 	elapsed = time.Since(startTime)
@@ -2136,8 +2129,10 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 	s.Less(elapsed, 400*time.Millisecond)
 
 	s.NoError(txn8.Rollback())
+	s.NoError(failpoint.Disable("tikvclient/beforeSendReqToRegion"))
+	delayFailpointEnabled = false
 	s.NoError(failpoint.Disable("tikvclient/tryResolveLock"))
-	failpointEnabled = false
+	resolveFailpointEnabled = false
 	s.NoError(blockerTxn.Rollback())
 
 	// Cleanup all transactions
