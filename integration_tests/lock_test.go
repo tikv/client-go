@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -2106,18 +2107,33 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 
 	startTime = time.Now()
 	lockCtx8 := kv.NewLockCtx(txn8.StartTS(), 800, startTime)
-	// Use an already-expired max_execution_time here. Real TiKV may return lock
-	// conflicts very quickly, in which case the client is allowed to try resolving
-	// the blocking lock before the deadline expires. This case only asserts that
-	// once the deadline has expired, the client returns the max execution time
-	// error without entering lock resolution.
-	lockCtx8.MaxExecutionDeadline = startTime.Add(-time.Millisecond)
+	lockCtx8.MaxExecutionDeadline = startTime.Add(200 * time.Millisecond)
+	// This case exercises the post-lock-conflict max_execution_time check. The
+	// RPC interceptor waits until just after the deadline once TiKV has returned
+	// the blocking lock. The failpoint then proves the client reports max
+	// execution time exceeded before entering lock resolution.
+	txn8.SetRPCInterceptor(interceptor.NewRPCInterceptor("delay-after-pessimistic-lock-conflict", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if req.Type == tikvrpc.CmdPessimisticLock && err == nil && resp != nil {
+				if lockResp, ok := resp.Resp.(*kvrpcpb.PessimisticLockResponse); ok && len(lockResp.Errors) > 0 {
+					if sleep := time.Until(lockCtx8.MaxExecutionDeadline) + 20*time.Millisecond; sleep > 0 {
+						time.Sleep(sleep)
+					}
+				}
+			}
+			return resp, err
+		}
+	}))
 
 	err = txn8.LockKeys(ctx, lockCtx8, k1)
+	elapsed = time.Since(startTime)
 
 	s.Error(err)
 	s.ErrorAs(err, &queryInterruptedErr)
 	s.Equal(uint32(transaction.MaxExecTimeExceededSignal), queryInterruptedErr.Signal)
+	s.Greater(elapsed, 190*time.Millisecond)
+	s.Less(elapsed, 400*time.Millisecond)
 
 	s.NoError(txn8.Rollback())
 	s.NoError(failpoint.Disable("tikvclient/tryResolveLock"))
