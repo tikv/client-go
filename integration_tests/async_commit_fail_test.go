@@ -37,6 +37,7 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -200,12 +201,20 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 		sessionID++
 		ctx := context.WithValue(context.Background(), util.SessionID, sessionID)
 
+		caseKeys := make([]string, 0, len(keys))
+		for _, key := range keys {
+			caseKeys = append(caseKeys, fmt.Sprintf("%s_%d", key, sessionID))
+		}
+
 		txn := s.beginAsyncCommit()
-		for i := range keys {
-			txn.Set(s.key(keys[i]), []byte(values[i]))
+		for i := range caseKeys {
+			txn.Set(s.key(caseKeys[i]), []byte(values[i]))
 		}
 
 		s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
+		defer func() {
+			_ = failpoint.Disable("tikvclient/asyncCommitDoNothing")
+		}()
 
 		err := txn.Commit(ctx)
 		s.Nil(err)
@@ -220,7 +229,7 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 		// Currently when the transaction has no secondary, the `secondaries` field of the txnStatus
 		// will be set nil. So here initialize the `expectedSecondaries` to nil too.
 		var expectedSecondaries [][]byte
-		for _, k := range keys {
+		for _, k := range caseKeys {
 			if key := s.key(k); !bytes.Equal(key, primary) {
 				expectedSecondaries = append(expectedSecondaries, key)
 			}
