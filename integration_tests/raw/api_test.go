@@ -1,3 +1,5 @@
+//go:build !nextgen
+
 package raw_tikv_test
 
 import (

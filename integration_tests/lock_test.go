@@ -738,7 +738,7 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 			txn := &txnWrapper{TxnProbe: txnProbe}
 			txn.SetPessimistic(true)
 			tag := fmt.Sprintf("tag-init%v", i)
-			key := []byte{'k', byte(i)}
+			key := s.key(fmt.Sprintf("deadlock_wait_chain_%02d", i))
 			err = txn.LockKeys(context.Background(), makeLockCtx(txn, tag), key)
 			s.Nil(err)
 
@@ -752,7 +752,7 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 		s.T().Logf("txn %v try locking %v", i, j)
 		txn := txns[i]
 		tag := fmt.Sprintf("tag-%v-%v", i, j)
-		key := []byte{'k', byte(j)}
+		key := s.key(fmt.Sprintf("deadlock_wait_chain_%02d", j))
 		return txn.LockKeys(context.Background(), makeLockCtx(txn, tag), key)
 	}
 
@@ -785,7 +785,7 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	checkWaitChainEntry := func(txns []*txnWrapper, entry *deadlockpb.WaitForEntry, i, j int) {
 		s.Equal(entry.Txn, txns[i].StartTS())
 		s.Equal(entry.WaitForTxn, txns[j].StartTS())
-		s.Equal(entry.Key, []byte{'k', byte(j)})
+		s.Equal(entry.Key, s.key(fmt.Sprintf("deadlock_wait_chain_%02d", j)))
 		s.Equal(string(entry.ResourceGroupTag), fmt.Sprintf("tag-%v-%v", i, j))
 	}
 

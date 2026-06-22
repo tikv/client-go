@@ -608,16 +608,19 @@ func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
 }
 
 func (s *testCommitterSuite) TestPrewriteTxnSize() {
-	// Prepare two regions first: (, 100) and [100, )
-	region, _, _, _ := s.cluster.GetRegionByKey([]byte{50})
+	// Prepare two regions first: (, 100) and [100, ) in the encoded key namespace.
+	region, _, _, _ := s.cluster.GetRegionByKey(s.key(string([]byte{50})))
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
-	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
+	s.cluster.Split(region.Id, newRegionID, s.key(string([]byte{100})), []uint64{newPeerID}, newPeerID)
 
 	txn := s.begin()
 	var val [1024]byte
+	keys := make([][]byte, 0, 70)
 	for i := byte(50); i < 120; i++ {
-		err := txn.Set([]byte{i}, val[:])
+		key := s.key(string([]byte{i}))
+		keys = append(keys, key)
+		err := txn.Set(key, val[:])
 		s.Nil(err)
 	}
 
@@ -629,14 +632,14 @@ func (s *testCommitterSuite) TestPrewriteTxnSize() {
 	s.Nil(err)
 
 	// Check the written locks in the first region (50 keys)
-	for i := byte(50); i < 100; i++ {
-		lock := s.getLockInfo([]byte{i})
+	for i := 0; i < 50; i++ {
+		lock := s.getLockInfo(keys[i])
 		s.Equal(int(lock.TxnSize), 50)
 	}
 
 	// Check the written locks in the second region (20 keys)
-	for i := byte(100); i < 120; i++ {
-		lock := s.getLockInfo([]byte{i})
+	for i := 50; i < 70; i++ {
+		lock := s.getLockInfo(keys[i])
 		s.Equal(int(lock.TxnSize), 20)
 	}
 }
@@ -1410,7 +1413,7 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	txn.CancelAggressiveLocking(context.Background())
 	// Check all released.
 	for i := 0; i < 6; i++ {
-		key := []byte{byte('k'), byte('1') + byte(i)}
+		key := s.key(fmt.Sprintf("k%d", i+1))
 		s.checkIsKeyLocked(key, false)
 	}
 	s.NoError(txn.Rollback())
@@ -2102,10 +2105,12 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
-type kvFilter struct{}
+type kvFilter struct {
+	untouchedKey []byte
+}
 
 func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error) {
-	untouched := bytes.Equal(key, []byte("t00000001_i000000001"))
+	untouched := bytes.Equal(key, f.untouchedKey)
 	if untouched && flags.HasPresumeKeyNotExists() {
 		return false, errors.New("unexpected path the untouched key value with PresumeKeyNotExists flag")
 	}
@@ -2113,12 +2118,12 @@ func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (b
 }
 
 func (s *testCommitterSuite) TestResolvePessimisticLock() {
-	untouchedIndexKey := []byte("t00000001_i000000001")
+	untouchedIndexKey := s.key("t00000001_i000000001")
 	untouchedIndexValue := []byte{0, 0, 0, 0, 0, 0, 0, 1, 49}
-	noValueIndexKey := []byte("t00000001_i000000002")
+	noValueIndexKey := s.key("t00000001_i000000002")
 
 	txn := s.begin()
-	txn.SetKVFilter(kvFilter{})
+	txn.SetKVFilter(kvFilter{untouchedKey: untouchedIndexKey})
 	err := txn.Set(untouchedIndexKey, untouchedIndexValue)
 	s.Nil(err)
 	lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
@@ -2364,7 +2369,7 @@ func (s *testCommitterSuite) TestAsyncCommit() {
 
 func (s *testCommitterSuite) TestRetryPushTTL() {
 	ctx := context.Background()
-	k := []byte("a")
+	k := s.key("retry_push_ttl_a")
 
 	txn1 := s.begin()
 	txn1.SetPessimistic(true)
@@ -2428,19 +2433,23 @@ func restoreGlobalConfFunc() (restore func()) {
 
 func (s *testCommitterSuite) TestAsyncCommitCheck() {
 	defer restoreGlobalConfFunc()()
-	updateGlobalConfig(func(conf *config.Config) {
-		conf.TiKVClient.AsyncCommit.KeysLimit = 16
-		conf.TiKVClient.AsyncCommit.TotalKeySizeLimit = 64
-	})
-
 	txn := s.beginAsyncCommit()
-	buf := []byte{0, 0, 0, 0}
-	// Set 16 keys, each key is 4 bytes long. So the total size of keys is 64 bytes.
+	keys := make([][]byte, 0, 16)
 	for i := 0; i < 16; i++ {
-		buf[0] = byte(i)
-		err := txn.Set(buf, []byte("v"))
+		key := s.key(fmt.Sprintf("async_check_%02d", i))
+		keys = append(keys, key)
+		err := txn.Set(key, []byte("v"))
 		s.Nil(err)
 	}
+
+	totalKeySize := 0
+	for _, key := range keys {
+		totalKeySize += len(key)
+	}
+	updateGlobalConfig(func(conf *config.Config) {
+		conf.TiKVClient.AsyncCommit.KeysLimit = 16
+		conf.TiKVClient.AsyncCommit.TotalKeySizeLimit = uint64(totalKeySize)
+	})
 
 	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
@@ -2453,7 +2462,7 @@ func (s *testCommitterSuite) TestAsyncCommitCheck() {
 
 	updateGlobalConfig(func(conf *config.Config) {
 		conf.TiKVClient.AsyncCommit.KeysLimit = 20
-		conf.TiKVClient.AsyncCommit.TotalKeySizeLimit = 63
+		conf.TiKVClient.AsyncCommit.TotalKeySizeLimit = uint64(totalKeySize - 1)
 	})
 	s.False(committer.CheckAsyncCommit())
 }
@@ -2662,7 +2671,7 @@ func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
 	ctx := context.Background()
 	txn := s.begin()
 	memdb := txn.GetMemBuffer()
-	k0 := []byte("k0")
+	k0 := s.key("k0")
 	v0 := []byte("v0")
 	k1 := s.key("k1")
 	k2 := s.key("k2")
@@ -2715,7 +2724,7 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 		keyIndex := 0
 		for _, op := range []kvrpcpb.Op{kvrpcpb.Op_Put, kvrpcpb.Op_Del, kvrpcpb.Op_CheckNotExists} {
 			for flags := 0; flags < (1 << 3); flags++ {
-				key := []byte(fmt.Sprintf("k%05d", keyIndex))
+				key := s.key(fmt.Sprintf("flags_%05d", keyIndex))
 				value := []byte(fmt.Sprintf("v%05d", keyIndex))
 
 				// `flag` Iterates all combinations of flags in binary.
