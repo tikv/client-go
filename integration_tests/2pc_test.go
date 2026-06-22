@@ -2105,12 +2105,10 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
-type kvFilter struct {
-	untouchedKey []byte
-}
+type kvFilter struct{}
 
 func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error) {
-	untouched := bytes.Equal(key, f.untouchedKey)
+	untouched := bytes.Equal(key, []byte("t00000001_i000000001"))
 	if untouched && flags.HasPresumeKeyNotExists() {
 		return false, errors.New("unexpected path the untouched key value with PresumeKeyNotExists flag")
 	}
@@ -2118,12 +2116,14 @@ func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (b
 }
 
 func (s *testCommitterSuite) TestResolvePessimisticLock() {
-	untouchedIndexKey := s.key("t00000001_i000000001")
+	// Keep these raw byte keys: this case intentionally mimics TiDB index keys
+	// and kvFilter matches the untouched index key by exact bytes.
+	untouchedIndexKey := []byte("t00000001_i000000001")
 	untouchedIndexValue := []byte{0, 0, 0, 0, 0, 0, 0, 1, 49}
-	noValueIndexKey := s.key("t00000001_i000000002")
+	noValueIndexKey := []byte("t00000001_i000000002")
 
 	txn := s.begin()
-	txn.SetKVFilter(kvFilter{untouchedKey: untouchedIndexKey})
+	txn.SetKVFilter(kvFilter{})
 	err := txn.Set(untouchedIndexKey, untouchedIndexValue)
 	s.Nil(err)
 	lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
