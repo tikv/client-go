@@ -2093,6 +2093,12 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 
 	s.NoError(blockerTxn.LockKeys(ctx, lockCtxBlocker, k1))
 	s.NoError(failpoint.Enable("tikvclient/tryResolveLock", "panic"))
+	failpointEnabled := true
+	defer func() {
+		if failpointEnabled {
+			_ = failpoint.Disable("tikvclient/tryResolveLock")
+		}
+	}()
 
 	txn8, err := s.store.Begin()
 	s.NoError(err)
@@ -2100,19 +2106,22 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 
 	startTime = time.Now()
 	lockCtx8 := kv.NewLockCtx(txn8.StartTS(), 800, startTime)
-	lockCtx8.MaxExecutionDeadline = startTime.Add(200 * time.Millisecond)
+	// Use an already-expired max_execution_time here. Real TiKV may return lock
+	// conflicts very quickly, in which case the client is allowed to try resolving
+	// the blocking lock before the deadline expires. This case only asserts that
+	// once the deadline has expired, the client returns the max execution time
+	// error without entering lock resolution.
+	lockCtx8.MaxExecutionDeadline = startTime.Add(-time.Millisecond)
 
 	err = txn8.LockKeys(ctx, lockCtx8, k1)
-	elapsed = time.Since(startTime)
 
 	s.Error(err)
 	s.ErrorAs(err, &queryInterruptedErr)
 	s.Equal(uint32(transaction.MaxExecTimeExceededSignal), queryInterruptedErr.Signal)
-	s.Greater(elapsed, 190*time.Millisecond)
-	s.Less(elapsed, 400*time.Millisecond)
 
 	s.NoError(txn8.Rollback())
 	s.NoError(failpoint.Disable("tikvclient/tryResolveLock"))
+	failpointEnabled = false
 	s.NoError(blockerTxn.Rollback())
 
 	// Cleanup all transactions
