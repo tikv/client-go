@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -267,12 +268,21 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 		txn2.StartTS():     2,
 		txn3.StartTS():     3,
 	}
+	if config.NextGen {
+		// CSE supports shared locks, but ScanLocks does not filter shared-lock
+		// entries by max_ts in the same way as classic TiKV. Keep this test in
+		// next-gen coverage and verify the visible shared locks without asserting
+		// the intermediate max_ts filtering behavior.
+		maxTS2LockNum = map[uint64]int{txn3.StartTS(): 3}
+	}
 	for maxTS, lockNum := range maxTS2LockNum {
 		locks := s.scanLocks(sharedKey, maxTS)
 		s.Equal(len(locks), lockNum, fmt.Sprintf("when maxTS=%d, expect %d locks", maxTS, lockNum))
 		for _, lock := range locks {
 			s.Equal(sharedKey, lock.Key)
-			s.LessOrEqual(lock.TxnID, maxTS)
+			if !config.NextGen {
+				s.LessOrEqual(lock.TxnID, maxTS)
+			}
 		}
 	}
 
@@ -464,6 +474,9 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support allow_lock_with_conflict / ForceLock yet")
+	}
 	pk1 := s.key("TestForceLockRetryOnSharedLock_pk1")
 	pk2 := s.key("TestForceLockRetryOnSharedLock_pk2")
 	key := s.key("TestForceLockRetryOnSharedLock_key")
