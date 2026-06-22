@@ -1,5 +1,3 @@
-//go:build !nextgen
-
 // Copyright 2025 TiKV Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,7 +24,6 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -37,10 +34,6 @@ import (
 func TestSharedLock(t *testing.T) {
 	if !*withTiKV {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
-		return
-	}
-	if config.NextGen {
-		t.Skip("skipping TestSharedLock because next-gen doesn't support shared lock yet")
 		return
 	}
 	suite.Run(t, new(testSharedLockSuite))
@@ -71,6 +64,10 @@ func (s *testSharedLockSuite) TearDownTest() {
 	s.store.Close()
 }
 
+func (s *testSharedLockSuite) key(name string) []byte {
+	return encodeKey("~shared_lock", name)
+}
+
 func (s *testSharedLockSuite) begin() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
@@ -99,10 +96,10 @@ func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestSharedLockBlockExclusiveLock_pk1")
-		pk2 := []byte("TestSharedLockBlockExclusiveLock_pk2")
-		pk3 := []byte("TestSharedLockBlockExclusiveLock_pk3")
-		key := []byte("TestSharedLockBlockExclusiveLock_shared_key")
+		pk1 := s.key("TestSharedLockBlockExclusiveLock_pk1")
+		pk2 := s.key("TestSharedLockBlockExclusiveLock_pk2")
+		pk3 := s.key("TestSharedLockBlockExclusiveLock_pk3")
+		key := s.key("TestSharedLockBlockExclusiveLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -151,10 +148,10 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestExclusiveLockBlockSharedLock_pk1")
-		pk2 := []byte("TestExclusiveLockBlockSharedLock_pk2")
-		pk3 := []byte("TestExclusiveLockBlockSharedLock_pk3")
-		key := []byte("TestExclusiveLockBlockSharedLock_shared_key")
+		pk1 := s.key("TestExclusiveLockBlockSharedLock_pk1")
+		pk2 := s.key("TestExclusiveLockBlockSharedLock_pk2")
+		pk3 := s.key("TestExclusiveLockBlockSharedLock_pk3")
+		key := s.key("TestExclusiveLockBlockSharedLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -201,8 +198,8 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 func (s *testSharedLockSuite) TestResolveSharedLock() {
 	txn1 := s.begin()
 
-	pk := []byte("TestResolveSharedLock_pk")
-	key := []byte("TestResolveSharedLock_shared_key")
+	pk := s.key("TestResolveSharedLock_pk")
+	key := s.key("TestResolveSharedLock_shared_key")
 	_, err := s.store.SplitRegions(context.Background(), [][]byte{pk, key}, false, nil)
 	s.Nil(err)
 
@@ -245,10 +242,10 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestScanSharedLock() {
-	pk1 := []byte("TestScanSharedLock_pk_1")
-	pk2 := []byte("TestScanSharedLock_pk_2")
-	pk3 := []byte("TestScanSharedLock_pk_3")
-	sharedKey := []byte("TestScanSharedLock_shared_key")
+	pk1 := s.key("TestScanSharedLock_pk_1")
+	pk2 := s.key("TestScanSharedLock_pk_2")
+	pk3 := s.key("TestScanSharedLock_pk_3")
+	sharedKey := s.key("TestScanSharedLock_shared_key")
 	txn1 := s.begin()
 	txn2 := s.begin()
 	txn3 := s.begin()
@@ -295,10 +292,10 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	txn1 := s.begin()
 	txn2 := s.begin()
 	txn3 := s.begin()
-	pk1 := []byte("TestGCSharedLock_pk1")
-	pk2 := []byte("TestGCSharedLock_pk2")
-	pk3 := []byte("TestGCSharedLock_pk3")
-	sharedKey := []byte("TestGCSharedLock_shared_key")
+	pk1 := s.key("TestGCSharedLock_pk1")
+	pk2 := s.key("TestGCSharedLock_pk2")
+	pk3 := s.key("TestGCSharedLock_pk3")
+	sharedKey := s.key("TestGCSharedLock_shared_key")
 
 	pks := [][]byte{pk1, pk2, pk3}
 	txns := []transaction.TxnProbe{txn1, txn2, txn3}
@@ -354,10 +351,10 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestSharedLockCommitAndRollback_pk1")
-		pk2 := []byte("TestSharedLockCommitAndRollback_pk2")
-		pk3 := []byte("TestSharedLockCommitAndRollback_pk3")
-		key := []byte("TestSharedLockCommitAndRollback_shared_key")
+		pk1 := s.key("TestSharedLockCommitAndRollback_pk1")
+		pk2 := s.key("TestSharedLockCommitAndRollback_pk2")
+		pk3 := s.key("TestSharedLockCommitAndRollback_pk3")
+		key := s.key("TestSharedLockCommitAndRollback_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -412,8 +409,8 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
 
-	pk := []byte("TestPrewriteResolveExpiredSharedLock_pk")
-	key := []byte("TestPrewriteResolveExpiredSharedLock_key")
+	pk := s.key("TestPrewriteResolveExpiredSharedLock_pk")
+	key := s.key("TestPrewriteResolveExpiredSharedLock_key")
 
 	// Step 1: Create a pessimistic transaction with shared lock
 	txn1 := s.begin()
@@ -467,9 +464,9 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
-	pk1 := []byte("TestForceLockRetryOnSharedLock_pk1")
-	pk2 := []byte("TestForceLockRetryOnSharedLock_pk2")
-	key := []byte("TestForceLockRetryOnSharedLock_key")
+	pk1 := s.key("TestForceLockRetryOnSharedLock_pk1")
+	pk2 := s.key("TestForceLockRetryOnSharedLock_pk2")
+	key := s.key("TestForceLockRetryOnSharedLock_key")
 
 	// Step 1: txn1 acquires a shared lock on key
 	txn1 := s.begin()
