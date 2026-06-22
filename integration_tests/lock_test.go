@@ -1422,7 +1422,7 @@ func (s *testLockWithTiKVSuite) cleanupLocks() {
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.NoError(err)
-	startKey, endKey := s.keyRange("k", "l")
+	startKey, endKey := s.keyRange("", "\xff")
 	remainingLocks, err := s.store.ScanLocks(ctx, startKey, endKey, currentTS)
 	s.NoError(err)
 	if len(remainingLocks) > 0 {

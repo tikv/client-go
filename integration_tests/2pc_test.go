@@ -119,6 +119,8 @@ func (s *testCommitterSuite) keyStr(name string) string {
 
 func (s *testCommitterSuite) keyFromString(name string) []byte {
 	key := []byte(name)
+	// Some callers pass already-encoded map keys, for example string(s.key("tpk"))
+	// when checking values written with explicit byte keys.
 	if bytes.HasPrefix(key, []byte("~2pc")) {
 		return key
 	}
@@ -180,7 +182,7 @@ func (s *testCommitterSuite) TestDeleteYourWritesTTL() {
 
 	{
 		txn := s.begin()
-		err := txn.GetMemBuffer().SetWithFlags([]byte("bb"), []byte{0}, kv.SetPresumeKeyNotExists)
+		err := txn.GetMemBuffer().SetWithFlags(s.key("bb"), []byte{0}, kv.SetPresumeKeyNotExists)
 		s.Nil(err)
 		err = txn.Set(s.key("ba"), []byte{1})
 		s.Nil(err)
@@ -195,7 +197,7 @@ func (s *testCommitterSuite) TestDeleteYourWritesTTL() {
 
 	{
 		txn := s.begin()
-		err := txn.GetMemBuffer().SetWithFlags([]byte("dd"), []byte{0}, kv.SetPresumeKeyNotExists)
+		err := txn.GetMemBuffer().SetWithFlags(s.key("dd"), []byte{0}, kv.SetPresumeKeyNotExists)
 		s.Nil(err)
 		err = txn.Set(s.key("de"), []byte{1})
 		s.Nil(err)
@@ -2237,10 +2239,10 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	pk := s.key("pk")
 	secondaryLockkeys := make([][]byte, 0, bigTxnThreshold)
 	for i := 0; i < bigTxnThreshold; i++ {
-		optimisticLock := []byte(fmt.Sprintf("optimisticLockKey%d", i))
+		optimisticLock := s.key(fmt.Sprintf("optimisticLockKey%d", i))
 		secondaryLockkeys = append(secondaryLockkeys, optimisticLock)
 	}
-	pessimisticLockKey := []byte("pessimisticLockKey")
+	pessimisticLockKey := s.key("pessimisticLockKey")
 
 	// make the optimistic and pessimistic lock left with primary lock not found
 	txn1 := s.begin()
@@ -2300,28 +2302,31 @@ func (s *testCommitterSuite) TestResolveMixed() {
 // TestSecondaryKeys tests that when async commit is enabled, each prewrite message includes an
 // accurate list of secondary keys.
 func (s *testCommitterSuite) TestPrewriteSecondaryKeys() {
-	// Prepare two regions first: (, 100) and [100, )
-	region, _, _, _ := s.cluster.GetRegionByKey([]byte{50})
+	// Prepare two regions first: (, 100) and [100, ) in the encoded key namespace.
+	region, _, _, _ := s.cluster.GetRegionByKey(s.key(string([]byte{50})))
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
-	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
+	s.cluster.Split(region.Id, newRegionID, s.key(string([]byte{100})), []uint64{newPeerID}, newPeerID)
 
 	txn := s.beginAsyncCommit()
 	var val [1024]byte
+	expectedKeys := make([][]byte, 0, 70)
 	for i := byte(50); i < 120; i++ {
-		err := txn.Set([]byte{i}, val[:])
+		key := s.key(string([]byte{i}))
+		expectedKeys = append(expectedKeys, key)
+		err := txn.Set(key, val[:])
 		s.Nil(err)
 	}
 	// Some duplicates.
 	for i := byte(50); i < 120; i += 10 {
-		err := txn.Set([]byte{i}, val[512:700])
+		err := txn.Set(s.key(string([]byte{i})), val[512:700])
 		s.Nil(err)
 	}
 
 	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
 
-	mock := mockClient{Client: s.store.GetTiKVClient()}
+	mock := mockClient{Client: s.store.GetTiKVClient(), expectedKeys: expectedKeys}
 	s.store.SetTiKVClient(&mock)
 	ctx := context.Background()
 	// TODO remove this when minCommitTS is returned from mockStore prewrite response.
@@ -2457,6 +2462,7 @@ type mockClient struct {
 	tikv.Client
 	seenPrimaryReq   uint32
 	seenSecondaryReq uint32
+	expectedKeys     [][]byte
 }
 
 func (m *mockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -2465,7 +2471,7 @@ func (m *mockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 		if pr.UseAsyncCommit {
 			if isPrimary(pr) {
 				// The primary key should not be included, nor should there be any duplicates. All keys should be present.
-				if !includesPrimary(pr) && allKeysNoDups(pr) {
+				if !includesPrimary(pr) && allKeysNoDups(pr, m.expectedKeys) {
 					atomic.StoreUint32(&m.seenPrimaryReq, 1)
 				}
 			} else {
@@ -2499,7 +2505,7 @@ func includesPrimary(req *kvrpcpb.PrewriteRequest) bool {
 	return false
 }
 
-func allKeysNoDups(req *kvrpcpb.PrewriteRequest) bool {
+func allKeysNoDups(req *kvrpcpb.PrewriteRequest, expectedKeys [][]byte) bool {
 	check := make(map[string]bool)
 
 	// Create the check map and check for duplicates.
@@ -2512,8 +2518,7 @@ func allKeysNoDups(req *kvrpcpb.PrewriteRequest) bool {
 	}
 
 	// Check every key is present.
-	for i := byte(50); i < 120; i++ {
-		k := []byte{i}
+	for _, k := range expectedKeys {
 		if !bytes.Equal(req.PrimaryLock, k) && !check[string(k)] {
 			return false
 		}
