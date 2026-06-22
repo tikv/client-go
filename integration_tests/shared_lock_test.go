@@ -196,7 +196,14 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 	}
 }
 
+func (s *testSharedLockSuite) skipNextGenSharedLockScanCase() {
+	if config.NextGen {
+		s.T().Skip("NextGen supports shared locks, but these tests depend on ScanLocks/GC resolve semantics not available in CSE yet")
+	}
+}
+
 func (s *testSharedLockSuite) TestResolveSharedLock() {
+	s.skipNextGenSharedLockScanCase()
 	txn1 := s.begin()
 
 	pk := s.key("TestResolveSharedLock_pk")
@@ -243,6 +250,7 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestScanSharedLock() {
+	s.skipNextGenSharedLockScanCase()
 	pk1 := s.key("TestScanSharedLock_pk_1")
 	pk2 := s.key("TestScanSharedLock_pk_2")
 	pk3 := s.key("TestScanSharedLock_pk_3")
@@ -295,6 +303,7 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 }
 
 func (s *testSharedLockSuite) TestGCSharedLock() {
+	s.skipNextGenSharedLockScanCase()
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 1000) // 1000ms, increased for test stability in busy environments
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
@@ -414,6 +423,7 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 }
 
 func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
+	s.skipNextGenSharedLockScanCase()
 	// Set short ManagedLockTTL so locks expire quickly
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
