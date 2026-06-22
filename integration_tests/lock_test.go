@@ -2093,9 +2093,6 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 
 	s.NoError(blockerTxn.LockKeys(ctx, lockCtxBlocker, k1))
 	s.NoError(failpoint.Enable("tikvclient/tryResolveLock", "panic"))
-	defer func() {
-		s.NoError(failpoint.Disable("tikvclient/tryResolveLock"))
-	}()
 
 	txn8, err := s.store.Begin()
 	s.NoError(err)
@@ -2115,6 +2112,7 @@ func (s *testLockWithTiKVSuite) TestPessimisticLockMaxExecutionTime() {
 	s.Less(elapsed, 400*time.Millisecond)
 
 	s.NoError(txn8.Rollback())
+	s.NoError(failpoint.Disable("tikvclient/tryResolveLock"))
 	s.NoError(blockerTxn.Rollback())
 
 	// Cleanup all transactions

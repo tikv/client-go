@@ -135,9 +135,7 @@ jobs:
         working-directory: integration_tests/raw
 
   integration-next-gen-tikv:
-    # Disabled: this job uses the stale gcr.io/pingcap-public/dbaas/tikv:dedicated-next-gen image.
-    # Use the Prow pull-integration-test-nextgen job for NextGen/CSE validation instead.
-    if: ${{ false }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
