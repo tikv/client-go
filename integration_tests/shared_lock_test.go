@@ -16,7 +16,6 @@ package tikv_test
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -88,6 +87,15 @@ func (s *testSharedLockSuite) scanLocks(key []byte, maxTS uint64) []*txnlock.Loc
 	if len(locks) == 0 {
 		return nil
 	}
+	return locks
+}
+
+func (s *testSharedLockSuite) waitLocks(key []byte, maxTS uint64, expected int, msgAndArgs ...interface{}) []*txnlock.Lock {
+	var locks []*txnlock.Lock
+	s.Eventually(func() bool {
+		locks = s.scanLocks(key, maxTS)
+		return len(locks) == expected
+	}, 5*time.Second, 100*time.Millisecond, msgAndArgs...)
 	return locks
 }
 
@@ -196,14 +204,7 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 	}
 }
 
-func (s *testSharedLockSuite) skipNextGenSharedLockScanCase() {
-	if config.NextGen {
-		s.T().Skip("NextGen supports shared locks, but these tests depend on ScanLocks/GC resolve semantics not available in CSE yet")
-	}
-}
-
 func (s *testSharedLockSuite) TestResolveSharedLock() {
-	s.skipNextGenSharedLockScanCase()
 	txn1 := s.begin()
 
 	pk := s.key("TestResolveSharedLock_pk")
@@ -218,10 +219,13 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Nil(txn1.LockKeys(context.Background(), lockCtx, key))
 
 	s.Nil(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
+	defer func() {
+		s.Nil(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+	}()
 	txn1.SetSessionID(1)
 	s.Nil(txn1.Commit(context.Background()))
 
-	locks := s.scanLocks(key, s.getTS())
+	locks := s.waitLocks(key, s.getTS(), 1, "expect committed shared lock to be visible")
 	s.Len(locks, 1)
 	lock := locks[0]
 	s.Equal(key, lock.Key)
@@ -235,7 +239,7 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(pk, txn2.GetCommitter().GetPrimaryKey())
 	s.Nil(txn2.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), key))
 
-	locks = s.scanLocks(key, s.getTS())
+	locks = s.waitLocks(key, s.getTS(), 1, "expect pessimistic lock to be visible")
 	s.Len(locks, 1)
 	lock = locks[0]
 	s.NotNil(lock)
@@ -245,12 +249,10 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(lock.LockType, kvrpcpb.Op_PessimisticLock)
 
 	s.Nil(txn2.Rollback())
-	s.Len(s.scanLocks(key, s.getTS()), 0)
-	s.Nil(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+	s.waitLocks(key, s.getTS(), 0, "expect no locks after rollback")
 }
 
 func (s *testSharedLockSuite) TestScanSharedLock() {
-	s.skipNextGenSharedLockScanCase()
 	pk1 := s.key("TestScanSharedLock_pk_1")
 	pk2 := s.key("TestScanSharedLock_pk_2")
 	pk3 := s.key("TestScanSharedLock_pk_3")
@@ -276,34 +278,23 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 		txn2.StartTS():     2,
 		txn3.StartTS():     3,
 	}
-	if config.NextGen {
-		// CSE supports shared locks, but ScanLocks does not filter shared-lock
-		// entries by max_ts in the same way as classic TiKV. Keep this test in
-		// next-gen coverage and verify the visible shared locks without asserting
-		// the intermediate max_ts filtering behavior.
-		maxTS2LockNum = map[uint64]int{txn3.StartTS(): 3}
-	}
+	s.waitLocks(sharedKey, txn3.StartTS(), 3, "expect 3 locks after pipelined locks being applied")
 	for maxTS, lockNum := range maxTS2LockNum {
 		locks := s.scanLocks(sharedKey, maxTS)
-		s.Equal(len(locks), lockNum, fmt.Sprintf("when maxTS=%d, expect %d locks", maxTS, lockNum))
+		s.Equal(lockNum, len(locks), "when maxTS=%d, expect %d locks", maxTS, lockNum)
 		for _, lock := range locks {
 			s.Equal(sharedKey, lock.Key)
-			if !config.NextGen {
-				s.LessOrEqual(lock.TxnID, maxTS)
-			}
+			s.LessOrEqual(lock.TxnID, maxTS)
 		}
 	}
 
 	for _, txn := range txns {
 		s.Nil(txn.Rollback())
 	}
-	locks, err := s.store.ScanLocks(context.Background(), sharedKey, append(sharedKey, 0), txn3.StartTS())
-	s.Nil(err)
-	s.Equal(len(locks), 0, "no locks after rollback")
+	s.waitLocks(sharedKey, txn3.StartTS(), 0, "no locks after rollback")
 }
 
 func (s *testSharedLockSuite) TestGCSharedLock() {
-	s.skipNextGenSharedLockScanCase()
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 1000) // 1000ms, increased for test stability in busy environments
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
@@ -333,12 +324,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	// Verify txn3's TTL manager is still running
 	s.True(txn3.GetCommitter().IsTTLRunning(), "txn3's TTL manager should be running")
 
-	var locks []*txnlock.Lock
-	s.Eventually(func() bool {
-		locks = s.scanLocks(sharedKey, s.getTS())
-		return len(locks) == 3
-	}, 5*time.Second, 100*time.Millisecond, "expect 3 locks after pipelined locks being applied")
-
+	locks := s.waitLocks(sharedKey, s.getTS(), 3, "expect 3 locks after pipelined locks being applied")
 	s.Len(locks, 3)
 	for _, lock := range locks {
 		s.Equal(sharedKey, lock.Key)
@@ -357,8 +343,8 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	s.Nil(err)
 	s.Zero(ttl)
 
-	locks = s.scanLocks(sharedKey, s.getTS())
-	s.Len(locks, 1, "expected 1 lock (txn3's) to remain, but got %d; txn3 TTL running: %v", len(locks), txn3.GetCommitter().IsTTLRunning())
+	locks = s.waitLocks(sharedKey, s.getTS(), 1, "expected 1 lock (txn3's) to remain; txn3 TTL running: %v", txn3.GetCommitter().IsTTLRunning())
+	s.Len(locks, 1)
 	s.Equal(txn3.StartTS(), locks[0].TxnID)
 	s.Equal(sharedKey, locks[0].Key)
 	s.Nil(txn3.Rollback())
@@ -403,14 +389,7 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 			}
 
 			currLocks := 3 - i
-			s.Eventually(func() bool {
-				locks = s.scanLocks(key, s.getTS())
-				s.LessOrEqual(len(locks), currLocks)
-				if len(locks) == currLocks {
-					return false
-				}
-				return len(locks) == currLocks-1
-			}, 5*time.Second, 100*time.Millisecond, "after txn %d commit/rollback, expect %d locks remain", i+1, currLocks-1)
+			locks = s.waitLocks(key, s.getTS(), currLocks-1, "after txn %d commit/rollback, expect %d locks remain", i+1, currLocks-1)
 
 			for _, lock := range locks {
 				s.Equal(key, lock.Key)
@@ -423,7 +402,6 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 }
 
 func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
-	s.skipNextGenSharedLockScanCase()
 	// Set short ManagedLockTTL so locks expire quickly
 	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
@@ -441,11 +419,8 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	lockCtx.InShareMode = true
 	s.Nil(txn1.LockKeys(context.Background(), lockCtx, key))
 
-	// Wait for the shared lock to be visible
-	s.Eventually(func() bool {
-		locks := s.scanLocks(key, s.getTS())
-		return len(locks) == 1
-	}, 5*time.Second, 100*time.Millisecond, "expect 1 shared lock")
+	// Wait for the shared lock to be visible.
+	s.waitLocks(key, s.getTS(), 1, "expect 1 shared lock")
 
 	// Step 2: Close TTL manager and wait for lock to expire
 	txn1.GetCommitter().CloseTTLManager()
@@ -476,8 +451,8 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	s.Equal(value, v.Value)
 
 	// Step 6: Verify the shared lock is gone
-	locks = s.scanLocks(key, s.getTS())
-	s.Len(locks, 0, "shared lock should have been resolved")
+	locks = s.waitLocks(key, s.getTS(), 0, "shared lock should have been resolved")
+	s.Len(locks, 0)
 
 	// Cleanup
 	s.Nil(txn1.Rollback())
