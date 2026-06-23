@@ -61,4 +61,4 @@ require (
 )
 
 // Temporary: pin to feature branch. Revert once tikv/pd#10611 is merged and tagged.
-replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260616034003-32e7424b5586
+replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260623073432-1927611f1727

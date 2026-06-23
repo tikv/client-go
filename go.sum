@@ -3,8 +3,8 @@ github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/VividCortex/ewma v1.2.0 h1:f58SaIzcDXrSy3kWaHNvuJgJ3Nmz59Zji6XoJR/q1ow=
 github.com/VividCortex/ewma v1.2.0/go.mod h1:nz4BbCtbLyFDeC9SUHbtcT5644juEuWfUAUnGx7j5l4=
-github.com/YuhaoZhang00/pd/client v0.0.0-20260616034003-32e7424b5586 h1:yddu1tZcUvia5zgVrvvmTTVRAN7/bersdkyhRnONygY=
-github.com/YuhaoZhang00/pd/client v0.0.0-20260616034003-32e7424b5586/go.mod h1:SUEsA/07/n1lkjVBs99EGAsZClzf2qEpcpP3OVwYrEg=
+github.com/YuhaoZhang00/pd/client v0.0.0-20260623073432-1927611f1727 h1:obFu8hZ4TJ8kYwRbYbgQObCFqH8evBjkDm0grE2ZpmY=
+github.com/YuhaoZhang00/pd/client v0.0.0-20260623073432-1927611f1727/go.mod h1:ORM90wZtbrn/JX+zWEY/Jx4ZuI6ChLmJJZk9gdhp0S0=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=

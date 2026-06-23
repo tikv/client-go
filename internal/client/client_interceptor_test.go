@@ -108,13 +108,12 @@ func TestAppendChainedInterceptor(t *testing.T) {
 	checkChained(chain, 5, []int{0, 2, 3, 4, 1})
 }
 
-// recordingInterceptor counts OnRequestWait / OnResponseWait / OnRequestCancel
+// recordingInterceptor counts request/response hooks.
 // invocations and returns benign zero values so the interceptor wiring can be
 // exercised end-to-end without touching real PD state.
 type recordingInterceptor struct {
-	waitCalls   int
-	respCalls   int
-	cancelCalls int
+	waitCalls int
+	respCalls int
 }
 
 var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
@@ -139,12 +138,6 @@ func (r *recordingInterceptor) OnResponseWait(
 	return &rmpb.Consumption{}, 0, nil
 }
 
-func (r *recordingInterceptor) OnRequestCancel(
-	context.Context, string, resourceControlClient.RequestInfo,
-) {
-	r.cancelCalls++
-}
-
 func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
 	return false
 }
@@ -154,8 +147,7 @@ func (r *recordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
 }
 
 // failingClient simulates a transport-level RPC failure: SendRequest returns
-// (nil, err) so the interceptor's OnResponseWait path is skipped and the
-// cancel path must take over.
+// (nil, err) so the interceptor's response-side settlement path is skipped.
 type failingClient struct{ emptyClient }
 
 func (c failingClient) SendRequest(
@@ -189,7 +181,7 @@ func newRGRequest() *tikvrpc.Request {
 	return req
 }
 
-func TestSendRequestCancelsPreChargeOnTransportFailure(t *testing.T) {
+func TestSendRequestDoesNotSettleOnTransportFailure(t *testing.T) {
 	rec := withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 
@@ -198,11 +190,9 @@ func TestSendRequestCancelsPreChargeOnTransportFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, 1, rec.waitCalls, "OnRequestWait must run once")
 	assert.Equal(t, 0, rec.respCalls, "OnResponseWait must be skipped when resp is nil")
-	assert.Equal(t, 1, rec.cancelCalls,
-		"OnRequestCancel must run when the inner client returns no response")
 }
 
-func TestSendRequestRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+func TestSendRequestKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
 	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
@@ -211,13 +201,13 @@ func TestSendRequestRollsBackRUDetailsOnTransportFailure(t *testing.T) {
 	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
 	assert.Nil(t, resp)
 	assert.Error(t, err)
-	assert.Equal(t, 0.0, ruDetails.RRU(),
-		"failed no-response requests must not leave request-side RRU in runtime stats")
-	assert.Equal(t, 0.0, ruDetails.WRU(),
-		"failed no-response requests must not leave request-side WRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
+		"failed no-response requests must keep request-side RRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed no-response requests must keep request-side WRU in runtime stats")
 }
 
-func TestSendRequestDoesNotCancelOnSuccess(t *testing.T) {
+func TestSendRequestSettlesOnSuccess(t *testing.T) {
 	rec := withRecordingInterceptor(t)
 	// Inner client returns a non-nil response (default emptyClient yields
 	// nil but its purpose here is to NOT yield nil — wrap it).
@@ -228,10 +218,9 @@ func TestSendRequestDoesNotCancelOnSuccess(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, rec.waitCalls)
 	assert.Equal(t, 1, rec.respCalls, "settlement path must run when resp is non-nil")
-	assert.Equal(t, 0, rec.cancelCalls, "cancel must not run when resp is non-nil")
 }
 
-func TestSendRequestAsyncCancelsPreChargeOnTransportFailure(t *testing.T) {
+func TestSendRequestAsyncDoesNotSettleOnTransportFailure(t *testing.T) {
 	rec := withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 
@@ -250,11 +239,9 @@ func TestSendRequestAsyncCancelsPreChargeOnTransportFailure(t *testing.T) {
 	assert.Error(t, gotErr)
 	assert.Equal(t, 1, rec.waitCalls)
 	assert.Equal(t, 0, rec.respCalls)
-	assert.Equal(t, 1, rec.cancelCalls,
-		"OnRequestCancel must run on the async path too when resp is nil")
 }
 
-func TestSendRequestAsyncRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+func TestSendRequestAsyncKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
 	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
@@ -273,14 +260,14 @@ func TestSendRequestAsyncRollsBackRUDetailsOnTransportFailure(t *testing.T) {
 
 	assert.Nil(t, gotResp)
 	assert.Error(t, gotErr)
-	assert.Equal(t, 0.0, ruDetails.RRU(),
-		"failed async no-response requests must not leave request-side RRU in runtime stats")
-	assert.Equal(t, 0.0, ruDetails.WRU(),
-		"failed async no-response requests must not leave request-side WRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
+		"failed async no-response requests must keep request-side RRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed async no-response requests must keep request-side WRU in runtime stats")
 }
 
 // respondingClient yields a non-nil empty response so the interceptor settles
-// through OnResponseWait rather than the cancel path.
+// through OnResponseWait.
 type respondingClient struct{ emptyClient }
 
 func (c respondingClient) SendRequest(
