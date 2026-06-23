@@ -45,7 +45,6 @@ func NewInterceptedClient(client Client) Client {
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	var ruDetails *util.RUDetails
-	var requestConsumption *rmpb.Consumption
 
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
 	if resourceControlInterceptor != nil {
@@ -53,7 +52,6 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		if err != nil {
 			return nil, err
 		}
-		requestConsumption = consumption
 		req.GetResourceControlContext().Penalty = penalty
 		// override request priority with resource group priority if it's not set.
 		// Get the priority at tikv side has some performance issue, so we pass it
@@ -87,11 +85,12 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 				ruDetails.Update(consumption, waitDuration)
 			}
 		} else {
-			// Transport-level failure produced no response — the settlement
-			// path will not run. Cancel the pre-charge so the predicted RU
-			// debited in OnRequestWait is refunded to the limiter.
-			resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
-			rollbackRUDetailsForCanceledRequest(ruDetails, requestConsumption)
+			// Transport-level failure produced no response, so let PD's
+			// controller decide the signed no-response delta.
+			cancelDelta := onRequestCancel(ctx, resourceGroupName, resourceControlInterceptor, reqInfo)
+			if ruDetails != nil {
+				ruDetails.Update(cancelDelta, 0)
+			}
 		}
 	}
 
@@ -142,10 +141,12 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 					ruDetails.Update(consumption, waitDuration)
 				}
 			} else {
-				// Transport-level failure produced no response — cancel the
-				// pre-charge so the predicted RU is refunded to the limiter.
-				resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
-				rollbackRUDetailsForCanceledRequest(ruDetails, consumption)
+				// Transport-level failure produced no response, so let PD's
+				// controller decide the signed no-response delta.
+				cancelDelta := onRequestCancel(ctx, resourceGroupName, resourceControlInterceptor, reqInfo)
+				if ruDetails != nil {
+					ruDetails.Update(cancelDelta, 0)
+				}
 			}
 			return resp, err
 		})
@@ -154,14 +155,21 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
 }
 
-func rollbackRUDetailsForCanceledRequest(ruDetails *util.RUDetails, consumption *rmpb.Consumption) {
-	if ruDetails == nil || consumption == nil {
-		return
+type resourceControlCancelDeltaInterceptor interface {
+	OnRequestCancelWithDelta(context.Context, string, resourceControlClient.RequestInfo) *rmpb.Consumption
+}
+
+func onRequestCancel(
+	ctx context.Context,
+	resourceGroupName string,
+	resourceControlInterceptor resourceControlClient.ResourceGroupKVInterceptor,
+	reqInfo resourceControlClient.RequestInfo,
+) *rmpb.Consumption {
+	if cancelWithDelta, ok := resourceControlInterceptor.(resourceControlCancelDeltaInterceptor); ok {
+		return cancelWithDelta.OnRequestCancelWithDelta(ctx, resourceGroupName, reqInfo)
 	}
-	ruDetails.Update(&rmpb.Consumption{
-		RRU: -consumption.RRU,
-		WRU: -consumption.WRU,
-	}, 0)
+	resourceControlInterceptor.OnRequestCancel(ctx, resourceGroupName, reqInfo)
+	return nil
 }
 
 var (
@@ -266,6 +274,12 @@ func buildResourceControlInterceptor( //nolint:unused
 				if ruDetails != nil {
 					detail := ruDetails.(*util.RUDetails)
 					detail.Update(consumption, waitDuration)
+				}
+			} else {
+				cancelDelta := onRequestCancel(ctx, resourceGroupName, resourceControlInterceptor, reqInfo)
+				if ruDetails != nil {
+					detail := ruDetails.(*util.RUDetails)
+					detail.Update(cancelDelta, 0)
 				}
 			}
 			return resp, err

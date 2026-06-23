@@ -117,7 +117,10 @@ type recordingInterceptor struct {
 	cancelCalls int
 }
 
-var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
+var (
+	recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
+	recordingCancelDelta        = &rmpb.Consumption{RRU: -7}
+)
 
 func (r *recordingInterceptor) OnRequestWait(
 	context.Context, string, resourceControlClient.RequestInfo,
@@ -145,11 +148,58 @@ func (r *recordingInterceptor) OnRequestCancel(
 	r.cancelCalls++
 }
 
+func (r *recordingInterceptor) OnRequestCancelWithDelta(
+	context.Context, string, resourceControlClient.RequestInfo,
+) *rmpb.Consumption {
+	r.cancelCalls++
+	return recordingCancelDelta
+}
+
 func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
 	return false
 }
 
 func (r *recordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return resourceControlClient.DefaultRUVersion
+}
+
+type legacyRecordingInterceptor struct {
+	waitCalls   int
+	respCalls   int
+	cancelCalls int
+}
+
+func (r *legacyRecordingInterceptor) OnRequestWait(
+	context.Context, string, resourceControlClient.RequestInfo,
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	r.waitCalls++
+	return recordingRequestConsumption, &rmpb.Consumption{}, 0, 0, nil
+}
+
+func (r *legacyRecordingInterceptor) OnResponse(
+	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, error) {
+	return &rmpb.Consumption{}, nil
+}
+
+func (r *legacyRecordingInterceptor) OnResponseWait(
+	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, time.Duration, error) {
+	r.respCalls++
+	return &rmpb.Consumption{}, 0, nil
+}
+
+func (r *legacyRecordingInterceptor) OnRequestCancel(
+	context.Context, string, resourceControlClient.RequestInfo,
+) {
+	r.cancelCalls++
+}
+
+func (r *legacyRecordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
+	return false
+}
+
+func (r *legacyRecordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
 	return resourceControlClient.DefaultRUVersion
 }
 
@@ -183,6 +233,19 @@ func withRecordingInterceptor(t *testing.T) *recordingInterceptor {
 	return rec
 }
 
+func withLegacyRecordingInterceptor(t *testing.T) *legacyRecordingInterceptor {
+	t.Helper()
+	rec := &legacyRecordingInterceptor{}
+	var iface resourceControlClient.ResourceGroupKVInterceptor = rec
+	ResourceControlSwitch.Store(true)
+	ResourceControlInterceptor.Store(&iface)
+	t.Cleanup(func() {
+		ResourceControlSwitch.Store(false)
+		ResourceControlInterceptor.Store(nil)
+	})
+	return rec
+}
+
 func newRGRequest() *tikvrpc.Request {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
 	req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "test-rg"}
@@ -202,7 +265,7 @@ func TestSendRequestCancelsPreChargeOnTransportFailure(t *testing.T) {
 		"OnRequestCancel must run when the inner client returns no response")
 }
 
-func TestSendRequestRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+func TestSendRequestAppliesCancelDeltaToRUDetailsOnTransportFailure(t *testing.T) {
 	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
@@ -211,10 +274,26 @@ func TestSendRequestRollsBackRUDetailsOnTransportFailure(t *testing.T) {
 	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
 	assert.Nil(t, resp)
 	assert.Error(t, err)
-	assert.Equal(t, 0.0, ruDetails.RRU(),
-		"failed no-response requests must not leave request-side RRU in runtime stats")
-	assert.Equal(t, 0.0, ruDetails.WRU(),
-		"failed no-response requests must not leave request-side WRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.RRU+recordingCancelDelta.RRU, ruDetails.RRU(),
+		"failed no-response requests must apply PD's signed cancel delta to runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed no-response requests must not locally roll back write RU")
+}
+
+func TestSendRequestLegacyCancelDoesNotRollbackRUDetails(t *testing.T) {
+	rec := withLegacyRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
+	assert.Nil(t, resp)
+	assert.Error(t, err)
+	assert.Equal(t, 1, rec.cancelCalls)
+	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
+		"legacy cancel has no signed delta, so client-go must not guess a local RRU rollback")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"legacy cancel has no signed delta, so client-go must not guess a local WRU rollback")
 }
 
 func TestSendRequestDoesNotCancelOnSuccess(t *testing.T) {
@@ -254,7 +333,7 @@ func TestSendRequestAsyncCancelsPreChargeOnTransportFailure(t *testing.T) {
 		"OnRequestCancel must run on the async path too when resp is nil")
 }
 
-func TestSendRequestAsyncRollsBackRUDetailsOnTransportFailure(t *testing.T) {
+func TestSendRequestAsyncAppliesCancelDeltaToRUDetailsOnTransportFailure(t *testing.T) {
 	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
@@ -273,10 +352,10 @@ func TestSendRequestAsyncRollsBackRUDetailsOnTransportFailure(t *testing.T) {
 
 	assert.Nil(t, gotResp)
 	assert.Error(t, gotErr)
-	assert.Equal(t, 0.0, ruDetails.RRU(),
-		"failed async no-response requests must not leave request-side RRU in runtime stats")
-	assert.Equal(t, 0.0, ruDetails.WRU(),
-		"failed async no-response requests must not leave request-side WRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.RRU+recordingCancelDelta.RRU, ruDetails.RRU(),
+		"failed async no-response requests must apply PD's signed cancel delta to runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed async no-response requests must not locally roll back write RU")
 }
 
 // respondingClient yields a non-nil empty response so the interceptor settles

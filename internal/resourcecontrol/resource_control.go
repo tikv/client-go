@@ -39,7 +39,8 @@ type RequestInfo struct {
 	requestSize   uint64
 	accessType    controller.AccessLocationType
 	// predictedReadBytes is an optional caller-supplied read-bytes
-	// estimate; when > 0 it is the basis for RC paging pre-charge.
+	// estimate. The PD controller decides whether to use it for paging
+	// accounting based on request type; non-cop hints may be ignored.
 	predictedReadBytes uint64
 	// isCop is true when the underlying tikvrpc.Request targets the
 	// coprocessor endpoint (CmdCop / CmdCopStream). PD uses this to
@@ -165,7 +166,8 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 }
 
 // PredictedReadBytes implements PD's controller.RequestInfo interface,
-// supplying the read-bytes hint used for RC paging pre-charge.
+// supplying the read-bytes hint. The PD controller decides whether the hint is
+// eligible for paging accounting based on the request type.
 func (req *RequestInfo) PredictedReadBytes() uint64 {
 	return req.predictedReadBytes
 }

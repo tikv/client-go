@@ -62,8 +62,8 @@ func TestMakeRequestInfoPredictedReadBytes(t *testing.T) {
 	assert.Equal(t, uint64(256*1024), info.PredictedReadBytes(),
 		"predictedReadBytes should propagate from tikvrpc.Request")
 
-	// Without a hint, PredictedReadBytes defaults to 0 so PD skips
-	// pre-charge and bills at settlement time by actual read bytes only.
+	// Without a hint, PredictedReadBytes defaults to 0. This test only
+	// checks client-go propagation; PD still decides request eligibility.
 	reqNoHint := &tikvrpc.Request{
 		Req:     &kvrpcpb.BatchGetRequest{},
 		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
