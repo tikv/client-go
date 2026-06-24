@@ -181,8 +181,10 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	s.NotContains(m, string(bKey))
 
 	// inject an error on sending request.
-	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
-	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
+	s.Require().NoError(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`))
+	defer func() {
+		s.Require().NoError(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+	}()
 	txn = s.begin()
 	_, err = txn.GetSnapshot().BatchGet(context.TODO(), keys)
 	s.Error(err)

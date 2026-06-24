@@ -2182,7 +2182,7 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 
 			keys, values := make([][]byte, 0, 20), make([][]byte, 0, 20)
 			for i := 0; i < cap(keys); i++ {
-				keys = append(keys, []byte(fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
+				keys = append(keys, encodeKey("~lock_tikv", fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
 				values = append(values, []byte(fmt.Sprintf("value_%s_%03d", name, i)))
 			}
 			require.Greater(t, uint64(len(keys)), resolveLiteThreshold)
@@ -2232,7 +2232,7 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 			}
 
 			// check all the locks except the primary lock are kept.
-			keysEnd := []byte(fmt.Sprintf("resolve_lock_%s_\xff", name))
+			keysEnd := encodeKey("~lock_tikv", fmt.Sprintf("resolve_lock_%s_\xff", name))
 			locks, err := store.ScanLocks(ctx, keys[0], keysEnd, fetchTSO(store))
 			require.NoError(t, err)
 			require.Len(t, locks, len(keys)-1, "only the primary lock should be resolved")
