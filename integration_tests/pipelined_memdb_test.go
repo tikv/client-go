@@ -411,7 +411,9 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	_, err = panicWhenReadingRemoteBuffer(s.key("101"))
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
-	s.Equal(cache[string(s.key("101"))].Value, []byte(nil))
+	entry, ok := cache[string(s.key("101"))]
+	s.True(ok)
+	s.Equal(entry.Value, []byte(nil))
 
 	txn.Delete(s.key("99"))
 	mustFlush(txn)
