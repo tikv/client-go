@@ -22,6 +22,8 @@ func TestNewCodecV3(t *testing.T) {
 	re.Equal(kvrpcpb.APIVersion_V3, v3Codec.GetAPIVersion())
 	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 7}, v3Codec.prefix)
 	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 8}, v3Codec.endKey)
+	re.Equal([]byte{'r', 5, 6, 7}, v3Codec.routePrefix)
+	re.Equal([]byte{'r', 5, 6, 8}, v3Codec.routeEndKey)
 	re.Equal(identity, v3Codec.GetKeyspaceMeta().GetKeyspaceIdentity())
 	re.Equal(KeyspaceID(identity.KeyspaceId), v3Codec.GetKeyspaceID())
 }
@@ -64,7 +66,7 @@ func TestCodecV3EncodeRequestKeepsUserKeys(t *testing.T) {
 	re.Equal(identity, encoded.GetKeyspaceIdentity())
 }
 
-func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
+func TestCodecV3RegionKeysUseBareKeyspaceBoundary(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{
 		NamespaceId: 0x01020304,
@@ -77,7 +79,40 @@ func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
 	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'k', 'e', 'y'}, physicalKey)
 
 	regionKey := codec.EncodeRegionKey([]byte("key"))
+	regionPhysicalKey, err := codec.(*codecV3).memCodec.decodeKey(regionKey)
+	re.NoError(err)
+	re.Equal([]byte{'x', 5, 6, 7, 'k', 'e', 'y'}, regionPhysicalKey)
+
 	decodedKey, err := codec.DecodeRegionKey(regionKey)
+	re.NoError(err)
+	re.Equal([]byte("key"), decodedKey)
+
+	encodedStart, encodedEnd := codec.EncodeRegionRange([]byte("a"), nil)
+	startPhysicalKey, err := codec.(*codecV3).memCodec.decodeKey(encodedStart)
+	re.NoError(err)
+	endPhysicalKey, err := codec.(*codecV3).memCodec.decodeKey(encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte{'x', 5, 6, 7, 'a'}, startPhysicalKey)
+	re.Equal([]byte{'x', 5, 6, 8}, endPhysicalKey)
+
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte("a"), decodedStart)
+	re.Empty(decodedEnd)
+}
+
+func TestCodecV3DecodesLegacyIdentityRegionKeys(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	legacyRegionKey := v3Codec.memCodec.encodeKey(codec.EncodeKey([]byte("key")))
+	decodedKey, err := codec.DecodeRegionKey(legacyRegionKey)
 	re.NoError(err)
 	re.Equal([]byte("key"), decodedKey)
 }

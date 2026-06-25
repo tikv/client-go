@@ -1,12 +1,14 @@
 package apicodec
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -20,10 +22,14 @@ func checkV3Key(b []byte) error {
 	return nil
 }
 
-// codecV3 uses API V3 request context for TiKV RPCs and API V3 physical
-// prefixes for PD region lookups.
+// codecV3 uses API V3 request context for TiKV RPCs. During the current
+// keyspace-boundary rollout, PD region bounds remain aligned to the bare
+// keyspace-id prefix, so region routing uses routePrefix instead of the full
+// namespace-aware identity prefix.
 type codecV3 struct {
 	*codecV2
+	routePrefix []byte
+	routeEndKey []byte
 }
 
 // NewCodecV3 returns a codec for API V3 tenant-scoped keyspaces.
@@ -41,11 +47,14 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 	}
 
 	prefix := make([]byte, apiV3KeyspacePrefixLen)
+	routePrefix := make([]byte, keyspacePrefixLen)
 	switch mode {
 	case ModeRaw:
 		prefix[0] = RawModePrefix
+		routePrefix[0] = RawModePrefix
 	case ModeTxn:
 		prefix[0] = TxnModePrefix
+		routePrefix[0] = TxnModePrefix
 	default:
 		return nil, errors.Errorf("unknown mode")
 	}
@@ -55,10 +64,14 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 		return nil, err
 	}
 	copy(prefix[5:], keyspaceIDBytes)
+	copy(routePrefix[1:], keyspaceIDBytes)
 
 	endKey := make([]byte, apiV3KeyspacePrefixLen)
 	prefixVal := binary.BigEndian.Uint64(prefix)
 	binary.BigEndian.PutUint64(endKey, prefixVal+1)
+	routeEndKey := make([]byte, keyspacePrefixLen)
+	routePrefixVal := binary.BigEndian.Uint32(routePrefix)
+	binary.BigEndian.PutUint32(routeEndKey, routePrefixVal+1)
 
 	keyspaceMeta := &keyspacepb.KeyspaceMeta{
 		Name:     BuildKeyspaceName(keyspaceName),
@@ -72,7 +85,7 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 		keyspaceMeta: keyspaceMeta,
 	}
 	base.reqPool.New = func() any { return &tikvrpc.Request{} }
-	return &codecV3{codecV2: base}, nil
+	return &codecV3{codecV2: base, routePrefix: routePrefix, routeEndKey: routeEndKey}, nil
 }
 
 // EncodeRequest keeps V3 RPC key fields as user keys. TiKV uses the V3
@@ -96,6 +109,125 @@ func (c *codecV3) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	}
 	setRegionError(resp, decodedRegionError)
 	return resp, nil
+}
+
+func (c *codecV3) EncodeRegionKey(key []byte) []byte {
+	return c.memCodec.encodeKey(c.encodeRegionKey(key))
+}
+
+func (c *codecV3) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
+	memDecoded, err := c.memCodec.decodeKey(encodedKey)
+	if err != nil {
+		return nil, err
+	}
+	return c.decodeRegionKey(memDecoded)
+}
+
+func (c *codecV3) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
+	encodedStart, encodedEnd := c.encodeRegionRange(start, end)
+	return c.memCodec.encodeKey(encodedStart), c.memCodec.encodeKey(encodedEnd)
+}
+
+func (c *codecV3) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
+	var err error
+	if len(encodedStart) != 0 {
+		encodedStart, err = c.memCodec.decodeKey(encodedStart)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(encodedEnd) != 0 {
+		encodedEnd, err = c.memCodec.decodeKey(encodedEnd)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return c.decodeRegionRange(encodedStart, encodedEnd)
+}
+
+func (c *codecV3) encodeRegionKey(key []byte) []byte {
+	return append(append([]byte{}, c.routePrefix...), key...)
+}
+
+func (c *codecV3) encodeRegionRange(start, end []byte) ([]byte, []byte) {
+	var encodedEnd []byte
+	if len(end) > 0 {
+		encodedEnd = c.encodeRegionKey(end)
+	} else {
+		encodedEnd = c.routeEndKey
+	}
+	return c.encodeRegionKey(start), encodedEnd
+}
+
+func (c *codecV3) decodeRegionKey(encodedKey []byte) ([]byte, error) {
+	if len(encodedKey) == 0 {
+		return nil, nil
+	}
+	if bytes.HasPrefix(encodedKey, c.routePrefix) {
+		return encodedKey[len(c.routePrefix):], nil
+	}
+	if bytes.HasPrefix(encodedKey, c.prefix) {
+		return encodedKey[len(c.prefix):], nil
+	}
+	return nil, errKeyOutOfBound
+}
+
+func (c *codecV3) decodeRegionRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
+	if bytes.Compare(encodedStart, c.routeEndKey) >= 0 ||
+		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.routePrefix) <= 0) {
+		return nil, nil, errors.WithStack(errKeyOutOfBound)
+	}
+
+	start, end = []byte{}, []byte{}
+	if len(encodedStart) > 0 {
+		start, err = c.decodeRegionKey(encodedStart)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(encodedEnd) > 0 && !bytes.Equal(encodedEnd, c.routeEndKey) {
+		end, err = c.decodeRegionKey(encodedEnd)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return start, end, nil
+}
+
+func (c *codecV3) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
+	if regionError == nil {
+		return nil, nil
+	}
+	var err error
+	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
+		if len(errInfo.Key) > 0 {
+			errInfo.Key, err = c.decodeRegionKey(errInfo.Key)
+			if err != nil {
+				return nil, err
+			}
+		}
+		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if errInfo := regionError.EpochNotMatch; errInfo != nil {
+		decodedRegions := make([]*metapb.Region, 0, len(errInfo.CurrentRegions))
+		for _, meta := range errInfo.CurrentRegions {
+			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
+			if err != nil {
+				if errors.Is(err, errKeyOutOfBound) {
+					continue
+				}
+				return nil, err
+			}
+			decodedRegions = append(decodedRegions, meta)
+		}
+		errInfo.CurrentRegions = decodedRegions
+	}
+
+	return regionError, nil
 }
 
 func setRegionError(resp *tikvrpc.Response, regionError *errorpb.Error) {
