@@ -135,3 +135,27 @@ func TestCodecV3DecodesLogicalRegionBoundaries(t *testing.T) {
 	re.Equal([]byte("setting"), decodedStart)
 	re.Equal([]byte("setting\x00"), decodedEnd)
 }
+
+func TestCodecV3ClipsWidePhysicalRegionBoundaries(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	prevKeyspaceStart := v3Codec.memCodec.encodeKey([]byte{'x', 0x05, 0x06, 0x06})
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(prevKeyspaceStart, nil)
+	re.NoError(err)
+	re.Empty(decodedStart)
+	re.Empty(decodedEnd)
+
+	currentStart := v3Codec.memCodec.encodeKey(append([]byte{'x', 0x05, 0x06, 0x07}, []byte("setting")...))
+	nextKeyspaceEnd := v3Codec.memCodec.encodeKey([]byte{'x', 0x05, 0x06, 0x08})
+	decodedStart, decodedEnd, err = codec.DecodeRegionRange(currentStart, nextKeyspaceEnd)
+	re.NoError(err)
+	re.Equal([]byte("setting"), decodedStart)
+	re.Empty(decodedEnd)
+}

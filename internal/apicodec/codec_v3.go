@@ -187,18 +187,30 @@ func (c *codecV3) decodeRegionRange(encodedStart, encodedEnd []byte) (start []by
 
 	start, end = []byte{}, []byte{}
 	if len(encodedStart) > 0 {
-		start, err = c.decodeRegionKey(encodedStart)
-		if err != nil {
-			return nil, nil, err
+		if c.isScopedRegionBoundary(encodedStart) {
+			start, err = c.decodeRegionKey(encodedStart)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if bytes.Compare(encodedStart, c.routePrefix) > 0 {
+			return nil, nil, errors.WithStack(errKeyOutOfBound)
 		}
 	}
-	if len(encodedEnd) > 0 && !bytes.Equal(encodedEnd, c.routeEndKey) {
-		end, err = c.decodeRegionKey(encodedEnd)
-		if err != nil {
-			return nil, nil, err
+	if len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.routeEndKey) < 0 {
+		if c.isScopedRegionBoundary(encodedEnd) {
+			end, err = c.decodeRegionKey(encodedEnd)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if bytes.Compare(encodedEnd, c.routePrefix) > 0 {
+			return nil, nil, errors.WithStack(errKeyOutOfBound)
 		}
 	}
 	return start, end, nil
+}
+
+func (c *codecV3) isScopedRegionBoundary(key []byte) bool {
+	return bytes.HasPrefix(key, c.routePrefix) || bytes.HasPrefix(key, c.prefix) || c.isLogicalRegionKey(key)
 }
 
 func (c *codecV3) isLogicalRegionRange(start, end []byte) bool {
