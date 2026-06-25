@@ -116,3 +116,22 @@ func TestCodecV3DecodesLegacyIdentityRegionKeys(t *testing.T) {
 	re.NoError(err)
 	re.Equal([]byte("key"), decodedKey)
 }
+
+func TestCodecV3DecodesLogicalRegionBoundaries(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	encodedStart := v3Codec.memCodec.encodeKey([]byte("setting"))
+	encodedEnd := v3Codec.memCodec.encodeKey([]byte("setting\x00"))
+
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte("setting"), decodedStart)
+	re.Equal([]byte("setting\x00"), decodedEnd)
+}

@@ -169,10 +169,17 @@ func (c *codecV3) decodeRegionKey(encodedKey []byte) ([]byte, error) {
 	if bytes.HasPrefix(encodedKey, c.prefix) {
 		return encodedKey[len(c.prefix):], nil
 	}
+	if c.isLogicalRegionKey(encodedKey) {
+		return append([]byte{}, encodedKey...), nil
+	}
 	return nil, errKeyOutOfBound
 }
 
 func (c *codecV3) decodeRegionRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
+	if c.isLogicalRegionRange(encodedStart, encodedEnd) {
+		return append([]byte{}, encodedStart...), append([]byte{}, encodedEnd...), nil
+	}
+
 	if bytes.Compare(encodedStart, c.routeEndKey) >= 0 ||
 		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.routePrefix) <= 0) {
 		return nil, nil, errors.WithStack(errKeyOutOfBound)
@@ -192,6 +199,24 @@ func (c *codecV3) decodeRegionRange(encodedStart, encodedEnd []byte) (start []by
 		}
 	}
 	return start, end, nil
+}
+
+func (c *codecV3) isLogicalRegionRange(start, end []byte) bool {
+	return c.isLogicalRegionKey(start) && c.isLogicalRegionKey(end)
+}
+
+func (c *codecV3) isLogicalRegionKey(key []byte) bool {
+	if len(key) == 0 {
+		return true
+	}
+	if bytes.HasPrefix(key, c.routePrefix) || bytes.HasPrefix(key, c.prefix) {
+		return false
+	}
+	// Until API V3 region boundaries become namespace-aware, PD may answer a
+	// keyspace-scoped region request with logical keys. Keep accepting physical
+	// looking keys as out-of-bound so stale cross-keyspace regions are not
+	// silently treated as user keys.
+	return len(key) < keyspacePrefixLen || (key[0] != RawModePrefix && key[0] != TxnModePrefix)
 }
 
 func (c *codecV3) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
