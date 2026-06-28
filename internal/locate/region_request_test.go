@@ -73,6 +73,8 @@ import (
 	pd "github.com/tikv/pd/client"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestRegionRequestToSingleStore(t *testing.T) {
@@ -1256,6 +1258,48 @@ func TestRPCContextString(t *testing.T) {
 		require.Contains(t, ctx.String(), ", proxy store id: 2, proxy addr: tikv-2")
 		require.Contains(t, ctx.ToBackoffReasonString(), ", proxy store id: 2, proxy addr: tikv-2")
 	})
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestSendReqTLSFailFast() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{
+		Tp:      0,
+		Data:    []byte("test"),
+		Ranges:  nil,
+		Context: &kvrpcpb.Context{},
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	test := func() {
+		oc := s.regionRequestSender.client
+		defer func() {
+			s.regionRequestSender.client = oc
+		}()
+
+		// Simulate the gRPC error produced when TLS ServerName "localhost" does not match cert SANs.
+		tlsErr := status.Error(codes.Unavailable,
+			`connection error: desc = "transport: authentication handshake failed: `+
+				`tls: failed to verify certificate: x509: certificate is valid for example.com, not localhost"`)
+
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			return nil, tlsErr
+		}}
+
+		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+		resp, retryTimes, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		s.Nil(resp)
+		s.NotNil(err)
+		// TLS auth error should fail fast without any retry.
+		s.Zero(retryTimes)
+		s.Contains(err.Error(), "x509:")
+	}
+
+	s.Run("Default", test)
+
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.Run("AsyncAPI", test)
 }
 
 func TestBackoffErrWithRPCContext(t *testing.T) {
