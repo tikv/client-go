@@ -169,7 +169,7 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	}
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	if reqInfo.Bypass() {
-		return "", nil, nil
+		return resourceGroupName, nil, reqInfo
 	}
 	return resourceGroupName, resourceControlInterceptor, reqInfo
 }
