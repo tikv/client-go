@@ -204,6 +204,15 @@ var (
 	LagCommitTSWaitHistogramWithError    prometheus.Observer
 	LagCommitTSAttemptHistogramWithOK    prometheus.Observer
 	LagCommitTSAttemptHistogramWithError prometheus.Observer
+
+	TxnFileRequestsOk           prometheus.Counter
+	TxnFileRequestsError        prometheus.Counter
+	TxnFileWriteBytesInternal   prometheus.Counter
+	TxnFileWriteBytesGeneral    prometheus.Counter
+	TxnFileMutationSizeInternal prometheus.Observer
+	TxnFileMutationSizeGeneral  prometheus.Observer
+	TxnFileDurationInternal     prometheus.Observer
+	TxnFileDurationGeneral      prometheus.Observer
 )
 
 func initShortcuts() {
@@ -377,4 +386,13 @@ func initShortcuts() {
 	LagCommitTSWaitHistogramWithError = TiKVTxnLagCommitTSWaitHistogram.WithLabelValues("err")
 	LagCommitTSAttemptHistogramWithOK = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("ok")
 	LagCommitTSAttemptHistogramWithError = TiKVTxnLagCommitTSAttemptHistogram.WithLabelValues("err")
+
+	TxnFileRequestsOk = TiKVTxnFileRequestCounter.WithLabelValues("ok")
+	TxnFileRequestsError = TiKVTxnFileRequestCounter.WithLabelValues("err")
+	TxnFileWriteBytesInternal = TiKVTxnFileWriteBytes.WithLabelValues(LblInternal)
+	TxnFileWriteBytesGeneral = TiKVTxnFileWriteBytes.WithLabelValues(LblGeneral)
+	TxnFileMutationSizeInternal = TiKVTxnFileMutationSizeHistogram.WithLabelValues(LblInternal)
+	TxnFileMutationSizeGeneral = TiKVTxnFileMutationSizeHistogram.WithLabelValues(LblGeneral)
+	TxnFileDurationInternal = TiKVTxnFileDuration.WithLabelValues(LblInternal)
+	TxnFileDurationGeneral = TiKVTxnFileDuration.WithLabelValues(LblGeneral)
 }
