@@ -16,16 +16,20 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 type emptyClient struct{}
@@ -102,6 +106,174 @@ func TestAppendChainedInterceptor(t *testing.T) {
 	// add duplciated
 	chain = interceptor.ChainRPCInterceptors(chain, mkInterceptorFn(1))
 	checkChained(chain, 5, []int{0, 2, 3, 4, 1})
+}
+
+// recordingInterceptor counts request/response hooks.
+// invocations and returns benign zero values so the interceptor wiring can be
+// exercised end-to-end without touching real PD state.
+type recordingInterceptor struct {
+	waitCalls int
+	respCalls int
+}
+
+var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
+
+func (r *recordingInterceptor) OnRequestWait(
+	context.Context, string, resourceControlClient.RequestInfo,
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	r.waitCalls++
+	return recordingRequestConsumption, &rmpb.Consumption{}, 0, 0, nil
+}
+
+func (r *recordingInterceptor) OnResponse(
+	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, error) {
+	return &rmpb.Consumption{}, nil
+}
+
+func (r *recordingInterceptor) OnResponseWait(
+	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, time.Duration, error) {
+	r.respCalls++
+	return &rmpb.Consumption{}, 0, nil
+}
+
+func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
+	return false
+}
+
+func (r *recordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return resourceControlClient.DefaultRUVersion
+}
+
+// failingClient simulates a transport-level RPC failure: SendRequest returns
+// (nil, err) so the interceptor's response-side settlement path is skipped.
+type failingClient struct{ emptyClient }
+
+func (c failingClient) SendRequest(
+	context.Context, string, *tikvrpc.Request, time.Duration,
+) (*tikvrpc.Response, error) {
+	return nil, errors.New("simulated transport failure")
+}
+
+func (c failingClient) SendRequestAsync(
+	_ context.Context, _ string, _ *tikvrpc.Request, cb async.Callback[*tikvrpc.Response],
+) {
+	cb.Invoke(nil, errors.New("simulated transport failure"))
+}
+
+func withRecordingInterceptor(t *testing.T) *recordingInterceptor {
+	t.Helper()
+	rec := &recordingInterceptor{}
+	var iface resourceControlClient.ResourceGroupKVInterceptor = rec
+	ResourceControlSwitch.Store(true)
+	ResourceControlInterceptor.Store(&iface)
+	t.Cleanup(func() {
+		ResourceControlSwitch.Store(false)
+		ResourceControlInterceptor.Store(nil)
+	})
+	return rec
+}
+
+func newRGRequest() *tikvrpc.Request {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
+	req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "test-rg"}
+	return req
+}
+
+func TestSendRequestDoesNotSettleOnTransportFailure(t *testing.T) {
+	rec := withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+
+	resp, err := client.SendRequest(context.Background(), "", newRGRequest(), 0)
+	assert.Nil(t, resp)
+	assert.Error(t, err)
+	assert.Equal(t, 1, rec.waitCalls, "OnRequestWait must run once")
+	assert.Equal(t, 0, rec.respCalls, "OnResponseWait must be skipped when resp is nil")
+}
+
+func TestSendRequestKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
+	withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
+	assert.Nil(t, resp)
+	assert.Error(t, err)
+	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
+		"failed no-response requests must keep request-side RRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed no-response requests must keep request-side WRU in runtime stats")
+}
+
+func TestSendRequestSettlesOnSuccess(t *testing.T) {
+	rec := withRecordingInterceptor(t)
+	// Inner client returns a non-nil response (default emptyClient yields
+	// nil but its purpose here is to NOT yield nil — wrap it).
+	client := NewInterceptedClient(respondingClient{})
+
+	resp, err := client.SendRequest(context.Background(), "", newRGRequest(), 0)
+	assert.NotNil(t, resp)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, rec.waitCalls)
+	assert.Equal(t, 1, rec.respCalls, "settlement path must run when resp is non-nil")
+}
+
+func TestSendRequestAsyncDoesNotSettleOnTransportFailure(t *testing.T) {
+	rec := withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+
+	done := make(chan struct{})
+	var gotResp *tikvrpc.Response
+	var gotErr error
+	cb := async.NewCallback(nil, func(resp *tikvrpc.Response, err error) {
+		gotResp = resp
+		gotErr = err
+		close(done)
+	})
+	client.SendRequestAsync(context.Background(), "", newRGRequest(), cb)
+	<-done
+
+	assert.Nil(t, gotResp)
+	assert.Error(t, gotErr)
+	assert.Equal(t, 1, rec.waitCalls)
+	assert.Equal(t, 0, rec.respCalls)
+}
+
+func TestSendRequestAsyncKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
+	withRecordingInterceptor(t)
+	client := NewInterceptedClient(failingClient{})
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+
+	done := make(chan struct{})
+	var gotResp *tikvrpc.Response
+	var gotErr error
+	cb := async.NewCallback(nil, func(resp *tikvrpc.Response, err error) {
+		gotResp = resp
+		gotErr = err
+		close(done)
+	})
+	client.SendRequestAsync(ctx, "", newRGRequest(), cb)
+	<-done
+
+	assert.Nil(t, gotResp)
+	assert.Error(t, gotErr)
+	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
+		"failed async no-response requests must keep request-side RRU in runtime stats")
+	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
+		"failed async no-response requests must keep request-side WRU in runtime stats")
+}
+
+// respondingClient yields a non-nil empty response so the interceptor settles
+// through OnResponseWait.
+type respondingClient struct{ emptyClient }
+
+func (c respondingClient) SendRequest(
+	context.Context, string, *tikvrpc.Request, time.Duration,
+) (*tikvrpc.Response, error) {
+	return &tikvrpc.Response{}, nil
 }
 
 func TestBypassRUV2FollowsRequestInfoBypass(t *testing.T) {

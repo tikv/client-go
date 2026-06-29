@@ -267,6 +267,11 @@ type Request struct {
 	InputRequestSource string
 	// AccessLocationAttr indicates the request is sent to a different zone.
 	AccessLocation kv.AccessLocationType
+	// PredictedReadBytes is an optional caller-supplied estimate of this
+	// request's read bytes. The resource-control layer passes it to PD's
+	// controller, which decides whether the request type is eligible for
+	// paging pre-charge; non-cop hints may be ignored.
+	PredictedReadBytes uint64
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32
 }

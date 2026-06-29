@@ -30,8 +30,8 @@ require (
 	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/sync v0.19.0
-	google.golang.org/grpc v1.75.1
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/grpc v1.79.3
+	google.golang.org/protobuf v1.36.10
 	modernc.org/mathutil v1.7.1
 )
 
@@ -54,8 +54,11 @@ require (
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary: pin to feature branch. Revert once tikv/pd#10611 is merged and tagged.
+replace github.com/tikv/pd/client => github.com/YuhaoZhang00/pd/client v0.0.0-20260623073432-1927611f1727
