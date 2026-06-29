@@ -64,8 +64,12 @@ func (s *testOnePCSuite) TearDownTest() {
 	s.testAsyncCommitCommon.tearDownTest()
 }
 
+func (s *testOnePCSuite) key(name string) []byte {
+	return encodeKey("~1pc", name)
+}
+
 func (s *testOnePCSuite) Test1PC() {
-	k1 := []byte("k1")
+	k1 := s.key("k1")
 	v1 := []byte("v1")
 
 	txn := s.begin1PC()
@@ -81,7 +85,7 @@ func (s *testOnePCSuite) Test1PC() {
 
 	// 1PC doesn't work if 1PC option is not set
 
-	k2 := []byte("k2")
+	k2 := s.key("k2")
 	v2 := []byte("v2")
 
 	txn = s.begin()
@@ -94,11 +98,11 @@ func (s *testOnePCSuite) Test1PC() {
 	s.Greater(txn.GetCommitter().GetCommitTS(), txn.StartTS())
 
 	// Test multiple keys
-	k3 := []byte("k3")
+	k3 := s.key("k3")
 	v3 := []byte("v3")
-	k4 := []byte("k4")
+	k4 := s.key("k4")
 	v4 := []byte("v4")
-	k5 := []byte("k5")
+	k5 := s.key("k5")
 	v5 := []byte("v5")
 
 	txn = s.begin1PC()
@@ -148,7 +152,7 @@ func (s *testOnePCSuite) Test1PC() {
 }
 
 func (s *testOnePCSuite) Test1PCIsolation() {
-	k := []byte("k")
+	k := s.key("isolation_k")
 	v1 := []byte("v1")
 
 	txn := s.begin1PC()
@@ -189,27 +193,28 @@ func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 
 	txn := s.begin1PC()
 
-	keys := []string{"k0", "k1", "k2", "k3"}
+	keyNames := []string{"k0", "k1", "k2", "k3"}
+	keys := [][]byte{s.key(keyNames[0]), s.key(keyNames[1]), s.key(keyNames[2]), s.key(keyNames[3])}
 	values := []string{"v0", "v1", "v2", "v3"}
 
-	err := txn.Set([]byte(keys[0]), []byte(values[0]))
+	err := txn.Set(keys[0], []byte(values[0]))
 	s.Nil(err)
-	err = txn.Set([]byte(keys[3]), []byte(values[3]))
+	err = txn.Set(keys[3], []byte(values[3]))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
 
 	// 1PC doesn't work if it affects multiple regions.
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte(keys[2]))
+	loc, err := s.store.GetRegionCache().LocateKey(s.bo, keys[2])
 	s.Nil(err)
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
-	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte(keys[2]), []uint64{newPeerID}, newPeerID)
+	s.cluster.Split(loc.Region.GetID(), newRegionID, keys[2], []uint64{newPeerID}, newPeerID)
 
 	txn = s.begin1PC()
-	err = txn.Set([]byte(keys[1]), []byte(values[1]))
+	err = txn.Set(keys[1], []byte(values[1]))
 	s.Nil(err)
-	err = txn.Set([]byte(keys[2]), []byte(values[2]))
+	err = txn.Set(keys[2], []byte(values[2]))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -221,7 +226,7 @@ func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 	s.Nil(err)
 	snap := s.store.GetSnapshot(ver)
 	for i, k := range keys {
-		v, err := snap.Get(context.Background(), []byte(k))
+		v, err := snap.Get(context.Background(), k)
 		s.Nil(err)
 		s.Equal(v.Value, []byte(values[i]))
 	}
@@ -232,9 +237,9 @@ func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 func (s *testOnePCSuite) Test1PCLinearizability() {
 	t1 := s.begin()
 	t2 := s.begin()
-	err := t1.Set([]byte("a"), []byte("a1"))
+	err := t1.Set(s.key("linear_a"), []byte("a1"))
 	s.Nil(err)
-	err = t2.Set([]byte("b"), []byte("b1"))
+	err = t2.Set(s.key("linear_b"), []byte("b1"))
 	s.Nil(err)
 	// t2 commits earlier than t1
 	err = t2.Commit(context.Background())
@@ -253,7 +258,7 @@ func (s *testOnePCSuite) Test1PCWithMultiDC() {
 	}
 
 	localTxn := s.begin1PC()
-	err := localTxn.Set([]byte("a"), []byte("a1"))
+	err := localTxn.Set(s.key("multi_dc_a"), []byte("a1"))
 	localTxn.SetScope("bj")
 	s.Nil(err)
 	err = localTxn.Commit(context.Background())
@@ -261,7 +266,7 @@ func (s *testOnePCSuite) Test1PCWithMultiDC() {
 	s.False(localTxn.GetCommitter().IsOnePC())
 
 	globalTxn := s.begin1PC()
-	err = globalTxn.Set([]byte("b"), []byte("b1"))
+	err = globalTxn.Set(s.key("multi_dc_b"), []byte("b1"))
 	globalTxn.SetScope(oracle.GlobalTxnScope)
 	s.Nil(err)
 	err = globalTxn.Commit(context.Background())
@@ -274,7 +279,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// 2PC
 	txn := s.begin()
-	err := txn.Set([]byte("k"), []byte("v"))
+	err := txn.Set(s.key("counter_k"), []byte("v"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -286,7 +291,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// AsyncCommit
 	txn = s.beginAsyncCommit()
-	err = txn.Set([]byte("k1"), []byte("v1"))
+	err = txn.Set(s.key("counter_k1"), []byte("v1"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -298,7 +303,7 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 
 	// 1PC
 	txn = s.begin1PC()
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	err = txn.Set(s.key("counter_k2"), []byte("v2"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -314,7 +319,7 @@ func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
 		s.T().Skip("not supported in real TiKV")
 	}
 	txn := s.begin1PC()
-	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	s.Nil(txn.Set(s.key("undetermined_key"), []byte("value")))
 	s.Nil(failpoint.Enable(
 		"tikvclient/rpcPrewriteResult",
 		// it will make the prewrite in 1pc fail.

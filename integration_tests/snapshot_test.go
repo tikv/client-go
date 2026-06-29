@@ -73,7 +73,7 @@ type testSnapshotSuite struct {
 }
 
 func (s *testSnapshotSuite) SetupTest() {
-	s.prefix = fmt.Sprintf("test_snapshot_%d", time.Now().Unix())
+	s.prefix = fmt.Sprintf("~snapshot_%d", time.Now().Unix())
 	store := NewTestUniStore(s.T())
 	s.store = tikv.StoreProbe{KVStore: store}
 }
@@ -86,6 +86,10 @@ func (s *testSnapshotSuite) beginTxn() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn
+}
+
+func (s *testSnapshotSuite) key(name string) []byte {
+	return encodeKey("~snapshot", name)
 }
 
 func (s *testSnapshotSuite) checkAll(keys [][]byte) {
@@ -144,65 +148,67 @@ func (s *testSnapshotSuite) TestGetAndBatchGetWithReturnCommitTS() {
 		s.T().Skip("NextGen does not support WithReturnCommitTS option")
 	}
 
+	aKey, bKey, cKey, dKey, eKey := s.key("return_ts_a"), s.key("return_ts_b"), s.key("return_ts_c"), s.key("return_ts_d"), s.key("return_ts_e")
 	txn := s.beginTxn()
-	s.Nil(txn.Set([]byte("a"), []byte("a1")))
-	s.Nil(txn.Set([]byte("b"), []byte("b1")))
-	s.Nil(txn.Set([]byte("c"), []byte("c1")))
+	s.Nil(txn.Set(aKey, []byte("a1")))
+	s.Nil(txn.Set(bKey, []byte("b1")))
+	s.Nil(txn.Set(cKey, []byte("c1")))
 	s.Nil(txn.Commit(context.Background()))
 
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
 
-	entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b"), []byte("d")}, kv.WithReturnCommitTS())
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{aKey, bKey, dKey}, kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Len(entries, 2)
-	s.Equal([]byte("a1"), entries["a"].Value)
-	commitTS := entries["a"].CommitTS
+	s.Equal([]byte("a1"), entries[string(aKey)].Value)
+	commitTS := entries[string(aKey)].CommitTS
 	s.Greater(commitTS, uint64(0))
-	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries["b"])
+	s.Equal(kv.NewValueEntry([]byte("b1"), commitTS), entries[string(bKey)])
 
-	entry, err := snapshot.Get(context.Background(), []byte("c"), kv.WithReturnCommitTS())
+	entry, err := snapshot.Get(context.Background(), cKey, kv.WithReturnCommitTS())
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("c1"), commitTS), entry)
 
-	entry, err = snapshot.Get(context.Background(), []byte("e"), kv.WithReturnCommitTS())
+	entry, err = snapshot.Get(context.Background(), eKey, kv.WithReturnCommitTS())
 	s.EqualError(err, tikverr.ErrNotExist.Error())
 	s.Equal(kv.ValueEntry{}, entry)
 }
 
 func (s *testSnapshotSuite) TestSnapshotCache() {
+	xKey, yKey, aKey, bKey := s.key("cache_x"), s.key("cache_y"), s.key("cache_a"), s.key("cache_b")
 	txn := s.beginTxn()
-	s.Nil(txn.Set([]byte("x"), []byte("x")))
-	s.Nil(txn.Delete([]byte("y"))) // delete should also be cached
-	s.Nil(txn.Set([]byte("a"), []byte("a")))
-	s.Nil(txn.Delete([]byte("b")))
+	s.Nil(txn.Set(xKey, []byte("x")))
+	s.Nil(txn.Delete(yKey)) // delete should also be cached
+	s.Nil(txn.Set(aKey, []byte("a")))
+	s.Nil(txn.Delete(bKey))
 	s.Nil(txn.Commit(context.Background()))
 
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
 	// generate cache by BatchGet
-	_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("x"), []byte("y")})
+	_, err := snapshot.BatchGet(context.Background(), [][]byte{xKey, yKey})
 	s.Nil(err)
 	// generate cache by Get
-	_, err = snapshot.Get(context.Background(), []byte("a"))
+	_, err = snapshot.Get(context.Background(), aKey)
 	s.Nil(err)
-	_, err = snapshot.Get(context.Background(), []byte("b"))
+	_, err = snapshot.Get(context.Background(), bKey)
 	s.True(tikverr.IsErrNotFound(err))
 
 	s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
 	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 
 	// check cache from BatchGet
-	entries, err := snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")})
+	entries, err := snapshot.BatchGet(ctx, [][]byte{xKey, yKey})
 	s.Nil(err)
 	s.Len(entries, 1)
-	s.Equal(kv.NewValueEntry([]byte("x"), 0), entries["x"])
+	s.Equal(kv.NewValueEntry([]byte("x"), 0), entries[string(xKey)])
 
 	// check cache from Get
-	entry, err := snapshot.Get(ctx, []byte("a"))
+	entry, err := snapshot.Get(ctx, aKey)
 	s.Nil(err)
 	s.Equal(kv.NewValueEntry([]byte("a"), 0), entry)
-	entry, err = snapshot.Get(ctx, []byte("b"))
+	entry, err = snapshot.Get(ctx, bKey)
 	s.True(tikverr.IsErrNotFound(err))
 	s.Equal(kv.ValueEntry{}, entry)
 
@@ -222,11 +228,11 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 
 		// check BatchGet
 		// When require commit ts, it should return the correct commit ts instead of the cached zero.
-		entries, err = snapshot.BatchGet(ctx, [][]byte{[]byte("x"), []byte("y")}, kv.WithReturnCommitTS())
+		entries, err = snapshot.BatchGet(ctx, [][]byte{xKey, yKey}, kv.WithReturnCommitTS())
 		s.Nil(err)
 		s.Len(entries, 1)
-		s.Equal([]byte("x"), entries["x"].Value)
-		if commitTS := entries["x"].CommitTS; expectedCommitTS == 0 {
+		s.Equal([]byte("x"), entries[string(xKey)].Value)
+		if commitTS := entries[string(xKey)].CommitTS; expectedCommitTS == 0 {
 			s.Greater(commitTS, uint64(0))
 			expectedCommitTS = commitTS
 		} else {
@@ -235,10 +241,10 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 
 		// check Get
 		// When require commit ts, it should return the correct commit ts instead of the cached zero.
-		entry, err = snapshot.Get(ctx, []byte("a"), kv.WithReturnCommitTS())
+		entry, err = snapshot.Get(ctx, aKey, kv.WithReturnCommitTS())
 		s.Nil(err)
 		s.Equal(kv.NewValueEntry([]byte("a"), expectedCommitTS), entry)
-		entry, err = snapshot.Get(ctx, []byte("b"))
+		entry, err = snapshot.Get(ctx, bKey)
 		s.True(tikverr.IsErrNotFound(err))
 		s.Equal(kv.ValueEntry{}, entry)
 	}
@@ -258,7 +264,7 @@ func (s *testSnapshotSuite) TestBatchGetNotExist() {
 		s.Nil(err)
 
 		keys := makeKeys(rowNum, s.prefix)
-		keys = append(keys, []byte("noSuchKey"))
+		keys = append(keys, s.key("noSuchKey"))
 		s.checkAll(keys)
 		s.deleteKeys(keys)
 	}
@@ -310,8 +316,8 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 }
 
 func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
-	x := []byte("x_key_TestPointGetSkipTxnLock")
-	y := []byte("y_key_TestPointGetSkipTxnLock")
+	x := s.key("x_key_TestPointGetSkipTxnLock")
+	y := s.key("y_key_TestPointGetSkipTxnLock")
 	txn := s.beginTxn()
 	s.Nil(txn.Set(x, []byte("x")))
 	s.Nil(txn.Set(y, []byte("y")))
@@ -344,7 +350,8 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 
 func (s *testSnapshotSuite) TestSnapshotThreadSafe() {
 	txn := s.beginTxn()
-	key := []byte("key_test_snapshot_threadsafe")
+	key := s.key("key_test_snapshot_threadsafe")
+	notExistKey := s.key("key_not_exist")
 	s.Nil(txn.Set(key, []byte("x")))
 	ctx := context.Background()
 	err := txn.Commit(context.Background())
@@ -358,7 +365,7 @@ func (s *testSnapshotSuite) TestSnapshotThreadSafe() {
 			for i := 0; i < 30; i++ {
 				_, err := snapshot.Get(ctx, key)
 				s.Nil(err)
-				_, err = snapshot.BatchGet(ctx, [][]byte{key, []byte("key_not_exist")})
+				_, err = snapshot.BatchGet(ctx, [][]byte{key, notExistKey})
 				s.Nil(err)
 			}
 			wg.Done()
@@ -473,26 +480,27 @@ func (s *testSnapshotSuite) TestRCRead() {
 }
 
 func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
+	xKey, yKey, zKey := s.key("bypass_x"), s.key("bypass_y"), s.key("bypass_z")
 	txn := s.beginTxn()
-	s.Nil(txn.Set([]byte("x"), []byte("x")))
-	s.Nil(txn.Set([]byte("y"), []byte("y")))
-	s.Nil(txn.Set([]byte("z"), []byte("z")))
+	s.Nil(txn.Set(xKey, []byte("x")))
+	s.Nil(txn.Set(yKey, []byte("y")))
+	s.Nil(txn.Set(zKey, []byte("z")))
 	s.Nil(txn.Commit(context.Background()))
 	// cache version < math.MaxUint64
 	startTS, err := s.store.GetTimestampWithRetry(tikv.NewNoopBackoff(context.Background()), oracle.GlobalTxnScope)
 	s.Nil(err)
 	snapshot := s.store.GetSnapshot(startTS)
-	snapshot.Get(context.Background(), []byte("x"))
-	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+	snapshot.Get(context.Background(), xKey)
+	snapshot.BatchGet(context.Background(), [][]byte{yKey, zKey})
 	s.Equal(snapshot.SnapCache(), map[string]kv.ValueEntry{
-		"x": kv.NewValueEntry([]byte("x"), 0),
-		"y": kv.NewValueEntry([]byte("y"), 0),
-		"z": kv.NewValueEntry([]byte("z"), 0),
+		string(xKey): kv.NewValueEntry([]byte("x"), 0),
+		string(yKey): kv.NewValueEntry([]byte("y"), 0),
+		string(zKey): kv.NewValueEntry([]byte("z"), 0),
 	})
 	// not cache version == math.MaxUint64
 	snapshot = s.store.GetSnapshot(math.MaxUint64)
-	snapshot.Get(context.Background(), []byte("x"))
-	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+	snapshot.Get(context.Background(), xKey)
+	snapshot.BatchGet(context.Background(), [][]byte{yKey, zKey})
 	s.Empty(snapshot.SnapCache())
 }
 
@@ -506,7 +514,8 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 		cfg.EnableAsyncBatchGet = originAsyncEnable
 		config.StoreGlobalConfig(cfg)
 	}()
-	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	xKey, yKey, zKey := s.key("replica_x"), s.key("replica_y"), s.key("replica_z")
+	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{s.key("replica_y1")}, false, nil)
 	s.Nil(err)
 	for _, regionID := range regionIDs {
 		var loc *tikv.KeyLocation
@@ -563,8 +572,8 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 				}
 				return nil, kv.ReplicaReadLeader
 			})
-			txn.Get(context.Background(), []byte("x"))
-			txn.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+			txn.Get(context.Background(), xKey)
+			txn.BatchGet(context.Background(), [][]byte{yKey, zKey})
 			txn.Rollback()
 		}
 	}

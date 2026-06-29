@@ -25,13 +25,15 @@ Prefer existing error, retry, backoff, logging, metrics, and failpoint helpers i
 
 ## API v2 Codec Guidelines
 
-All API v2 commands that carry keys must have complete and consistent encode/decode handling in `internal/apicodec`. This includes keys, key ranges, lock information, region errors, and any request or response fields that carry encoded keys. When adding or modifying a key-bearing RPC, update both request and response paths, add table-driven coverage in `internal/apicodec`, and verify that encode/decode behavior is symmetric. Missing or one-sided handling can create key-format mismatches and correctness bugs, especially across TiKV and CSE paths.
+All API v2 commands that carry keys must have complete and consistent encode/decode handling in `internal/apicodec`. This includes keys, key ranges, lock information, region errors, and any request or response fields that carry encoded keys. When adding or modifying a key-bearing RPC, update both request and response paths, add table-driven coverage in `internal/apicodec`, and verify that encode/decode behavior is symmetric. Missing or one-sided handling can create key-format mismatches and correctness bugs, especially across TiKV and CSE paths. When adding or modifying a `tikvrpc.Cmd*` whose request has a context field, update `tikvrpc/gen.sh`, regenerate `tikvrpc/cmds_generated.go`, and add `AttachContext` coverage.
 
 ## Testing Guidelines
 
 Use Go's `testing` package with `testify/require`, `testify/assert`, and `testify/suite`, matching nearby tests. Name tests `TestXxx` and keep suite types in the existing lowercase style, such as `testRawkvSuite` or `testSnapshotSuite`.
 
 Add or update package-level tests for every behavior change. Use `integration_tests/` when behavior depends on TiKV, PD, transactions, lock resolution, failpoints, or API-version behavior that mocks cannot cover. For concurrency-sensitive changes, run the race command before opening a PR.
+
+CSE is only used behind TiDB. Transactional integration tests that run against next-gen/CSE should generate keys through a TiDB-like mem-comparable helper such as `encodeKey(...)`, not raw ad-hoc keys like `[]byte("k")`. For split/range/order-sensitive tests, update data keys, split keys, range bounds, and expected keys together.
 
 ## Commit & Pull Request Guidelines
 

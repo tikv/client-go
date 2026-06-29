@@ -211,7 +211,7 @@ func (s *testOptionSuite) TestSetCommitWaitUntilTSO() {
 		s.Run(tc.name, func() {
 			txn, err := s.store.Begin()
 			s.NoError(err)
-			s.NoError(txn.Set([]byte("somekey:"+uuid.NewString()), []byte("somevalue")))
+			s.NoError(txn.Set(encodeKey("~option", "somekey:"+uuid.NewString()), []byte("somevalue")))
 			// by default, 1pc and async commit are disabled, but it can be overridden in extraPrepare
 			txn.SetEnableAsyncCommit(false)
 			txn.SetEnable1PC(false)
