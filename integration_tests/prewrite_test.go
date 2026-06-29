@@ -58,7 +58,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 	tx, err := store.Begin()
 	require.Nil(err)
 	txn := transaction.TxnProbe{KVTxn: tx}
-	err = txn.Set([]byte("k"), []byte("v"))
+	err = txn.Set(encodeKey("~prewrite", "k"), []byte("v"))
 	assert.Nil(err)
 	committer, err := txn.NewCommitter(1)
 	assert.Nil(err)
@@ -120,9 +120,9 @@ func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 	tx, err := store.Begin()
 	require.Nil(err)
 	txn := transaction.TxnProbe{KVTxn: tx}
-	err = txn.Set([]byte("a"), []byte("v"))
+	err = txn.Set(encodeKey("~prewrite", "a"), []byte("v"))
 	require.Nil(err)
-	err = txn.Set([]byte("z"), []byte("v"))
+	err = txn.Set(encodeKey("~prewrite", "z"), []byte("v"))
 	require.Nil(err)
 	committer, err := txn.NewCommitter(1)
 	require.Nil(err)
@@ -133,7 +133,7 @@ func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 		wg.Done()
 	}()
 	time.Sleep(time.Second * 3)
-	cluster.Split(regionID, cluster.AllocID(), []byte("h"), []uint64{peerID}, peerID)
+	cluster.Split(regionID, cluster.AllocID(), encodeKey("~prewrite", "h"), []uint64{peerID}, peerID)
 	failpoint.Disable("tikvclient/invalidCacheAndRetry")
 	wg.Wait()
 

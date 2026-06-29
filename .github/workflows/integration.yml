@@ -133,6 +133,7 @@ jobs:
       - name: Test
         run: gotestsum --format short-verbose -- --with-tikv
         working-directory: integration_tests/raw
+<<<<<<< HEAD
 
   integration-next-gen-tikv:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') && !startsWith(github.ref_name, 'release-') && !startsWith(github.base_ref, 'release-') }}
@@ -193,3 +194,5 @@ jobs:
       - name: Test
         run: gotestsum --format short-verbose -- -parallel 1 -tags=nextgen --with-tikv --keyspace-name='keyspace1'
         working-directory: integration_tests
+=======
+>>>>>>> 00f57d88 (tests: use TiDB-like keys in next-gen integration tests (#2010))

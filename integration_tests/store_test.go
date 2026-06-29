@@ -67,6 +67,10 @@ func (s *testStoreSuite) TearDownTest() {
 	s.Require().Nil(s.store.Close())
 }
 
+func (s *testStoreSuite) key(name string) []byte {
+	return encodeKey("~store", name)
+}
+
 func (s *testStoreSuite) TestOracle() {
 	s.store.GetOracle().Close()
 	o := &oracles.MockOracle{}
@@ -139,12 +143,13 @@ func (s *testStoreSuite) TestRequestPriority() {
 	}
 	s.store.SetTiKVClient(client)
 
+	key := s.key("request_priority_key")
 	// Cover 2PC commit.
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_High
 	txn.SetPriority(txnkv.PriorityHigh)
-	err = txn.Set([]byte("key"), []byte("value"))
+	err = txn.Set(key, []byte("value"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -154,22 +159,22 @@ func (s *testStoreSuite) TestRequestPriority() {
 	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_Low
 	txn.SetPriority(txnkv.PriorityLow)
-	_, err = txn.Get(context.TODO(), []byte("key"))
+	_, err = txn.Get(context.TODO(), key)
 	s.Nil(err)
 
 	// A counter example.
 	// clean cache for sending request to store.
-	txn.GetSnapshot().CleanCache([][]byte{[]byte("key")})
+	txn.GetSnapshot().CleanCache([][]byte{key})
 	client.priority = kvrpcpb.CommandPri_Low
 	txn.SetPriority(txnkv.PriorityNormal)
-	_, err = txn.Get(context.TODO(), []byte("key"))
+	_, err = txn.Get(context.TODO(), key)
 	// err is translated to "try again later" by backoffer, so doesn't check error value here.
 	s.NotNil(err)
 
 	// Cover Seek request.
 	client.priority = kvrpcpb.CommandPri_High
 	txn.SetPriority(txnkv.PriorityHigh)
-	iter, err := txn.Iter([]byte("key"), nil)
+	iter, err := txn.Iter(key, nil)
 	s.Nil(err)
 	for iter.Valid() {
 		s.Nil(iter.Next())
@@ -178,9 +183,10 @@ func (s *testStoreSuite) TestRequestPriority() {
 }
 
 func (s *testStoreSuite) TestFailBusyServerKV() {
+	key := s.key("fail_busy_server_key")
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
-	err = txn.Set([]byte("key"), []byte("value"))
+	err = txn.Set(key, []byte("value"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -188,7 +194,7 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
 	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("busy")->return("")`))
-	val, err := txn.Get(context.TODO(), []byte("key"))
+	val, err := txn.Get(context.TODO(), key)
 	s.Nil(err)
 	s.Equal(val.Value, []byte("value"))
 }
