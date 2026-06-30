@@ -431,6 +431,10 @@ func (c *pdClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.K
 	return nil, nil
 }
 
+func (c *pdClient) LoadKeyspaceByID(ctx context.Context, id uint32) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *pdClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }

@@ -81,8 +81,8 @@ github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 h1:tdMsjOqUR7YXH
 github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86/go.mod h1:exzhVYca3WRtd6gclGNErRWb1qEgff3LYta0LvRmON4=
 github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 h1:surzm05a8C9dN8dIUmo4Be2+pMRb6f55i+UIYrluu2E=
 github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989/go.mod h1:O17XtbryoCJhkKGbT62+L2OlrniwqiGLSqrmdHCMzZw=
-github.com/pingcap/kvproto v0.0.0-20260611143855-3566665c9104 h1:sNjYPcGD6V+CZl3Txt1b+VQkX6KkJXk8AxBUDizPZVo=
-github.com/pingcap/kvproto v0.0.0-20260611143855-3566665c9104/go.mod h1:z6+aAHB7dBkA+LyinEX+48/ImRJ3jag0Hg0c7wkhEvE=
+github.com/pingcap/kvproto v0.0.0-20260630080527-b4ca3f1805fb h1:DttW0t8mMW2TYoGflOV1gOIUkd7qRbnaTNS0qQj7dzo=
+github.com/pingcap/kvproto v0.0.0-20260630080527-b4ca3f1805fb/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3 h1:HR/ylkkLmGdSSDaD8IDP+SZrdhV1Kibl9KrHxJ9eciw=
 github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
@@ -115,8 +115,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW93SG+q0F8KI+yFrcIDT4c/RNoc4=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
-github.com/tikv/pd/client v0.0.0-20260618194602-729ea141b819 h1:azvEqdNinRydqb4jBVKCPOPU7WGng79zzXwSmNHj+aw=
-github.com/tikv/pd/client v0.0.0-20260618194602-729ea141b819/go.mod h1:YuIGumSxztlsRfeZfi8WDk0RjvRvEW8CoQ0FtF61ENY=
+github.com/tikv/pd/client v0.0.0-20260630080729-de0d6e825733 h1:bmsbVcA+V+1fMVnxpQh+p8LQcETS6Uo2eVzDkxrzmes=
+github.com/tikv/pd/client v0.0.0-20260630080729-de0d6e825733/go.mod h1:mngzw+3uXVJANLP7PvMME+rm7lNaiP2jjvBsqZgXOGE=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=

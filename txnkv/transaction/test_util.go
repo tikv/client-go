@@ -255,6 +255,11 @@ func (u *unimplementedPDClient) LoadKeyspace(ctx context.Context, name string) (
 	panic("unimplemented")
 }
 
+// LoadKeyspaceByID implements pd.Client.
+func (u *unimplementedPDClient) LoadKeyspaceByID(ctx context.Context, id uint32) (*keyspacepb.KeyspaceMeta, error) {
+	panic("unimplemented")
+}
+
 // LoadResourceGroups implements pd.Client.
 func (u *unimplementedPDClient) LoadResourceGroups(ctx context.Context) ([]*resource_manager.ResourceGroup, int64, error) {
 	panic("unimplemented")
