@@ -75,13 +75,17 @@ func (s *testSnapshotFailSuite) TearDownTest() {
 	s.store.Close()
 }
 
+func (s *testSnapshotFailSuite) key(name string) []byte {
+	return encodeKey("~snapshot_fail", name)
+}
+
 func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
-	err = txn.Set([]byte("k1"), []byte("v1"))
+	err = txn.Set(s.key("k1"), []byte("v1"))
 	s.Nil(err)
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	err = txn.Set(s.key("k2"), []byte("v2"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -93,9 +97,9 @@ func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
-	res, err := toTiDBTxn(&txn).BatchGet(context.Background(), toTiDBKeys([][]byte{[]byte("k1"), []byte("k2")}))
+	res, err := toTiDBTxn(&txn).BatchGet(context.Background(), toTiDBKeys([][]byte{s.key("k1"), s.key("k2")}))
 	s.Nil(err)
-	s.Equal(res, map[string]kv.ValueEntry{"k1": kv.NewValueEntry([]byte("v1"), 0), "k2": kv.NewValueEntry([]byte("v2"), 0)})
+	s.Equal(res, map[string]kv.ValueEntry{string(s.key("k1")): kv.NewValueEntry([]byte("v1"), 0), string(s.key("k2")): kv.NewValueEntry([]byte("v2"), 0)})
 }
 
 func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
@@ -151,9 +155,9 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 	// Prewrite k1 and k2 with async commit but don't commit them
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
-	err = txn.Set([]byte("k1"), []byte("v1"))
+	err = txn.Set(s.key("k1"), []byte("v1"))
 	s.Nil(err)
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	err = txn.Set(s.key("k2"), []byte("v2"))
 	s.Nil(err)
 	txn.SetEnableAsyncCommit(true)
 
@@ -171,7 +175,7 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 		// Sleep a while to make the TTL of the first txn expire, then we make sure we resolve lock by this get
 		time.Sleep(200 * time.Millisecond)
 		s.Require().Nil(failpoint.Enable("tikvclient/beforeSendPointGet", "1*off->pause"))
-		res, err := snapshot.Get(context.Background(), []byte("k2"))
+		res, err := snapshot.Get(context.Background(), s.key("k2"))
 		s.Nil(err)
 		getCh <- res
 	}()
@@ -186,9 +190,9 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
 	txn.SetEnableAsyncCommit(true)
-	err = txn.Set([]byte("k1"), []byte("v3"))
+	err = txn.Set(s.key("k1"), []byte("v3"))
 	s.Nil(err)
-	err = txn.Set([]byte("k2"), []byte("v4"))
+	err = txn.Set(s.key("k2"), []byte("v4"))
 	s.Nil(err)
 	committer, err = txn.NewCommitter(1)
 	s.Nil(err)
@@ -209,8 +213,8 @@ func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
-	s.Nil(txn.Set([]byte("k1"), []byte("v1")))
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	s.Nil(txn.Set(s.key("k1"), []byte("v1")))
+	err = txn.Set(s.key("k2"), []byte("v2"))
 	s.Nil(err)
 	txn.SetEnableAsyncCommit(false)
 	txn.SetEnable1PC(false)
@@ -220,7 +224,7 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	s.Require().Nil(failpoint.Enable("tikvclient/beforeCommit", `pause`))
 	ch := make(chan struct{})
 	committer, err := txn.NewCommitter(1)
-	s.Equal(committer.GetPrimaryKey(), []byte("k1"))
+	s.Equal(committer.GetPrimaryKey(), s.key("k1"))
 	go func() {
 		s.Nil(err)
 		err = committer.Execute(context.Background())
@@ -232,7 +236,7 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	time.Sleep(200 * time.Millisecond)
 	// Should get nothing with max version, and **not pushing forward minCommitTS** of the primary lock
 	snapshot := s.store.GetSnapshot(math.MaxUint64)
-	_, err = snapshot.Get(context.Background(), []byte("k2"))
+	_, err = snapshot.Get(context.Background(), s.key("k2"))
 	s.True(tikverr.IsErrNotFound(err))
 
 	initialCommitTS := committer.GetCommitTS()
@@ -241,7 +245,7 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	<-ch
 	// check the minCommitTS is not pushed forward
 	snapshot = s.store.GetSnapshot(initialCommitTS)
-	v, err := snapshot.Get(context.Background(), []byte("k2"))
+	v, err := snapshot.Get(context.Background(), s.key("k2"))
 	s.Nil(err)
 	s.Equal(v.Value, []byte("v2"))
 }
@@ -254,11 +258,11 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 	{
 		txn, err := s.store.Begin()
 		s.Require().Nil(err)
-		s.Require().Nil(txn.Set([]byte("k1"), []byte("v1")))
-		s.Require().Nil(txn.Set([]byte("k2"), []byte("v2")))
-		s.Require().Nil(txn.Set([]byte("k3"), []byte("v3")))
-		s.Require().Nil(txn.Set([]byte("k4"), []byte("v4")))
-		s.Require().Nil(txn.Set([]byte("k5"), []byte("v5")))
+		s.Require().Nil(txn.Set(s.key("k1"), []byte("v1")))
+		s.Require().Nil(txn.Set(s.key("k2"), []byte("v2")))
+		s.Require().Nil(txn.Set(s.key("k3"), []byte("v3")))
+		s.Require().Nil(txn.Set(s.key("k4"), []byte("v4")))
+		s.Require().Nil(txn.Set(s.key("k5"), []byte("v5")))
 		s.Require().Nil(txn.Commit(context.Background()))
 	}
 
@@ -279,9 +283,9 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 				}()
 
 				hitsBefore := snapshot.SnapCacheHitCount()
-				_, err := snapshot.Get(context.Background(), []byte("k5"))
+				_, err := snapshot.Get(context.Background(), s.key("k5"))
 				s.Require().NoError(err)
-				_, err = snapshot.Get(context.Background(), []byte("k5"))
+				_, err = snapshot.Get(context.Background(), s.key("k5"))
 				s.Require().NoError(err)
 				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
 			},
@@ -296,9 +300,9 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 				}()
 
 				hitsBefore := snapshot.SnapCacheHitCount()
-				_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")})
+				_, err := snapshot.BatchGet(context.Background(), [][]byte{s.key("k4")})
 				s.Require().NoError(err)
-				_, err = snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")})
+				_, err = snapshot.BatchGet(context.Background(), [][]byte{s.key("k4")})
 				s.Require().NoError(err)
 				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
 			},
@@ -308,7 +312,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 			needsSnapshot: true,
 			run: func(snapshot *txnsnapshot.KVSnapshot) {
 				// Pre-fill cache with commit ts present (failpoint is disabled here).
-				entry, err := snapshot.Get(context.Background(), []byte("k1"), kv.WithReturnCommitTS())
+				entry, err := snapshot.Get(context.Background(), s.key("k1"), kv.WithReturnCommitTS())
 				s.Require().NoError(err)
 				s.Require().Greater(entry.CommitTS, uint64(0))
 
@@ -318,7 +322,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 				}()
 
 				hitsBefore := snapshot.SnapCacheHitCount()
-				_, err = snapshot.Get(context.Background(), []byte("k1"), kv.WithReturnCommitTS())
+				_, err = snapshot.Get(context.Background(), s.key("k1"), kv.WithReturnCommitTS())
 				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
 				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
 			},
@@ -332,7 +336,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
 				}()
 
-				_, err := snapshot.Get(context.Background(), []byte("k3"), kv.WithReturnCommitTS())
+				_, err := snapshot.Get(context.Background(), s.key("k3"), kv.WithReturnCommitTS())
 				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
 			},
 		},
@@ -341,10 +345,10 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 			needsSnapshot: true,
 			run: func(snapshot *txnsnapshot.KVSnapshot) {
 				// Pre-fill cache with commit ts present (failpoint is disabled here).
-				entries, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k2")}, kv.WithReturnCommitTS())
+				entries, err := snapshot.BatchGet(context.Background(), [][]byte{s.key("k2")}, kv.WithReturnCommitTS())
 				s.Require().NoError(err)
 				s.Require().Len(entries, 1)
-				s.Require().Greater(entries["k2"].CommitTS, uint64(0))
+				s.Require().Greater(entries[string(s.key("k2"))].CommitTS, uint64(0))
 
 				s.Require().Nil(failpoint.Enable("tikvclient/checkCommitTSRequired-force-commit-ts-zero", "return(true)"))
 				defer func() {
@@ -352,7 +356,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 				}()
 
 				hitsBefore := snapshot.SnapCacheHitCount()
-				_, err = snapshot.BatchGet(context.Background(), [][]byte{[]byte("k2")}, kv.WithReturnCommitTS())
+				_, err = snapshot.BatchGet(context.Background(), [][]byte{s.key("k2")}, kv.WithReturnCommitTS())
 				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
 				s.Require().GreaterOrEqual(snapshot.SnapCacheHitCount(), hitsBefore+1)
 			},
@@ -366,7 +370,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 					s.Require().Nil(failpoint.Disable("tikvclient/checkCommitTSRequired-force-commit-ts-zero"))
 				}()
 
-				_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("k4")}, kv.WithReturnCommitTS())
+				_, err := snapshot.BatchGet(context.Background(), [][]byte{s.key("k4")}, kv.WithReturnCommitTS())
 				s.Require().ErrorContains(err, "commit timestamp is required but not returned")
 			},
 		},
@@ -383,7 +387,7 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 				s.Require().Nil(err)
 				defer func() { s.Require().Nil(pipelinedTxn.Rollback()) }()
 
-				s.Require().Nil(pipelinedTxn.Set([]byte("bufk"), []byte("bufv")))
+				s.Require().Nil(pipelinedTxn.Set(s.key("bufk"), []byte("bufv")))
 				flushed, err := pipelinedTxn.GetMemBuffer().Flush(true)
 				s.Require().Nil(err)
 				s.Require().True(flushed)
@@ -391,10 +395,10 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 
 				var opt kv.BatchGetOptions
 				opt.Apply([]kv.BatchGetOption{kv.WithReturnCommitTS()})
-				m, err := pipelinedTxn.GetSnapshot().BatchGetWithTier(context.Background(), [][]byte{[]byte("bufk")}, txnsnapshot.BatchGetBufferTier, opt)
+				m, err := pipelinedTxn.GetSnapshot().BatchGetWithTier(context.Background(), [][]byte{s.key("bufk")}, txnsnapshot.BatchGetBufferTier, opt)
 				s.Require().Nil(err)
 				s.Require().Len(m, 1)
-				s.Require().Equal([]byte("bufv"), m["bufk"].Value)
+				s.Require().Equal([]byte("bufv"), m[string(s.key("bufk"))].Value)
 			},
 		},
 	}
@@ -414,8 +418,8 @@ func (s *testSnapshotFailSuite) TestCommitTSRequiredAssertion() {
 }
 
 func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
-	x := []byte("x_key_TestResetSnapshotTS")
-	y := []byte("y_key_TestResetSnapshotTS")
+	x := s.key("x_key_TestResetSnapshotTS")
+	y := s.key("y_key_TestResetSnapshotTS")
 	ctx := context.Background()
 
 	txn, err := s.store.Begin()
@@ -493,8 +497,8 @@ func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
 	}()
 
 	for _, asyncCommit := range []bool{false, true} {
-		x := []byte("x_key_TestSnapshotUseResolveForRead")
-		y := []byte("y_key_TestSnapshotUseResolveForRead")
+		x := s.key("x_key_TestSnapshotUseResolveForRead")
+		y := s.key("y_key_TestSnapshotUseResolveForRead")
 		txn, err := s.store.Begin()
 		s.Nil(err)
 		s.Nil(txn.Set(x, []byte("x")))

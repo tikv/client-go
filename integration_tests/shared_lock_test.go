@@ -16,7 +16,6 @@ package tikv_test
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,10 +34,6 @@ import (
 func TestSharedLock(t *testing.T) {
 	if !*withTiKV {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
-		return
-	}
-	if config.NextGen {
-		t.Skip("skipping TestSharedLock because next-gen doesn't support shared lock yet")
 		return
 	}
 	suite.Run(t, new(testSharedLockSuite))
@@ -69,6 +64,10 @@ func (s *testSharedLockSuite) TearDownTest() {
 	s.store.Close()
 }
 
+func (s *testSharedLockSuite) key(name string) []byte {
+	return encodeKey("~shared_lock", name)
+}
+
 func (s *testSharedLockSuite) begin() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
@@ -91,16 +90,25 @@ func (s *testSharedLockSuite) scanLocks(key []byte, maxTS uint64) []*txnlock.Loc
 	return locks
 }
 
+func (s *testSharedLockSuite) waitLocks(key []byte, maxTS uint64, expected int, msgAndArgs ...interface{}) []*txnlock.Lock {
+	var locks []*txnlock.Lock
+	s.Eventually(func() bool {
+		locks = s.scanLocks(key, maxTS)
+		return len(locks) == expected
+	}, 5*time.Second, 100*time.Millisecond, msgAndArgs...)
+	return locks
+}
+
 func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
 	for _, commit := range []bool{true, false} {
 		txn1 := s.begin()
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestSharedLockBlockExclusiveLock_pk1")
-		pk2 := []byte("TestSharedLockBlockExclusiveLock_pk2")
-		pk3 := []byte("TestSharedLockBlockExclusiveLock_pk3")
-		key := []byte("TestSharedLockBlockExclusiveLock_shared_key")
+		pk1 := s.key("TestSharedLockBlockExclusiveLock_pk1")
+		pk2 := s.key("TestSharedLockBlockExclusiveLock_pk2")
+		pk3 := s.key("TestSharedLockBlockExclusiveLock_pk3")
+		key := s.key("TestSharedLockBlockExclusiveLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -149,10 +157,10 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestExclusiveLockBlockSharedLock_pk1")
-		pk2 := []byte("TestExclusiveLockBlockSharedLock_pk2")
-		pk3 := []byte("TestExclusiveLockBlockSharedLock_pk3")
-		key := []byte("TestExclusiveLockBlockSharedLock_shared_key")
+		pk1 := s.key("TestExclusiveLockBlockSharedLock_pk1")
+		pk2 := s.key("TestExclusiveLockBlockSharedLock_pk2")
+		pk3 := s.key("TestExclusiveLockBlockSharedLock_pk3")
+		key := s.key("TestExclusiveLockBlockSharedLock_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -199,8 +207,8 @@ func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
 func (s *testSharedLockSuite) TestResolveSharedLock() {
 	txn1 := s.begin()
 
-	pk := []byte("TestResolveSharedLock_pk")
-	key := []byte("TestResolveSharedLock_shared_key")
+	pk := s.key("TestResolveSharedLock_pk")
+	key := s.key("TestResolveSharedLock_shared_key")
 	_, err := s.store.SplitRegions(context.Background(), [][]byte{pk, key}, false, nil)
 	s.Nil(err)
 
@@ -211,10 +219,13 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Nil(txn1.LockKeys(context.Background(), lockCtx, key))
 
 	s.Nil(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
+	defer func() {
+		s.Nil(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+	}()
 	txn1.SetSessionID(1)
 	s.Nil(txn1.Commit(context.Background()))
 
-	locks := s.scanLocks(key, s.getTS())
+	locks := s.waitLocks(key, s.getTS(), 1, "expect committed shared lock to be visible")
 	s.Len(locks, 1)
 	lock := locks[0]
 	s.Equal(key, lock.Key)
@@ -228,7 +239,7 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(pk, txn2.GetCommitter().GetPrimaryKey())
 	s.Nil(txn2.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), key))
 
-	locks = s.scanLocks(key, s.getTS())
+	locks = s.waitLocks(key, s.getTS(), 1, "expect pessimistic lock to be visible")
 	s.Len(locks, 1)
 	lock = locks[0]
 	s.NotNil(lock)
@@ -238,15 +249,14 @@ func (s *testSharedLockSuite) TestResolveSharedLock() {
 	s.Equal(lock.LockType, kvrpcpb.Op_PessimisticLock)
 
 	s.Nil(txn2.Rollback())
-	s.Len(s.scanLocks(key, s.getTS()), 0)
-	s.Nil(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+	s.waitLocks(key, s.getTS(), 0, "expect no locks after rollback")
 }
 
 func (s *testSharedLockSuite) TestScanSharedLock() {
-	pk1 := []byte("TestScanSharedLock_pk_1")
-	pk2 := []byte("TestScanSharedLock_pk_2")
-	pk3 := []byte("TestScanSharedLock_pk_3")
-	sharedKey := []byte("TestScanSharedLock_shared_key")
+	pk1 := s.key("TestScanSharedLock_pk_1")
+	pk2 := s.key("TestScanSharedLock_pk_2")
+	pk3 := s.key("TestScanSharedLock_pk_3")
+	sharedKey := s.key("TestScanSharedLock_shared_key")
 	txn1 := s.begin()
 	txn2 := s.begin()
 	txn3 := s.begin()
@@ -268,9 +278,10 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 		txn2.StartTS():     2,
 		txn3.StartTS():     3,
 	}
+	s.waitLocks(sharedKey, txn3.StartTS(), 3, "expect 3 locks after pipelined locks being applied")
 	for maxTS, lockNum := range maxTS2LockNum {
 		locks := s.scanLocks(sharedKey, maxTS)
-		s.Equal(len(locks), lockNum, fmt.Sprintf("when maxTS=%d, expect %d locks", maxTS, lockNum))
+		s.Equal(lockNum, len(locks), "when maxTS=%d, expect %d locks", maxTS, lockNum)
 		for _, lock := range locks {
 			s.Equal(sharedKey, lock.Key)
 			s.LessOrEqual(lock.TxnID, maxTS)
@@ -280,9 +291,7 @@ func (s *testSharedLockSuite) TestScanSharedLock() {
 	for _, txn := range txns {
 		s.Nil(txn.Rollback())
 	}
-	locks, err := s.store.ScanLocks(context.Background(), sharedKey, append(sharedKey, 0), txn3.StartTS())
-	s.Nil(err)
-	s.Equal(len(locks), 0, "no locks after rollback")
+	s.waitLocks(sharedKey, txn3.StartTS(), 0, "no locks after rollback")
 }
 
 func (s *testSharedLockSuite) TestGCSharedLock() {
@@ -293,10 +302,10 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	txn1 := s.begin()
 	txn2 := s.begin()
 	txn3 := s.begin()
-	pk1 := []byte("TestGCSharedLock_pk1")
-	pk2 := []byte("TestGCSharedLock_pk2")
-	pk3 := []byte("TestGCSharedLock_pk3")
-	sharedKey := []byte("TestGCSharedLock_shared_key")
+	pk1 := s.key("TestGCSharedLock_pk1")
+	pk2 := s.key("TestGCSharedLock_pk2")
+	pk3 := s.key("TestGCSharedLock_pk3")
+	sharedKey := s.key("TestGCSharedLock_shared_key")
 
 	pks := [][]byte{pk1, pk2, pk3}
 	txns := []transaction.TxnProbe{txn1, txn2, txn3}
@@ -315,12 +324,7 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	// Verify txn3's TTL manager is still running
 	s.True(txn3.GetCommitter().IsTTLRunning(), "txn3's TTL manager should be running")
 
-	var locks []*txnlock.Lock
-	s.Eventually(func() bool {
-		locks = s.scanLocks(sharedKey, s.getTS())
-		return len(locks) == 3
-	}, 5*time.Second, 100*time.Millisecond, "expect 3 locks after pipelined locks being applied")
-
+	locks := s.waitLocks(sharedKey, s.getTS(), 3, "expect 3 locks after pipelined locks being applied")
 	s.Len(locks, 3)
 	for _, lock := range locks {
 		s.Equal(sharedKey, lock.Key)
@@ -339,8 +343,8 @@ func (s *testSharedLockSuite) TestGCSharedLock() {
 	s.Nil(err)
 	s.Zero(ttl)
 
-	locks = s.scanLocks(sharedKey, s.getTS())
-	s.Len(locks, 1, "expected 1 lock (txn3's) to remain, but got %d; txn3 TTL running: %v", len(locks), txn3.GetCommitter().IsTTLRunning())
+	locks = s.waitLocks(sharedKey, s.getTS(), 1, "expected 1 lock (txn3's) to remain; txn3 TTL running: %v", txn3.GetCommitter().IsTTLRunning())
+	s.Len(locks, 1)
 	s.Equal(txn3.StartTS(), locks[0].TxnID)
 	s.Equal(sharedKey, locks[0].Key)
 	s.Nil(txn3.Rollback())
@@ -352,10 +356,10 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 		txn2 := s.begin()
 		txn3 := s.begin()
 
-		pk1 := []byte("TestSharedLockCommitAndRollback_pk1")
-		pk2 := []byte("TestSharedLockCommitAndRollback_pk2")
-		pk3 := []byte("TestSharedLockCommitAndRollback_pk3")
-		key := []byte("TestSharedLockCommitAndRollback_shared_key")
+		pk1 := s.key("TestSharedLockCommitAndRollback_pk1")
+		pk2 := s.key("TestSharedLockCommitAndRollback_pk2")
+		pk3 := s.key("TestSharedLockCommitAndRollback_pk3")
+		key := s.key("TestSharedLockCommitAndRollback_shared_key")
 
 		s.Nil(txn1.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), pk1))
 		s.Equal(txn1.GetCommitter().GetPrimaryKey(), pk1)
@@ -385,14 +389,7 @@ func (s *testSharedLockSuite) TestSharedLockCommitAndRollback() {
 			}
 
 			currLocks := 3 - i
-			s.Eventually(func() bool {
-				locks = s.scanLocks(key, s.getTS())
-				s.LessOrEqual(len(locks), currLocks)
-				if len(locks) == currLocks {
-					return false
-				}
-				return len(locks) == currLocks-1
-			}, 5*time.Second, 100*time.Millisecond, "after txn %d commit/rollback, expect %d locks remain", i+1, currLocks-1)
+			locks = s.waitLocks(key, s.getTS(), currLocks-1, "after txn %d commit/rollback, expect %d locks remain", i+1, currLocks-1)
 
 			for _, lock := range locks {
 				s.Equal(key, lock.Key)
@@ -410,8 +407,8 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 500) // 500ms, increased for test stability
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
 
-	pk := []byte("TestPrewriteResolveExpiredSharedLock_pk")
-	key := []byte("TestPrewriteResolveExpiredSharedLock_key")
+	pk := s.key("TestPrewriteResolveExpiredSharedLock_pk")
+	key := s.key("TestPrewriteResolveExpiredSharedLock_key")
 
 	// Step 1: Create a pessimistic transaction with shared lock
 	txn1 := s.begin()
@@ -422,11 +419,8 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	lockCtx.InShareMode = true
 	s.Nil(txn1.LockKeys(context.Background(), lockCtx, key))
 
-	// Wait for the shared lock to be visible
-	s.Eventually(func() bool {
-		locks := s.scanLocks(key, s.getTS())
-		return len(locks) == 1
-	}, 5*time.Second, 100*time.Millisecond, "expect 1 shared lock")
+	// Wait for the shared lock to be visible.
+	s.waitLocks(key, s.getTS(), 1, "expect 1 shared lock")
 
 	// Step 2: Close TTL manager and wait for lock to expire
 	txn1.GetCommitter().CloseTTLManager()
@@ -457,17 +451,20 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	s.Equal(value, v.Value)
 
 	// Step 6: Verify the shared lock is gone
-	locks = s.scanLocks(key, s.getTS())
-	s.Len(locks, 0, "shared lock should have been resolved")
+	locks = s.waitLocks(key, s.getTS(), 0, "shared lock should have been resolved")
+	s.Len(locks, 0)
 
 	// Cleanup
 	s.Nil(txn1.Rollback())
 }
 
 func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
-	pk1 := []byte("TestForceLockRetryOnSharedLock_pk1")
-	pk2 := []byte("TestForceLockRetryOnSharedLock_pk2")
-	key := []byte("TestForceLockRetryOnSharedLock_key")
+	if config.NextGen {
+		s.T().Skip("NextGen does not support allow_lock_with_conflict / ForceLock yet")
+	}
+	pk1 := s.key("TestForceLockRetryOnSharedLock_pk1")
+	pk2 := s.key("TestForceLockRetryOnSharedLock_pk2")
+	key := s.key("TestForceLockRetryOnSharedLock_key")
 
 	// Step 1: txn1 acquires a shared lock on key
 	txn1 := s.begin()

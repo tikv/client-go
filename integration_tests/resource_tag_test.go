@@ -81,7 +81,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupTag(testTag1)
-	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
+	_, _ = txn.BatchGet(context.Background(), [][]byte{encodeKey("~resource_tag", "k")})
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -92,7 +92,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupTagger(testTagger)
-	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
+	_, _ = txn.BatchGet(context.Background(), [][]byte{encodeKey("~resource_tag", "k")})
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -104,7 +104,7 @@ func TestResourceGroupTag(t *testing.T) {
 	assert.NoError(t, err)
 	txn.SetResourceGroupTag(testTag1)
 	txn.SetResourceGroupTagger(testTagger)
-	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
+	_, _ = txn.BatchGet(context.Background(), [][]byte{encodeKey("~resource_tag", "k")})
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -117,7 +117,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupTag(testTag1)
-	_, _ = txn.Iter([]byte("abc"), []byte("def"))
+	_, _ = txn.Iter(encodeKey("~resource_tag", "abc"), encodeKey("~resource_tag", "def"))
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -128,7 +128,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupTagger(testTagger)
-	_, _ = txn.Iter([]byte("abc"), []byte("def"))
+	_, _ = txn.Iter(encodeKey("~resource_tag", "abc"), encodeKey("~resource_tag", "def"))
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -140,7 +140,7 @@ func TestResourceGroupTag(t *testing.T) {
 	assert.NoError(t, err)
 	txn.SetResourceGroupTag(testTag1)
 	txn.SetResourceGroupTagger(testTagger)
-	_, _ = txn.Iter([]byte("abc"), []byte("def"))
+	_, _ = txn.Iter(encodeKey("~resource_tag", "abc"), encodeKey("~resource_tag", "def"))
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 }
