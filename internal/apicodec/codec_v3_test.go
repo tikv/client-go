@@ -42,7 +42,7 @@ func TestNewCodecV3InvalidIdentity(t *testing.T) {
 	re.Error(err)
 }
 
-func TestCodecV3EncodeRequestUsesPhysicalKeys(t *testing.T) {
+func TestCodecV3EncodeRequestKeepsUserKeys(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{NamespaceId: 7, KeyspaceId: 9}
 	codec, err := NewCodecV3(ModeTxn, identity, "ks")
@@ -58,7 +58,7 @@ func TestCodecV3EncodeRequestUsesPhysicalKeys(t *testing.T) {
 	re.NoError(err)
 	defer codec.(*codecV3).reqPool.Put(encoded)
 
-	re.Equal([]byte{'x', 0, 0, 0, 7, 0, 0, 9, 'k', 'e', 'y'}, encoded.Get().Key)
+	re.Equal([]byte("key"), encoded.Get().Key)
 	re.Equal(kvrpcpb.APIVersion_V3, encoded.ApiVersion)
 	re.Equal("ks", encoded.KeyspaceName)
 	re.Equal(identity, encoded.GetKeyspaceIdentity())

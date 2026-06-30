@@ -75,8 +75,27 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 	return &codecV3{codecV2: base}, nil
 }
 
+// EncodeRequest keeps V3 RPC key fields as user keys. TiKV uses the V3
+// keyspace identity in request context to apply the physical keyspace prefix.
+func (c *codecV3) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
+	r := c.reqPool.Get().(*tikvrpc.Request)
+	*r = *req
+	setAPICtx(c, r)
+	return r, nil
+}
+
 func (c *codecV3) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
-	return c.codecV2.DecodeResponse(req, resp)
+	defer c.reqPool.Put(req)
+	regionError, err := resp.GetRegionError()
+	if err != nil {
+		return resp, nil
+	}
+	decodedRegionError, err := c.decodeRegionError(regionError)
+	if err != nil {
+		return nil, err
+	}
+	setRegionError(resp, decodedRegionError)
+	return resp, nil
 }
 
 func setRegionError(resp *tikvrpc.Response, regionError *errorpb.Error) {
