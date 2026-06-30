@@ -52,6 +52,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -95,6 +96,31 @@ func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []ro
 		return c.batchScanRegions(ctx, keyRanges, limit, opts...)
 	}
 	return c.Client.BatchScanRegions(ctx, keyRanges, limit, opts...)
+}
+
+func TestFollowerRegionOptionsDisableRouterForAPIV3(t *testing.T) {
+	t.Parallel()
+
+	v1 := &RegionCache{codec: apicodec.NewCodecV1(apicodec.ModeTxn)}
+	var v1Op opt.GetRegionOp
+	for _, o := range v1.followerRegionOptions() {
+		o(&v1Op)
+	}
+	require.True(t, v1Op.AllowFollowerHandle)
+	require.True(t, v1Op.AllowRouterServiceHandle)
+
+	v3Codec, err := apicodec.NewCodecV3(apicodec.ModeTxn, &apipb.KeyspaceIdentity{
+		NamespaceId: 7,
+		KeyspaceId:  11,
+	}, "ks")
+	require.NoError(t, err)
+	v3 := &RegionCache{codec: v3Codec}
+	var v3Op opt.GetRegionOp
+	for _, o := range v3.followerRegionOptions() {
+		o(&v3Op)
+	}
+	require.True(t, v3Op.AllowFollowerHandle)
+	require.False(t, v3Op.AllowRouterServiceHandle)
 }
 
 func TestBackgroundRunner(t *testing.T) {

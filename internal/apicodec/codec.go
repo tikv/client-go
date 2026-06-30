@@ -6,6 +6,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/pd/client/constants"
 )
@@ -107,16 +108,28 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 			return nil, nil, err
 		}
 		return encoded[:keyspacePrefixLen], encoded[keyspacePrefixLen:], nil
+	case kvrpcpb.APIVersion_V3:
+		err := checkV3Key(encoded)
+		if err != nil {
+			return nil, nil, err
+		}
+		return encoded[:apiV3KeyspacePrefixLen], encoded[apiV3KeyspacePrefixLen:], nil
 	}
 	return nil, nil, errors.Errorf("unsupported api version %s", version.String())
 }
 
 func setAPICtx(c Codec, r *tikvrpc.Request) {
 	r.ApiVersion = c.GetAPIVersion()
-	r.KeyspaceId = uint32(c.GetKeyspaceID())
 	keyspaceMeta := c.GetKeyspaceMeta()
 	if keyspaceMeta != nil {
 		r.KeyspaceName = keyspaceMeta.Name
+		if identity := keyspaceMeta.GetKeyspaceIdentity(); identity != nil {
+			r.Keyspace = &kvrpcpb.Context_KeyspaceIdentity{KeyspaceIdentity: identity}
+		} else {
+			r.Keyspace = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(c.GetKeyspaceID())}
+		}
+	} else {
+		r.Keyspace = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(c.GetKeyspaceID())}
 	}
 
 	switch r.Type {
@@ -124,15 +137,31 @@ func setAPICtx(c Codec, r *tikvrpc.Request) {
 		mpp := *r.DispatchMPPTask()
 		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
-		meta.KeyspaceId = r.KeyspaceId
 		meta.ApiVersion = r.ApiVersion
+		setMPPKeyspace(&meta, r)
 		mpp.Meta = &meta
 		r.Req = &mpp
 
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
-		compact.KeyspaceId = r.KeyspaceId
 		compact.ApiVersion = r.ApiVersion
+		setCompactKeyspace(&compact, r)
 		r.Req = &compact
 	}
+}
+
+func setMPPKeyspace(meta *mpp.TaskMeta, r *tikvrpc.Request) {
+	if identity := r.GetKeyspaceIdentity(); identity != nil {
+		meta.Keyspace = &mpp.TaskMeta_KeyspaceIdentity{KeyspaceIdentity: identity}
+		return
+	}
+	meta.Keyspace = &mpp.TaskMeta_KeyspaceId{KeyspaceId: r.GetKeyspaceId()}
+}
+
+func setCompactKeyspace(compact *kvrpcpb.CompactRequest, r *tikvrpc.Request) {
+	if identity := r.GetKeyspaceIdentity(); identity != nil {
+		compact.Keyspace = &kvrpcpb.CompactRequest_KeyspaceIdentity{KeyspaceIdentity: identity}
+		return
+	}
+	compact.Keyspace = &kvrpcpb.CompactRequest_KeyspaceId{KeyspaceId: r.GetKeyspaceId()}
 }

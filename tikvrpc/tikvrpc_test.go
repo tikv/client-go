@@ -125,13 +125,13 @@ func TestAttachContextSetsRequestContext(t *testing.T) {
 	rpcCtx := kvrpcpb.Context{
 		RegionId:     123,
 		ApiVersion:   kvrpcpb.APIVersion_V2,
-		KeyspaceId:   456,
+		Keyspace:     &kvrpcpb.Context_KeyspaceId{KeyspaceId: 456},
 		KeyspaceName: "test-keyspace",
 	}
 	nextRPCtx := kvrpcpb.Context{
 		RegionId:     789,
 		ApiVersion:   kvrpcpb.APIVersion_V2,
-		KeyspaceId:   101112,
+		Keyspace:     &kvrpcpb.Context_KeyspaceId{KeyspaceId: 101112},
 		KeyspaceName: "next-test-keyspace",
 	}
 

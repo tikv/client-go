@@ -55,6 +55,7 @@ func BuildKeyspaceName(name string) string {
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
 	reqPool      sync.Pool
+	apiVersion   kvrpcpb.APIVersion
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
@@ -64,7 +65,7 @@ type codecV2 struct {
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
-	keyspaceID := keyspaceMeta.Id
+	keyspaceID := keyspaceIDFromMeta(keyspaceMeta)
 	if keyspaceID > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
 	}
@@ -74,6 +75,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	}
 	codec := &codecV2{
 		// Region keys in CodecV2 are always encoded in memory comparable form.
+		apiVersion:   kvrpcpb.APIVersion_V2,
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
 	}
@@ -114,7 +116,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return KeyspaceID(c.keyspaceMeta.Id)
+	return KeyspaceID(keyspaceIDFromMeta(c.keyspaceMeta))
 }
 
 func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
@@ -122,7 +124,14 @@ func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
-	return kvrpcpb.APIVersion_V2
+	return c.apiVersion
+}
+
+func keyspaceIDFromMeta(meta *keyspacepb.KeyspaceMeta) uint32 {
+	if identity := meta.GetKeyspaceIdentity(); identity != nil {
+		return identity.GetKeyspaceId()
+	}
+	return meta.GetId()
 }
 
 // EncodeRequest encodes with the given Codec.

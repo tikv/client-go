@@ -42,7 +42,7 @@ func TestCodecV2(t *testing.T) {
 
 func (suite *testCodecV2Suite) SetupSuite() {
 	testKeyspaceMeta := keyspacepb.KeyspaceMeta{
-		Id: testKeyspaceID,
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testKeyspaceID},
 	}
 	codec, err := NewCodecV2(ModeRaw, &testKeyspaceMeta)
 	suite.NoError(err)
@@ -181,7 +181,7 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 				// TiFlash carries API v2 context separately through ApiVersion and KeyspaceId.
 				re.Equal([]byte("compact-start"), encoded.Compact().StartKey)
 				re.Equal(kvrpcpb.APIVersion_V2, encoded.Compact().ApiVersion)
-				re.Equal(testKeyspaceID, encoded.Compact().KeyspaceId)
+				re.Equal(testKeyspaceID, encoded.Compact().GetKeyspaceId())
 			},
 		},
 	}
@@ -289,7 +289,7 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 	}
 	for _, testCase := range testCases {
 
-		keyspaceMeta := &keyspacepb.KeyspaceMeta{Id: testCase.keyspaceID}
+		keyspaceMeta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testCase.keyspaceID}}
 		if testCase.shouldErr {
 			_, err := NewCodecV2(testCase.mode, keyspaceMeta)
 			re.Error(err)
@@ -884,7 +884,7 @@ func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
 	suite.Nil(err)
 	task, ok := req.Req.(*mpp.DispatchTaskRequest)
 	suite.True(ok)
-	suite.Equal(task.Meta.KeyspaceId, testKeyspaceID)
+	suite.Equal(testKeyspaceID, task.Meta.GetKeyspaceId())
 	suite.Equal(task.Meta.ApiVersion, kvrpcpb.APIVersion_V2)
 	suite.Equal(task.Regions[0].Ranges[0].Start, suite.codec.EncodeKey([]byte("a")))
 	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))
