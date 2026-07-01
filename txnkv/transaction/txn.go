@@ -850,6 +850,9 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		}
 		txn.committer = committer
 	}
+	if err := txn.getUndeterminedLockStateErr(); err != nil {
+		return err
+	}
 
 	committer.SetDiskFullOpt(txn.diskFullOpt)
 	committer.SetTxnSource(txn.txnSource)
@@ -1384,6 +1387,215 @@ func (txn *KVTxn) LockKeysFunc(ctx context.Context, lockCtx *tikv.LockCtx, fn fu
 	return txn.lockKeys(ctx, lockCtx, fn, keysInput...)
 }
 
+func (txn *KVTxn) getUndeterminedLockStateErr() error {
+	if txn.committer != nil && txn.committer.getUndeterminedErr() != nil {
+		return errors.WithStack(tikverr.ErrResultUndetermined)
+	}
+	return nil
+}
+
+// isLockUpgradeResultUndetermined reports whether a shared-to-exclusive
+// upgrade error leaves the remote lock state uncertain.
+//
+// Upgrade requests are special because the transaction already owns the shared
+// lock locally. If TiKV returns a deterministic conflict or validation error,
+// we know the new exclusive lock was not granted, so the caller should return
+// that error directly and keep the original shared-lock state. Any error
+// outside that known-safe set is treated as undetermined and must poison the
+// transaction to avoid continuing with divergent local/remote lock state.
+func isLockUpgradeResultUndetermined(err error) bool {
+	if err == nil {
+		return false
+	}
+	if tikverr.IsErrWriteConflict(err) ||
+		tikverr.IsErrKeyExist(err) ||
+		errors.Is(err, tikverr.ErrLockAcquireFailAndNoWaitSet) ||
+		errors.Is(err, tikverr.ErrLockWaitTimeout) {
+		return false
+	}
+	var deadlock *tikverr.ErrDeadlock
+	if errors.As(err, &deadlock) {
+		return false
+	}
+	var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
+	if errors.As(err, &lockUpgradeConflict) {
+		return false
+	}
+	var assertionFailed *tikverr.ErrAssertionFailed
+	return !errors.As(err, &assertionFailed)
+}
+
+func (txn *KVTxn) lockPessimisticKeyGroup(
+	ctx context.Context,
+	lockCtx *tikv.LockCtx,
+	keys [][]byte,
+	isUpgrade bool,
+) (int, error) {
+	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
+	txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
+	err := txn.committer.pessimisticLockMutations(bo, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &PlainMutations{keys: keys})
+	if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
+		atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
+		lockCtx.Stats.Mu.Lock()
+		lockCtx.Stats.Mu.BackoffTypes = append(lockCtx.Stats.Mu.BackoffTypes, bo.GetTypes()...)
+		lockCtx.Stats.Mu.Unlock()
+	}
+	if err != nil {
+		var unmarkKeys [][]byte
+		memBuf := txn.us.GetMemBuffer()
+		memBuf.RLock()
+		for _, key := range keys {
+			if txn.us.HasPresumeKeyNotExists(key) {
+				unmarkKeys = append(unmarkKeys, key)
+			}
+		}
+		memBuf.RUnlock()
+		for _, key := range unmarkKeys {
+			txn.us.UnmarkPresumeKeyNotExists(key)
+		}
+
+		if isUpgrade {
+			if isLockUpgradeResultUndetermined(err) {
+				txn.committer.setUndeterminedErr(err)
+				return 0, errors.WithStack(tikverr.ErrResultUndetermined)
+			}
+			return 0, err
+		}
+
+		keyMayBeLocked := !tikverr.IsErrWriteConflict(err) && !tikverr.IsErrKeyExist(err)
+		if len(keys) > 1 || keyMayBeLocked {
+			dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
+			if isDeadlock {
+				if hashInKeys(dl.DeadlockKeyHash, keys) {
+					dl.IsRetryable = true
+				}
+				if lockCtx.OnDeadlock != nil {
+					lockCtx.OnDeadlock(dl)
+				}
+			}
+
+			rollbackForUpdateTS := lockCtx.ForUpdateTS
+			if lockCtx.MaxLockedWithConflictTS > rollbackForUpdateTS {
+				rollbackForUpdateTS = lockCtx.MaxLockedWithConflictTS
+			}
+			wg := txn.asyncPessimisticRollback(ctx, keys, rollbackForUpdateTS)
+
+			if isDeadlock {
+				logutil.Logger(ctx).Debug("deadlock error received", zap.Uint64("startTS", txn.startTS), zap.Stringer("deadlockInfo", dl))
+				if dl.IsRetryable {
+					wg.Wait()
+					time.Sleep(time.Millisecond * 5)
+					if _, err := util.EvalFailpoint("SingleStmtDeadLockRetrySleep"); err == nil {
+						time.Sleep(300 * time.Millisecond)
+					}
+				}
+			}
+		}
+		return 0, err
+	}
+
+	checkedExistence := lockCtx.CheckExistence
+	skippedLockKeys := 0
+	memBuf := txn.us.GetMemBuffer()
+	for _, key := range keys {
+		valExists := true
+		keyStr := string(key)
+		if val, ok := lockCtx.Values[keyStr]; ok {
+			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
+				if !val.Exists {
+					valExists = false
+				}
+			}
+		}
+
+		if lockCtx.LockOnlyIfExists && !valExists {
+			skippedLockKeys++
+			continue
+		}
+
+		setValExists := tikv.SetKeyLockedValueExists
+		if !valExists {
+			setValExists = tikv.SetKeyLockedValueNotExists
+		}
+		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, tikv.SetKeyLockedInExclusiveMode)
+	}
+	if !isUpgrade {
+		txn.lockedCnt += len(keys) - skippedLockKeys
+	}
+	return skippedLockKeys, nil
+}
+
+func (txn *KVTxn) lockKeysWithSharedLockUpgrade(
+	ctx context.Context,
+	lockCtx *tikv.LockCtx,
+	normalExclusiveKeys [][]byte,
+	upgradeKeys [][]byte,
+) error {
+	if txn.committer == nil {
+		var sessionID uint64
+		val := ctx.Value(util.SessionID)
+		if val != nil {
+			sessionID = val.(uint64)
+		}
+		var err error
+		txn.committer, err = newTwoPhaseCommitter(txn, sessionID)
+		if err != nil {
+			return err
+		}
+	}
+
+	assignedPrimaryKey := false
+	totalKeys := len(normalExclusiveKeys) + len(upgradeKeys)
+	if txn.committer.primaryKey == nil {
+		// Prefer selecting the primary from freshly requested exclusive locks
+		// when possible, so the primary is not just a shared-locked key that
+		// still depends on upgrade success.
+		assignedPrimaryKey = true
+		keysForPrimary := normalExclusiveKeys
+		if len(keysForPrimary) == 0 {
+			keysForPrimary = upgradeKeys
+		}
+		txn.selectPrimaryForPessimisticLock(keysForPrimary)
+	}
+
+	txn.committer.forUpdateTS = lockCtx.ForUpdateTS
+	lockCtx.Stats = &util.LockKeysDetails{
+		LockKeys:    int32(totalKeys),
+		ResolveLock: util.ResolveLockDetail{},
+	}
+
+	lockedInThisCall := 0
+	if len(normalExclusiveKeys) > 0 {
+		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, normalExclusiveKeys, false)
+		if err != nil {
+			if assignedPrimaryKey && lockedInThisCall == 0 {
+				txn.resetPrimary(false)
+			}
+			return err
+		}
+		lockedInThisCall += len(normalExclusiveKeys) - skipped
+	}
+
+	for _, key := range upgradeKeys {
+		skipped, err := txn.lockPessimisticKeyGroup(ctx, lockCtx, [][]byte{key}, true)
+		if err != nil {
+			if assignedPrimaryKey && lockedInThisCall == 0 {
+				txn.resetPrimary(false)
+			}
+			return err
+		}
+		lockedInThisCall += 1 - skipped
+	}
+
+	if assignedPrimaryKey && lockCtx.LockOnlyIfExists {
+		if totalKeys != 1 {
+			panic("LockOnlyIfExists only assigns the primary key when locking only one key")
+		}
+		txn.unsetPrimaryKeyIfNeeded(lockCtx)
+	}
+	return nil
+}
+
 func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func(), keysInput ...[]byte) error {
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
@@ -1402,6 +1614,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
 	if err != nil {
+		return err
+	}
+	if err := txn.getUndeterminedLockStateErr(); err != nil {
 		return err
 	}
 
@@ -1456,6 +1671,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	memBuf := txn.us.GetMemBuffer()
 	// Avoid data race with concurrent updates to the memBuf
 	memBuf.RLock()
+	upgradeKeys := make([][]byte, 0, len(keysInput))
 	for _, key := range keysInput {
 		// The value of lockedMap is only used by pessimistic transactions.
 		var valueExist, locked, lockedInShareMode, checkKeyExists bool
@@ -1466,9 +1682,16 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
 
-		if lockedInShareMode && !lockCtx.InShareMode {
-			memBuf.RUnlock()
-			return errors.New("upgrading a shared lock to an exclusive lock is not supported")
+		upgradeCandidate := lockedInShareMode && !lockCtx.InShareMode
+		if upgradeCandidate {
+			if !txn.IsPessimistic() || !lockCtx.AllowSharedLockUpgrade {
+				memBuf.RUnlock()
+				return errors.New("upgrading a shared lock to an exclusive lock is not supported")
+			}
+			if txn.IsInAggressiveLockingMode() {
+				memBuf.RUnlock()
+				return errors.New("shared lock upgrade is not supported in aggressive/fair locking mode")
+			}
 		}
 
 		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
@@ -1484,7 +1707,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 
-		if !locked || isInLastAggressiveLockingStage {
+		if upgradeCandidate {
+			upgradeKeys = append(upgradeKeys, key)
+		} else if !locked || isInLastAggressiveLockingStage {
 			// Locks acquired in the previous aggressive locking stage might need to be updated later in
 			// `filterAggressiveLockedKeys`.
 			keys = append(keys, key)
@@ -1497,7 +1722,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				return txn.committer.extractKeyExistsErr(e)
 			}
 		}
-		if lockCtx.ReturnValues && locked {
+		if lockCtx.ReturnValues && locked && !upgradeCandidate {
 			keyStr := string(key)
 			// An already locked key can not return values, we add an entry to let the caller get the value
 			// in other ways.
@@ -1506,27 +1731,40 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	}
 	memBuf.RUnlock()
 
-	if len(keys) == 0 {
+	if len(keys) == 0 && len(upgradeKeys) == 0 {
 		return nil
 	}
 	if lockCtx.LockOnlyIfExists {
+		var lockKey []byte
+		if len(keys) > 0 {
+			lockKey = keys[0]
+		} else {
+			lockKey = upgradeKeys[0]
+		}
 		if !lockCtx.ReturnValues {
 			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     keys[0],
+				LockKey:     lockKey,
 			}
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
 		// a LockOnlyIfExists pessimistic lock request.
-		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) > 1 {
+		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys)+len(upgradeKeys) > 1 {
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
-				LockKey:     keys[0],
+				LockKey:     lockKey,
 			}
 		}
+	}
+	if len(upgradeKeys) > 0 {
+		if len(keys) > 0 {
+			keys = deduplicateKeys(keys)
+		}
+		upgradeKeys = deduplicateKeys(upgradeKeys)
+		return txn.lockKeysWithSharedLockUpgrade(ctx, lockCtx, keys, upgradeKeys)
 	}
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
