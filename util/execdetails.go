@@ -484,6 +484,14 @@ type ScanDetail struct {
 	RocksdbBlockReadDuration time.Duration
 	// GetSnapshotDuration is the time spent getting an engine snapshot.
 	GetSnapshotDuration time.Duration
+	// IaCacheHitCount is the total number of IA segment cache hits.
+	IaCacheHitCount uint64
+	// IaRemoteReadSegmentCount is the total number of IA remote segment reads.
+	IaRemoteReadSegmentCount uint64
+	// IaRemoteReadSegmentBytes is the total number of logical bytes returned from IA remote segment reads.
+	IaRemoteReadSegmentBytes uint64
+	// IaRemoteReadSegmentDuration is the total time spent serving IA remote segment reads.
+	IaRemoteReadSegmentDuration time.Duration
 }
 
 // Merge merges scan detail execution details into self.
@@ -498,6 +506,10 @@ func (sd *ScanDetail) Merge(scanDetail *ScanDetail) {
 	atomic.AddUint64(&sd.RocksdbBlockReadByte, scanDetail.RocksdbBlockReadByte)
 	atomic.AddInt64((*int64)(&sd.RocksdbBlockReadDuration), int64(scanDetail.RocksdbBlockReadDuration))
 	atomic.AddInt64((*int64)(&sd.GetSnapshotDuration), int64(scanDetail.GetSnapshotDuration))
+	atomic.AddUint64(&sd.IaCacheHitCount, scanDetail.IaCacheHitCount)
+	atomic.AddUint64(&sd.IaRemoteReadSegmentCount, scanDetail.IaRemoteReadSegmentCount)
+	atomic.AddUint64(&sd.IaRemoteReadSegmentBytes, scanDetail.IaRemoteReadSegmentBytes)
+	atomic.AddInt64((*int64)(&sd.IaRemoteReadSegmentDuration), int64(scanDetail.IaRemoteReadSegmentDuration))
 }
 
 var zeroScanDetail = ScanDetail{}
@@ -528,6 +540,33 @@ func (sd *ScanDetail) String() string {
 		buf.WriteString("get_snapshot_time: ")
 		buf.WriteString(FormatDuration(sd.GetSnapshotDuration))
 		buf.WriteString(", ")
+	}
+	if sd.IaCacheHitCount > 0 || sd.IaRemoteReadSegmentCount > 0 || sd.IaRemoteReadSegmentBytes > 0 || sd.IaRemoteReadSegmentDuration > 0 {
+		buf.WriteString("ia: {")
+		if sd.IaCacheHitCount > 0 {
+			buf.WriteString("cache_hit_count: ")
+			buf.WriteString(strconv.FormatUint(sd.IaCacheHitCount, 10))
+			buf.WriteString(", ")
+		}
+		if sd.IaRemoteReadSegmentCount > 0 {
+			buf.WriteString("remote_read_segment_count: ")
+			buf.WriteString(strconv.FormatUint(sd.IaRemoteReadSegmentCount, 10))
+			buf.WriteString(", ")
+		}
+		if sd.IaRemoteReadSegmentBytes > 0 {
+			buf.WriteString("remote_read_segment_bytes: ")
+			buf.WriteString(FormatBytes(int64(sd.IaRemoteReadSegmentBytes)))
+			buf.WriteString(", ")
+		}
+		if sd.IaRemoteReadSegmentDuration > 0 {
+			buf.WriteString("remote_read_segment_wait_time: ")
+			buf.WriteString(FormatDuration(sd.IaRemoteReadSegmentDuration))
+			buf.WriteString(", ")
+		}
+		if buf.Bytes()[buf.Len()-2] == ',' {
+			buf.Truncate(buf.Len() - 2)
+		}
+		buf.WriteString("}, ")
 	}
 	buf.WriteString("rocksdb: {")
 	if sd.RocksdbDeleteSkippedCount > 0 {
@@ -580,6 +619,10 @@ func (sd *ScanDetail) MergeFromScanDetailV2(scanDetail *kvrpcpb.ScanDetailV2) {
 		sd.RocksdbBlockReadByte += scanDetail.RocksdbBlockReadByte
 		sd.RocksdbBlockReadDuration += time.Duration(scanDetail.RocksdbBlockReadNanos) * time.Nanosecond
 		sd.GetSnapshotDuration += time.Duration(scanDetail.GetSnapshotNanos) * time.Nanosecond
+		sd.IaCacheHitCount += scanDetail.IaCacheHitCount
+		sd.IaRemoteReadSegmentCount += scanDetail.IaRemoteReadSegmentCount
+		sd.IaRemoteReadSegmentBytes += scanDetail.IaRemoteReadSegmentBytes
+		sd.IaRemoteReadSegmentDuration += time.Duration(scanDetail.IaRemoteReadSegmentNanos) * time.Nanosecond
 	}
 }
 
