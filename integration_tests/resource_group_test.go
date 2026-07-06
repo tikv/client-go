@@ -47,7 +47,7 @@ func TestResourceGroupName(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupName(testTag)
-	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
+	_, _ = txn.BatchGet(context.Background(), [][]byte{encodeKey("~resource_group", "k")})
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 
@@ -58,7 +58,7 @@ func TestResourceGroupName(t *testing.T) {
 	txn, err = store.Begin()
 	assert.NoError(t, err)
 	txn.SetResourceGroupName(testTag)
-	_, _ = txn.Iter([]byte("abc"), []byte("def"))
+	_, _ = txn.Iter(encodeKey("~resource_group", "abc"), encodeKey("~resource_group", "def"))
 	assert.Equal(t, 1, client.requestCount)
 	assert.NoError(t, store.Close())
 }

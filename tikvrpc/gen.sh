@@ -56,6 +56,7 @@ cmds=(
   CheckLockObserver
   RemoveLockObserver
   PhysicalScanLock
+  LockWaitInfo
   Cop
   BatchCop
   MvccGetByKey

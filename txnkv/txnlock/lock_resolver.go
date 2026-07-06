@@ -227,8 +227,8 @@ func (l *Lock) String() string {
 	buf.WriteString(redact.Key(l.Key))
 	buf.WriteString(", primary: ")
 	buf.WriteString(redact.Key(l.Primary))
-	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t, txnSize: %d",
-		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit, l.TxnSize)
+	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t, txnSize: %d, isTxnFile: %t",
+		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit, l.TxnSize, l.IsTxnFile)
 }
 
 // NewLock creates a new *Lock.
@@ -342,6 +342,9 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			resolveData, err := lr.checkAllSecondaries(bo, l, &status)
 			if err == nil {
 				txnInfos[l.TxnID] = resolveData.commitTs
+				if l.IsTxnFile {
+					txnFileIDs[l.TxnID] = true
+				}
 				continue
 			}
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {
