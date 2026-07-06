@@ -340,6 +340,9 @@ type CommitterMutations interface {
 	NeedConstraintCheckInPrewrite(i int) bool
 }
 
+// MutationsHasDataInRange returns whether mutations has data in the range [start, end).
+// If it has, it returns the primary or first write key in the range.
+// Note that the firstDataKey can be empty when the range contains only non-write ops (and not the primary at pos 0).
 func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte /* firstDataKey */, bool) {
 	isInRange := func(pos int) bool {
 		return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)

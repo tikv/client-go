@@ -790,6 +790,7 @@ func (txn *KVTxn) GetScope() string {
 	return txn.scope
 }
 
+// DisableTxnFile disables the file-based transaction path for this transaction.
 func (txn *KVTxn) DisableTxnFile() {
 	txn.disableTxnFile = true
 }

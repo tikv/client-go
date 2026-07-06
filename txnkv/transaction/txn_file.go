@@ -898,10 +898,15 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			return c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
 		}
 
-		c.store.WaitGroup().Add(1)
-		errGo := c.store.Go(func() {
-			defer c.store.WaitGroup().Done()
-			err := c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
+		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
+		if c.store.IsClose() {
+			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Stringer("action", action))
+			return nil
+		}
+		errGo := c.txn.spawnWithStorePool(func() {
+			err := c.executeTxnFileSliceWithRetry(secondaryBo, chunkSlice, secondaries, action)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
@@ -912,7 +917,6 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			}
 		})
 		if errGo != nil {
-			c.store.WaitGroup().Done()
 			logutil.Logger(bo.GetCtx()).Warn("txn file: create goroutine failed",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
@@ -968,7 +972,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 			if inflightChunks >= concurrency {
 				r := <-resultCh
 				if r.err != nil {
-					logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+					logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(r.err))
 					return errors.Wrap(r.err, buildChunkErrMsg)
 				}
 				results = append(results, r)
@@ -992,7 +996,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	for i := 0; i < inflightChunks; i++ {
 		r := <-resultCh
 		if r.err != nil {
-			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(r.err))
 			return errors.Wrap(r.err, buildChunkErrMsg)
 		}
 		results = append(results, r)
@@ -1289,12 +1293,12 @@ func (w *chunkWriterClient) request(bo *retry.Backoffer, method string, data []b
 			}
 			continue
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			var bodyStr string
 			if data, err := io.ReadAll(resp.Body); err == nil {
 				bodyStr = string(data)
 			}
+			resp.Body.Close()
 			logutil.Logger(ctx).Warn("service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
 			err = bo.Backoff(retry.BoTiKVServerBusy, fmt.Errorf("service error, http status %s", resp.Status))
 			if err != nil {
@@ -1303,6 +1307,7 @@ func (w *chunkWriterClient) request(bo *retry.Backoffer, method string, data []b
 			continue
 		}
 		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		return data, errors.WithStack(err)
 	}
 }
