@@ -108,9 +108,9 @@ func TestAppendChainedInterceptor(t *testing.T) {
 	checkChained(chain, 5, []int{0, 2, 3, 4, 1})
 }
 
-// recordingInterceptor counts request/response hooks.
-// invocations and returns benign zero values so the interceptor wiring can be
-// exercised end-to-end without touching real PD state.
+// recordingInterceptor counts request/response hook invocations and returns
+// benign zero values so the interceptor wiring can be exercised end-to-end
+// without touching real PD state.
 type recordingInterceptor struct {
 	waitCalls int
 	respCalls int
@@ -181,19 +181,8 @@ func newRGRequest() *tikvrpc.Request {
 	return req
 }
 
-func TestSendRequestDoesNotSettleOnTransportFailure(t *testing.T) {
+func TestSendRequestDoesNotSettleAndKeepsRUDetailsOnTransportFailure(t *testing.T) {
 	rec := withRecordingInterceptor(t)
-	client := NewInterceptedClient(failingClient{})
-
-	resp, err := client.SendRequest(context.Background(), "", newRGRequest(), 0)
-	assert.Nil(t, resp)
-	assert.Error(t, err)
-	assert.Equal(t, 1, rec.waitCalls, "OnRequestWait must run once")
-	assert.Equal(t, 0, rec.respCalls, "OnResponseWait must be skipped when resp is nil")
-}
-
-func TestSendRequestKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
-	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
 	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
@@ -201,6 +190,8 @@ func TestSendRequestKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
 	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
 	assert.Nil(t, resp)
 	assert.Error(t, err)
+	assert.Equal(t, 1, rec.waitCalls, "OnRequestWait must run once")
+	assert.Equal(t, 0, rec.respCalls, "OnResponseWait must be skipped when resp is nil")
 	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
 		"failed no-response requests must keep request-side RRU in runtime stats")
 	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
@@ -220,29 +211,8 @@ func TestSendRequestSettlesOnSuccess(t *testing.T) {
 	assert.Equal(t, 1, rec.respCalls, "settlement path must run when resp is non-nil")
 }
 
-func TestSendRequestAsyncDoesNotSettleOnTransportFailure(t *testing.T) {
+func TestSendRequestAsyncDoesNotSettleAndKeepsRUDetailsOnTransportFailure(t *testing.T) {
 	rec := withRecordingInterceptor(t)
-	client := NewInterceptedClient(failingClient{})
-
-	done := make(chan struct{})
-	var gotResp *tikvrpc.Response
-	var gotErr error
-	cb := async.NewCallback(nil, func(resp *tikvrpc.Response, err error) {
-		gotResp = resp
-		gotErr = err
-		close(done)
-	})
-	client.SendRequestAsync(context.Background(), "", newRGRequest(), cb)
-	<-done
-
-	assert.Nil(t, gotResp)
-	assert.Error(t, gotErr)
-	assert.Equal(t, 1, rec.waitCalls)
-	assert.Equal(t, 0, rec.respCalls)
-}
-
-func TestSendRequestAsyncKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
-	withRecordingInterceptor(t)
 	client := NewInterceptedClient(failingClient{})
 	ruDetails := util.NewRUDetails()
 	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
@@ -260,6 +230,8 @@ func TestSendRequestAsyncKeepsRequestRUDetailsOnTransportFailure(t *testing.T) {
 
 	assert.Nil(t, gotResp)
 	assert.Error(t, gotErr)
+	assert.Equal(t, 1, rec.waitCalls)
+	assert.Equal(t, 0, rec.respCalls)
 	assert.Equal(t, recordingRequestConsumption.RRU, ruDetails.RRU(),
 		"failed async no-response requests must keep request-side RRU in runtime stats")
 	assert.Equal(t, recordingRequestConsumption.WRU, ruDetails.WRU(),
