@@ -7,7 +7,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
+	github.com/pingcap/kvproto v0.0.0-20260622063236-b41e86365ce0
 	github.com/pingcap/tidb v1.1.0-beta.0.20260603040045-b254c43931d9
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0

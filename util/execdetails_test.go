@@ -87,6 +87,83 @@ func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
 	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
 }
 
+func TestScanDetailMergeFromScanDetailV2IncludesIAFields(t *testing.T) {
+	scanDetail := &kvrpcpb.ScanDetailV2{
+		ProcessedVersions:         10,
+		ProcessedVersionsSize:     20,
+		TotalVersions:             30,
+		RocksdbDeleteSkippedCount: 4,
+		RocksdbKeySkippedCount:    5,
+		RocksdbBlockCacheHitCount: 6,
+		RocksdbBlockReadCount:     7,
+		RocksdbBlockReadByte:      8,
+		RocksdbBlockReadNanos:     uint64((9 * time.Microsecond).Nanoseconds()),
+		GetSnapshotNanos:          uint64((7 * time.Microsecond).Nanoseconds()),
+		IaCacheHitCount:           2,
+		IaRemoteReadSegmentCount:  3,
+		IaRemoteReadSegmentBytes:  128,
+		IaRemoteReadSegmentNanos:  uint64((5 * time.Microsecond).Nanoseconds()),
+	}
+
+	sd := &ScanDetail{}
+	sd.MergeFromScanDetailV2(scanDetail)
+
+	assert.Equal(t, int64(30), sd.TotalKeys)
+	assert.Equal(t, int64(10), sd.ProcessedKeys)
+	assert.Equal(t, int64(20), sd.ProcessedKeysSize)
+	assert.Equal(t, uint64(4), sd.RocksdbDeleteSkippedCount)
+	assert.Equal(t, uint64(5), sd.RocksdbKeySkippedCount)
+	assert.Equal(t, uint64(6), sd.RocksdbBlockCacheHitCount)
+	assert.Equal(t, uint64(7), sd.RocksdbBlockReadCount)
+	assert.Equal(t, uint64(8), sd.RocksdbBlockReadByte)
+	assert.Equal(t, 9*time.Microsecond, sd.RocksdbBlockReadDuration)
+	assert.Equal(t, 7*time.Microsecond, sd.GetSnapshotDuration)
+	assert.Equal(t, uint64(2), sd.IaCacheHitCount)
+	assert.Equal(t, uint64(3), sd.IaRemoteReadSegmentCount)
+	assert.Equal(t, uint64(128), sd.IaRemoteReadSegmentBytes)
+	assert.Equal(t, 5*time.Microsecond, sd.IaRemoteReadSegmentDuration)
+
+	str := sd.String()
+	assert.Contains(t, str, "total_process_keys: 10")
+	assert.Contains(t, str, "total_process_keys_size: 20")
+	assert.Contains(t, str, "total_keys: 30")
+	assert.Contains(t, str, "get_snapshot_time")
+	assert.Contains(t, str, "ia: {")
+	assert.Contains(t, str, "cache_hit_count: 2")
+	assert.Contains(t, str, "remote_read_segment_count: 3")
+	assert.Contains(t, str, "remote_read_segment_bytes: 128 Bytes")
+	assert.Contains(t, str, "remote_read_segment_wait_time")
+	assert.Contains(t, str, "rocksdb: {")
+	assert.Contains(t, str, "delete_skipped_count: 4")
+	assert.Contains(t, str, "key_skipped_count: 5")
+	assert.Contains(t, str, "cache_hit_count: 6")
+	assert.Contains(t, str, "read_count: 7")
+	assert.Contains(t, str, "read_byte: 8 Bytes")
+	assert.Contains(t, str, "read_time")
+}
+
+func TestScanDetailMergeIncludesIAFields(t *testing.T) {
+	left := &ScanDetail{
+		IaCacheHitCount:             1,
+		IaRemoteReadSegmentCount:    2,
+		IaRemoteReadSegmentBytes:    64,
+		IaRemoteReadSegmentDuration: 3 * time.Microsecond,
+	}
+	right := &ScanDetail{
+		IaCacheHitCount:             4,
+		IaRemoteReadSegmentCount:    5,
+		IaRemoteReadSegmentBytes:    256,
+		IaRemoteReadSegmentDuration: 7 * time.Microsecond,
+	}
+
+	left.Merge(right)
+
+	assert.Equal(t, uint64(5), left.IaCacheHitCount)
+	assert.Equal(t, uint64(7), left.IaRemoteReadSegmentCount)
+	assert.Equal(t, uint64(320), left.IaRemoteReadSegmentBytes)
+	assert.Equal(t, 10*time.Microsecond, left.IaRemoteReadSegmentDuration)
+}
+
 func TestLockKeysDetailsMerge(t *testing.T) {
 	a := &LockKeysDetails{
 		TotalTime:                  10 * time.Millisecond,
