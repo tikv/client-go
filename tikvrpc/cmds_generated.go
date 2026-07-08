@@ -269,6 +269,15 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 			req.Req = &cmd
 		}
 		req.rev++
+	case CmdLockWaitInfo:
+		if req.rev == 0 {
+			req.LockWaitInfo().Context = ctx
+		} else {
+			cmd := *req.LockWaitInfo()
+			cmd.Context = ctx
+			req.Req = &cmd
+		}
+		req.rev++
 	case CmdCop:
 		if req.rev == 0 {
 			req.Cop().Context = ctx
@@ -442,6 +451,8 @@ func isValidReqType(cmd CmdType) bool {
 	case CmdRemoveLockObserver:
 		return true
 	case CmdPhysicalScanLock:
+		return true
+	case CmdLockWaitInfo:
 		return true
 	case CmdCop:
 		return true
