@@ -64,6 +64,29 @@ func TestCodecV3EncodeRequestUsesPhysicalKeys(t *testing.T) {
 	re.Equal(identity, encoded.GetKeyspaceIdentity())
 }
 
+func TestCodecV3EncodeRequestDoesNotDoubleEncodePhysicalKeys(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{NamespaceId: 7, KeyspaceId: 9}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+
+	physicalStart := codec.EncodeKey([]byte("a"))
+	physicalEnd := codec.EncodeKey([]byte("b"))
+	req := &tikvrpc.Request{
+		Type: tikvrpc.CmdScan,
+		Req: &kvrpcpb.ScanRequest{
+			StartKey: physicalStart,
+			EndKey:   physicalEnd,
+		},
+	}
+	encoded, err := codec.EncodeRequest(req)
+	re.NoError(err)
+	defer codec.(*codecV3).reqPool.Put(encoded)
+
+	re.Equal(physicalStart, encoded.Scan().StartKey)
+	re.Equal(physicalEnd, encoded.Scan().EndKey)
+}
+
 func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{

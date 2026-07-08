@@ -806,6 +806,9 @@ func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start []byte, en
 }
 
 func (c *codecV2) EncodeKey(key []byte) []byte {
+	if c.apiVersion == kvrpcpb.APIVersion_V3 && bytes.HasPrefix(key, c.prefix) {
+		return key
+	}
 	return append(c.prefix, key...)
 }
 
