@@ -787,6 +787,10 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 // DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
 func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
+	if len(c.prefix) == 0 {
+		return encodedStart, encodedEnd, nil
+	}
+
 	if bytes.Compare(encodedStart, c.endKey) >= 0 ||
 		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.prefix) <= 0) {
 		return nil, nil, errors.WithStack(errKeyOutOfBound)
@@ -806,9 +810,6 @@ func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start []byte, en
 }
 
 func (c *codecV2) EncodeKey(key []byte) []byte {
-	if c.apiVersion == kvrpcpb.APIVersion_V3 && bytes.HasPrefix(key, c.prefix) {
-		return key
-	}
 	return append(c.prefix, key...)
 }
 

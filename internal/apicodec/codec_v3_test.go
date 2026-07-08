@@ -20,8 +20,8 @@ func TestNewCodecV3(t *testing.T) {
 
 	v3Codec := codec.(*codecV3)
 	re.Equal(kvrpcpb.APIVersion_V3, v3Codec.GetAPIVersion())
-	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 7}, v3Codec.prefix)
-	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 8}, v3Codec.endKey)
+	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 7}, v3Codec.physicalPrefix)
+	re.Equal([]byte{'r', 1, 2, 3, 4, 5, 6, 8}, v3Codec.physicalEndKey)
 	re.Equal(identity, v3Codec.GetKeyspaceMeta().GetKeyspaceIdentity())
 	re.Equal(KeyspaceID(identity.KeyspaceId), v3Codec.GetKeyspaceID())
 }
@@ -42,7 +42,7 @@ func TestNewCodecV3InvalidIdentity(t *testing.T) {
 	re.Error(err)
 }
 
-func TestCodecV3EncodeRequestUsesPhysicalKeys(t *testing.T) {
+func TestCodecV3EncodeRequestUsesLogicalKeys(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{NamespaceId: 7, KeyspaceId: 9}
 	codec, err := NewCodecV3(ModeTxn, identity, "ks")
@@ -58,33 +58,31 @@ func TestCodecV3EncodeRequestUsesPhysicalKeys(t *testing.T) {
 	re.NoError(err)
 	defer codec.(*codecV3).reqPool.Put(encoded)
 
-	re.Equal([]byte{'x', 0, 0, 0, 7, 0, 0, 9, 'k', 'e', 'y'}, encoded.Get().Key)
+	re.Equal([]byte("key"), encoded.Get().Key)
 	re.Equal(kvrpcpb.APIVersion_V3, encoded.ApiVersion)
 	re.Equal("ks", encoded.KeyspaceName)
 	re.Equal(identity, encoded.GetKeyspaceIdentity())
 }
 
-func TestCodecV3EncodeRequestDoesNotDoubleEncodePhysicalKeys(t *testing.T) {
+func TestCodecV3EncodeRequestDoesNotEncodeScanBounds(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{NamespaceId: 7, KeyspaceId: 9}
 	codec, err := NewCodecV3(ModeTxn, identity, "ks")
 	re.NoError(err)
 
-	physicalStart := codec.EncodeKey([]byte("a"))
-	physicalEnd := codec.EncodeKey([]byte("b"))
 	req := &tikvrpc.Request{
 		Type: tikvrpc.CmdScan,
 		Req: &kvrpcpb.ScanRequest{
-			StartKey: physicalStart,
-			EndKey:   physicalEnd,
+			StartKey: []byte("a"),
+			EndKey:   []byte("b"),
 		},
 	}
 	encoded, err := codec.EncodeRequest(req)
 	re.NoError(err)
 	defer codec.(*codecV3).reqPool.Put(encoded)
 
-	re.Equal(physicalStart, encoded.Scan().StartKey)
-	re.Equal(physicalEnd, encoded.Scan().EndKey)
+	re.Equal([]byte("a"), encoded.Scan().StartKey)
+	re.Equal([]byte("b"), encoded.Scan().EndKey)
 }
 
 func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
@@ -96,11 +94,40 @@ func TestCodecV3RegionKeysUsePhysicalPrefix(t *testing.T) {
 	codec, err := NewCodecV3(ModeTxn, identity, "ks")
 	re.NoError(err)
 
-	physicalKey := codec.EncodeKey([]byte("key"))
-	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'k', 'e', 'y'}, physicalKey)
+	re.Equal([]byte("key"), codec.EncodeKey([]byte("key")))
 
 	regionKey := codec.EncodeRegionKey([]byte("key"))
+	physicalKey, err := codec.(*codecV3).memCodec.decodeKey(regionKey)
+	re.NoError(err)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'k', 'e', 'y'}, physicalKey)
+
 	decodedKey, err := codec.DecodeRegionKey(regionKey)
 	re.NoError(err)
 	re.Equal([]byte("key"), decodedKey)
+}
+
+func TestCodecV3RegionRangeUsesPhysicalPrefix(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	encodedStart, encodedEnd := codec.EncodeRegionRange([]byte("a"), nil)
+
+	physicalStart, err := v3Codec.memCodec.decodeKey(encodedStart)
+	re.NoError(err)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'a'}, physicalStart)
+
+	physicalEnd, err := v3Codec.memCodec.decodeKey(encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 8}, physicalEnd)
+
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte("a"), decodedStart)
+	re.Empty(decodedEnd)
 }
