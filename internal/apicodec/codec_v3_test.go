@@ -85,7 +85,7 @@ func TestCodecV3EncodeRequestDoesNotEncodeScanBounds(t *testing.T) {
 	re.Equal([]byte("b"), encoded.Scan().EndKey)
 }
 
-func TestCodecV3RegionKeysUseLogicalKeys(t *testing.T) {
+func TestCodecV3RegionKeysUsePhysicalPDKeys(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{
 		NamespaceId: 0x01020304,
@@ -97,16 +97,16 @@ func TestCodecV3RegionKeysUseLogicalKeys(t *testing.T) {
 	re.Equal([]byte("key"), codec.EncodeKey([]byte("key")))
 
 	regionKey := codec.EncodeRegionKey([]byte("key"))
-	logicalKey, err := codec.(*codecV3).memCodec.decodeKey(regionKey)
+	physicalKey, err := codec.(*codecV3).memCodec.decodeKey(regionKey)
 	re.NoError(err)
-	re.Equal([]byte("key"), logicalKey)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'k', 'e', 'y'}, physicalKey)
 
 	decodedKey, err := codec.DecodeRegionKey(regionKey)
 	re.NoError(err)
 	re.Equal([]byte("key"), decodedKey)
 }
 
-func TestCodecV3RegionRangeUsesLogicalKeys(t *testing.T) {
+func TestCodecV3RegionRangeIsBoundedToPhysicalKeyspace(t *testing.T) {
 	re := require.New(t)
 	identity := &apipb.KeyspaceIdentity{
 		NamespaceId: 0x01020304,
@@ -118,13 +118,53 @@ func TestCodecV3RegionRangeUsesLogicalKeys(t *testing.T) {
 
 	encodedStart, encodedEnd := codec.EncodeRegionRange([]byte("a"), nil)
 
-	logicalStart, err := v3Codec.memCodec.decodeKey(encodedStart)
+	physicalStart, err := v3Codec.memCodec.decodeKey(encodedStart)
 	re.NoError(err)
-	re.Equal([]byte("a"), logicalStart)
-	re.Empty(encodedEnd)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 7, 'a'}, physicalStart)
+	physicalEnd, err := v3Codec.memCodec.decodeKey(encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte{'x', 1, 2, 3, 4, 5, 6, 8}, physicalEnd)
 
 	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
 	re.NoError(err)
 	re.Equal([]byte("a"), decodedStart)
+	re.Empty(decodedEnd)
+}
+
+func TestCodecV3DecodeRegionRangeAcceptsScopedLogicalKeys(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	encodedStart := v3Codec.memCodec.encodeKey([]byte("a"))
+	encodedEnd := v3Codec.memCodec.encodeKey([]byte("b"))
+
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
+	re.NoError(err)
+	re.Equal([]byte("a"), decodedStart)
+	re.Equal([]byte("b"), decodedEnd)
+}
+
+func TestCodecV3DecodeRegionRangeClampsPhysicalBounds(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	encodedStart := v3Codec.memCodec.encodeKey([]byte{'x', 1, 2, 3, 4, 0, 0, 0})
+	encodedEnd := v3Codec.memCodec.encodeKey([]byte{'x', 1, 2, 3, 4, 5, 6, 8})
+
+	decodedStart, decodedEnd, err := codec.DecodeRegionRange(encodedStart, encodedEnd)
+	re.NoError(err)
+	re.Empty(decodedStart)
 	re.Empty(decodedEnd)
 }

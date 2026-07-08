@@ -1,6 +1,7 @@
 package apicodec
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/apipb"
@@ -19,9 +20,10 @@ func checkV3Key(b []byte) error {
 	return nil
 }
 
-// codecV3 uses API V3 request context for TiKV RPCs. PD region lookups also
-// use logical keys because the wrapped PD client is already scoped by
-// KeyspaceIdentity.
+// codecV3 uses API V3 request context for TiKV RPCs. TiKV RPC keys stay
+// logical and are scoped by the request context, while PD region lookups use
+// the physical keyspace range so the region cache cannot cross into another
+// API V3 keyspace.
 type codecV3 struct {
 	*codecV2
 	physicalPrefix []byte
@@ -84,32 +86,34 @@ func (c *codecV3) GetKeyspace() []byte {
 }
 
 func (c *codecV3) EncodeRegionKey(key []byte) []byte {
-	return c.memCodec.encodeKey(key)
+	return c.memCodec.encodeKey(c.encodePhysicalKey(key))
 }
 
 func (c *codecV3) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 	if len(encodedKey) == 0 {
 		return encodedKey, nil
 	}
-	return c.memCodec.decodeKey(encodedKey)
+	key, err := c.memCodec.decodeKey(encodedKey)
+	if err != nil {
+		return nil, err
+	}
+	return c.decodeRegionKey(key)
 }
 
 func (c *codecV3) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
+	encodedEnd := c.physicalEndKey
 	if len(end) > 0 {
-		return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
+		encodedEnd = c.encodePhysicalKey(end)
 	}
-	return c.EncodeRegionKey(start), end
+	return c.memCodec.encodeKey(c.encodePhysicalKey(start)), c.memCodec.encodeKey(encodedEnd)
 }
 
 func (c *codecV3) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
-	start, err := c.DecodeRegionKey(encodedStart)
+	start, err := c.decodeRegionStart(encodedStart)
 	if err != nil {
 		return nil, nil, err
 	}
-	end, err := c.DecodeRegionKey(encodedEnd)
-	if err != nil {
-		return nil, nil, err
-	}
+	end, err := c.decodeRegionEnd(encodedEnd)
 	return start, end, nil
 }
 
@@ -123,4 +127,69 @@ func (c *codecV3) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
 		ks = append(ks, k)
 	}
 	return ks, nil
+}
+
+func (c *codecV3) encodePhysicalKey(key []byte) []byte {
+	if bytes.HasPrefix(key, c.physicalPrefix) {
+		return key
+	}
+	encoded := make([]byte, 0, len(c.physicalPrefix)+len(key))
+	encoded = append(encoded, c.physicalPrefix...)
+	encoded = append(encoded, key...)
+	return encoded
+}
+
+func (c *codecV3) decodeRegionStart(encodedStart []byte) ([]byte, error) {
+	if len(encodedStart) == 0 {
+		return []byte{}, nil
+	}
+	start, err := c.memCodec.decodeKey(encodedStart)
+	if err != nil {
+		return nil, err
+	}
+	if isV3PhysicalKey(start) {
+		if bytes.Compare(start, c.physicalEndKey) >= 0 {
+			return nil, errors.WithStack(errKeyOutOfBound)
+		}
+		if bytes.Compare(start, c.physicalPrefix) < 0 {
+			return []byte{}, nil
+		}
+	}
+	return c.decodeRegionKey(start)
+}
+
+func (c *codecV3) decodeRegionEnd(encodedEnd []byte) ([]byte, error) {
+	if len(encodedEnd) == 0 {
+		return []byte{}, nil
+	}
+	end, err := c.memCodec.decodeKey(encodedEnd)
+	if err != nil {
+		return nil, err
+	}
+	if isV3PhysicalKey(end) {
+		if bytes.Compare(end, c.physicalEndKey) >= 0 {
+			return []byte{}, nil
+		}
+		if bytes.Compare(end, c.physicalPrefix) <= 0 {
+			return nil, errors.WithStack(errKeyOutOfBound)
+		}
+	}
+	return c.decodeRegionKey(end)
+}
+
+func (c *codecV3) decodeRegionKey(key []byte) ([]byte, error) {
+	if len(key) == 0 {
+		return []byte{}, nil
+	}
+	if bytes.HasPrefix(key, c.physicalPrefix) {
+		return key[len(c.physicalPrefix):], nil
+	}
+	if isV3PhysicalKey(key) {
+		return nil, errors.WithStack(errKeyOutOfBound)
+	}
+	return key, nil
+}
+
+func isV3PhysicalKey(key []byte) bool {
+	return len(key) >= apiV3KeyspacePrefixLen && (key[0] == RawModePrefix || key[0] == TxnModePrefix)
 }
