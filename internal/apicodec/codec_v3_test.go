@@ -185,3 +185,37 @@ func TestCodecV3DecodeRegionRangeRejectsOtherKeyspaceEnd(t *testing.T) {
 	_, _, err = codec.DecodeRegionRange(encodedStart, encodedEnd)
 	re.Error(err)
 }
+
+func TestCodecV3DecodeBucketKeysClampsPhysicalBounds(t *testing.T) {
+	re := require.New(t)
+	identity := &apipb.KeyspaceIdentity{
+		NamespaceId: 0x01020304,
+		KeyspaceId:  0x050607,
+	}
+	codec, err := NewCodecV3(ModeTxn, identity, "ks")
+	re.NoError(err)
+	v3Codec := codec.(*codecV3)
+
+	encodePhysical := func(key []byte) []byte {
+		return v3Codec.memCodec.encodeKey(key)
+	}
+	bucketKeys := [][]byte{
+		encodePhysical([]byte{'x', 5, 6, 6, 'a'}),
+		codec.EncodeRegionKey([]byte{}),
+		codec.EncodeRegionKey([]byte("a")),
+		codec.EncodeRegionKey([]byte("b")),
+		codec.EncodeRegionKey([]byte("c")),
+		encodePhysical([]byte{'x', 5, 6, 8}),
+		encodePhysical([]byte{'x', 5, 6, 8, 'a'}),
+	}
+
+	keys, err := codec.DecodeBucketKeys(bucketKeys)
+	re.NoError(err)
+	re.Equal([][]byte{
+		{},
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		{},
+	}, keys)
+}

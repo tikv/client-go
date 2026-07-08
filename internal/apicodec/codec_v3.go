@@ -121,10 +121,38 @@ func (c *codecV3) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []
 
 func (c *codecV3) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
 	ks := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		k, err := c.DecodeRegionKey(key)
+	for i, key := range keys {
+		var (
+			k   []byte
+			err error
+		)
+		if len(key) > 0 {
+			k, err = c.memCodec.decodeKey(key)
+		}
 		if err != nil {
 			return nil, err
+		}
+		if isV3PhysicalKey(k) {
+			if i == 0 && bytes.Compare(k, c.physicalPrefix) < 0 {
+				ks = append(ks, []byte{})
+			} else if i == len(keys)-1 && (len(k) == 0 || bytes.Compare(k, c.physicalEndKey) >= 0) {
+				ks = append(ks, []byte{})
+			} else if bytes.HasPrefix(k, c.physicalPrefix) {
+				raw := k[len(c.physicalPrefix):]
+				if len(raw) == 0 && len(ks) > 0 && len(ks[0]) == 0 {
+					continue
+				}
+				ks = append(ks, raw)
+			}
+			continue
+		}
+		if len(k) == 0 && i == len(keys)-1 {
+			ks = append(ks, []byte{})
+			continue
+		}
+		if len(k) == 0 && i == 0 {
+			ks = append(ks, []byte{})
+			continue
 		}
 		ks = append(ks, k)
 	}
