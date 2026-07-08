@@ -1,7 +1,6 @@
 package apicodec
 
 import (
-	"bytes"
 	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/apipb"
@@ -20,8 +19,9 @@ func checkV3Key(b []byte) error {
 	return nil
 }
 
-// codecV3 uses API V3 request context for TiKV RPCs and API V3 physical
-// prefixes for PD region lookups.
+// codecV3 uses API V3 request context for TiKV RPCs. PD region lookups also
+// use logical keys because the wrapped PD client is already scoped by
+// KeyspaceIdentity.
 type codecV3 struct {
 	*codecV2
 	physicalPrefix []byte
@@ -84,105 +84,43 @@ func (c *codecV3) GetKeyspace() []byte {
 }
 
 func (c *codecV3) EncodeRegionKey(key []byte) []byte {
-	return c.memCodec.encodeKey(c.encodePhysicalKey(key))
+	return c.memCodec.encodeKey(key)
 }
 
 func (c *codecV3) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
-	physicalKey, err := c.memCodec.decodeKey(encodedKey)
-	if err != nil {
-		return nil, err
+	if len(encodedKey) == 0 {
+		return encodedKey, nil
 	}
-	return c.decodePhysicalKey(physicalKey)
+	return c.memCodec.decodeKey(encodedKey)
 }
 
 func (c *codecV3) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
-	encodedStart := c.memCodec.encodeKey(c.encodePhysicalKey(start))
-	encodedEnd := c.physicalEndKey
 	if len(end) > 0 {
-		encodedEnd = c.encodePhysicalKey(end)
+		return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
 	}
-	encodedEnd = c.memCodec.encodeKey(encodedEnd)
-	return encodedStart, encodedEnd
+	return c.EncodeRegionKey(start), end
 }
 
 func (c *codecV3) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
-	var err error
-	if len(encodedStart) != 0 {
-		encodedStart, err = c.memCodec.decodeKey(encodedStart)
-		if err != nil {
-			return nil, nil, err
-		}
+	start, err := c.DecodeRegionKey(encodedStart)
+	if err != nil {
+		return nil, nil, err
 	}
-	if len(encodedEnd) != 0 {
-		encodedEnd, err = c.memCodec.decodeKey(encodedEnd)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return c.decodePhysicalRange(encodedStart, encodedEnd)
-}
-
-func (c *codecV3) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
-	ks := make([][]byte, 0, len(keys))
-	for i, key := range keys {
-		var (
-			k   []byte
-			err error
-		)
-		if len(key) > 0 {
-			k, err = c.memCodec.decodeKey(key)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		if i == 0 && bytes.Compare(k, c.physicalPrefix) < 0 {
-			ks = append(ks, []byte{})
-		} else if i == len(keys)-1 && (len(k) == 0 || bytes.Compare(k, c.physicalEndKey) >= 0) {
-			ks = append(ks, []byte{})
-		} else if bytes.HasPrefix(k, c.physicalPrefix) {
-			raw := k[len(c.physicalPrefix):]
-			if len(raw) == 0 && len(ks) > 0 && len(ks[0]) == 0 {
-				continue
-			}
-			ks = append(ks, raw)
-		}
-	}
-	return ks, nil
-}
-
-func (c *codecV3) encodePhysicalKey(key []byte) []byte {
-	if bytes.HasPrefix(key, c.physicalPrefix) {
-		return key
-	}
-	encoded := make([]byte, 0, len(c.physicalPrefix)+len(key))
-	encoded = append(encoded, c.physicalPrefix...)
-	encoded = append(encoded, key...)
-	return encoded
-}
-
-func (c *codecV3) decodePhysicalRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
-	if bytes.Compare(encodedStart, c.physicalEndKey) >= 0 ||
-		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.physicalPrefix) <= 0) {
-		return nil, nil, errors.WithStack(errKeyOutOfBound)
-	}
-
-	start, end = []byte{}, []byte{}
-	if bytes.HasPrefix(encodedStart, c.physicalPrefix) {
-		start = encodedStart[len(c.physicalPrefix):]
-	}
-	if bytes.HasPrefix(encodedEnd, c.physicalPrefix) {
-		end = encodedEnd[len(c.physicalPrefix):]
+	end, err := c.DecodeRegionKey(encodedEnd)
+	if err != nil {
+		return nil, nil, err
 	}
 	return start, end, nil
 }
 
-func (c *codecV3) decodePhysicalKey(encodedKey []byte) ([]byte, error) {
-	if len(encodedKey) == 0 {
-		return nil, nil
+func (c *codecV3) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
+	ks := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		k, err := c.DecodeRegionKey(key)
+		if err != nil {
+			return nil, err
+		}
+		ks = append(ks, k)
 	}
-	if !bytes.HasPrefix(encodedKey, c.physicalPrefix) {
-		return nil, errKeyOutOfBound
-	}
-	return encodedKey[len(c.physicalPrefix):], nil
+	return ks, nil
 }
