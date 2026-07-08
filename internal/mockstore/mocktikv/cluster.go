@@ -196,10 +196,16 @@ func (c *Cluster) UnCancelStore(storeID uint64) {
 
 // GetStoreByAddr returns a Store's meta by an addr.
 func (c *Cluster) GetStoreByAddr(addr string) *metapb.Store {
+	if c == nil {
+		return nil
+	}
 	c.RLock()
 	defer c.RUnlock()
 
 	for _, s := range c.stores {
+		if s == nil || s.meta == nil {
+			continue
+		}
 		if s.meta.GetAddress() == addr {
 			return proto.Clone(s.meta).(*metapb.Store)
 		}
@@ -209,10 +215,16 @@ func (c *Cluster) GetStoreByAddr(addr string) *metapb.Store {
 
 // GetAndCheckStoreByAddr checks and returns a Store's meta by an addr
 func (c *Cluster) GetAndCheckStoreByAddr(addr string) (ss []*metapb.Store, err error) {
+	if c == nil {
+		return nil, context.Canceled
+	}
 	c.RLock()
 	defer c.RUnlock()
 
 	for _, s := range c.stores {
+		if s == nil || s.meta == nil {
+			continue
+		}
 		if s.cancel {
 			err = context.Canceled
 			return
