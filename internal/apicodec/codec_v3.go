@@ -11,7 +11,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
-const apiV3KeyspacePrefixLen = 8
+const apiV3KeyspacePrefixLen = keyspacePrefixLen
 
 func checkV3Key(b []byte) error {
 	if len(b) < apiV3KeyspacePrefixLen || (b[0] != RawModePrefix && b[0] != TxnModePrefix) {
@@ -53,16 +53,15 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 	default:
 		return nil, errors.Errorf("unknown mode")
 	}
-	binary.BigEndian.PutUint32(physicalPrefix[1:5], namespaceID)
 	keyspaceIDBytes, err := getIDByte(keyspaceID)
 	if err != nil {
 		return nil, err
 	}
-	copy(physicalPrefix[5:], keyspaceIDBytes)
+	copy(physicalPrefix[1:], keyspaceIDBytes)
 
 	physicalEndKey := make([]byte, apiV3KeyspacePrefixLen)
-	prefixVal := binary.BigEndian.Uint64(physicalPrefix)
-	binary.BigEndian.PutUint64(physicalEndKey, prefixVal+1)
+	prefixVal := binary.BigEndian.Uint32(physicalPrefix)
+	binary.BigEndian.PutUint32(physicalEndKey, prefixVal+1)
 
 	keyspaceMeta := &keyspacepb.KeyspaceMeta{
 		Name:             BuildKeyspaceName(keyspaceName),
@@ -114,6 +113,9 @@ func (c *codecV3) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []
 		return nil, nil, err
 	}
 	end, err := c.decodeRegionEnd(encodedEnd)
+	if err != nil {
+		return nil, nil, err
+	}
 	return start, end, nil
 }
 
