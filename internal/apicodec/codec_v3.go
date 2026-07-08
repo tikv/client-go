@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/apipb"
-	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -75,100 +74,6 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 	return &codecV3{codecV2: base}, nil
 }
 
-// EncodeRequest keeps V3 RPC key fields as user keys. TiKV uses the V3
-// keyspace identity in request context to apply the physical keyspace prefix.
-func (c *codecV3) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	r := c.reqPool.Get().(*tikvrpc.Request)
-	*r = *req
-	setAPICtx(c, r)
-	return r, nil
-}
-
 func (c *codecV3) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
-	defer c.reqPool.Put(req)
-	regionError, err := resp.GetRegionError()
-	if err != nil {
-		return resp, nil
-	}
-	decodedRegionError, err := c.decodeRegionError(regionError)
-	if err != nil {
-		return nil, err
-	}
-	setRegionError(resp, decodedRegionError)
-	return resp, nil
-}
-
-func setRegionError(resp *tikvrpc.Response, regionError *errorpb.Error) {
-	switch r := resp.Resp.(type) {
-	case *kvrpcpb.GetResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.ScanResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.PrewriteResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.CommitResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.CleanupResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.BatchGetResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.BatchRollbackResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.ScanLockResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.ResolveLockResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.GCResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.DeleteRangeResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.PessimisticLockResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.PessimisticRollbackResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.TxnHeartBeatResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.CheckTxnStatusResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.CheckSecondaryLocksResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.FlushResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.BufferBatchGetResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.FlashbackToVersionResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.PrepareFlashbackToVersionResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawGetResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawBatchGetResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawPutResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawBatchPutResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawDeleteResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawBatchDeleteResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawDeleteRangeResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawScanResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawGetKeyTTLResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawCASResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.RawChecksumResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.UnsafeDestroyRangeResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.MvccGetByKeyResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.MvccGetByStartTsResponse:
-		r.RegionError = regionError
-	case *kvrpcpb.SplitRegionResponse:
-		r.RegionError = regionError
-	}
+	return c.codecV2.DecodeResponse(req, resp)
 }
