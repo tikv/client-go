@@ -42,7 +42,7 @@ func TestCodecV2(t *testing.T) {
 
 func (suite *testCodecV2Suite) SetupSuite() {
 	testKeyspaceMeta := keyspacepb.KeyspaceMeta{
-		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testKeyspaceID},
+		Id: testKeyspaceID,
 	}
 	codec, err := NewCodecV2(ModeRaw, &testKeyspaceMeta)
 	suite.NoError(err)
@@ -289,7 +289,7 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 	}
 	for _, testCase := range testCases {
 
-		keyspaceMeta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testCase.keyspaceID}}
+		keyspaceMeta := &keyspacepb.KeyspaceMeta{Id: testCase.keyspaceID}
 		if testCase.shouldErr {
 			_, err := NewCodecV2(testCase.mode, keyspaceMeta)
 			re.Error(err)
