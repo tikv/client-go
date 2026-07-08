@@ -34,6 +34,7 @@ import (
 	"github.com/tikv/client-go/v2/util/async"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/gc"
+	"github.com/tikv/pd/client/clients/metastorage"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -254,6 +255,11 @@ func (u *unimplementedPDClient) LoadKeyspace(ctx context.Context, name string) (
 	panic("unimplemented")
 }
 
+// LoadKeyspaceByID implements pd.Client.
+func (u *unimplementedPDClient) LoadKeyspaceByID(ctx context.Context, id uint32) (*keyspacepb.KeyspaceMeta, error) {
+	panic("unimplemented")
+}
+
 // LoadResourceGroups implements pd.Client.
 func (u *unimplementedPDClient) LoadResourceGroups(ctx context.Context) ([]*resource_manager.ResourceGroup, int64, error) {
 	panic("unimplemented")
@@ -335,7 +341,7 @@ func (u *unimplementedPDClient) UpdateServiceSafePointV2(ctx context.Context, ke
 }
 
 // Watch implements pd.Client.
-func (u *unimplementedPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error) {
+func (u *unimplementedPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan *metastorage.WatchResponse, error) {
 	panic("unimplemented")
 }
 
