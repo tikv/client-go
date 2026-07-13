@@ -44,6 +44,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
@@ -452,6 +453,38 @@ type txnFileCommitAction struct{}
 
 var _ txnFileAction = (*txnFileCommitAction)(nil)
 
+func (c *twoPhaseCommitter) prepareTxnFileCommitTS(ctx context.Context) (uint64, error) {
+	start := time.Now()
+	logutil.Event(ctx, "start get commit ts")
+	commitTS, err := c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	if err != nil {
+		logutil.Logger(ctx).Warn("txn file get commitTS failed",
+			zap.Error(err),
+			zap.Uint64("txnStartTS", c.startTS))
+		return 0, errors.WithStack(err)
+	}
+	commitDetail := c.getDetail()
+	commitDetail.GetCommitTsTime = time.Since(start)
+	c.txn.fillCommitTSLagDetails(&commitDetail.LagDetails)
+	logutil.Event(ctx, "finish get commit ts")
+	logutil.SetTag(ctx, "commitTs", commitTS)
+
+	if err = c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer); err != nil {
+		return 0, errors.WithStack(err)
+	}
+
+	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+		return 0, errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
+			c.sessionID, c.startTS, commitTS)
+	}
+
+	if c.txn.commitTSUpperBoundCheck != nil && !c.txn.commitTSUpperBoundCheck(commitTS) {
+		return 0, errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
+			c.sessionID, c.startTS, commitTS)
+	}
+	return commitTS, nil
+}
+
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
@@ -490,6 +523,9 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 				logutil.Logger(bo.GetCtx()).Info("2PC commitTS rejected by TiKV, retry with a newer commitTS",
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Stringer("info", logutil.Hex(rejected)))
+				if !batch.isPrimary {
+					return nil, errors.New("2PC commitTS rejected by TiKV, but the txn-file batch is not the primary batch")
+				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
 				// 3600000 << 18 = 943718400000
@@ -499,7 +535,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 				}
 
 				// Update commit ts and retry.
-				commitTS, err1 := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+				commitTS, err1 := c.prepareTxnFileCommitTS(bo.GetCtx())
 				if err1 != nil {
 					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
 						zap.Error(err1),
@@ -681,7 +717,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 
 	commitBo := retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars)
-	c.commitTS, err = c.store.GetTimestampWithRetry(commitBo, c.txn.GetScope())
+	c.commitTS, err = c.prepareTxnFileCommitTS(ctx)
 	if err != nil {
 		return
 	}

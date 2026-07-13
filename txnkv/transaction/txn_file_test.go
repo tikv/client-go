@@ -17,6 +17,7 @@ package transaction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -44,6 +45,289 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 )
+
+type txnFileCommitTSOracle struct {
+	unimplementedOracle
+
+	expired bool
+	calls   int
+	startTS uint64
+	ttl     uint64
+	option  *oracle.Option
+}
+
+func (o *txnFileCommitTSOracle) IsExpired(startTS uint64, ttl uint64, option *oracle.Option) bool {
+	o.calls++
+	o.startTS = startTS
+	o.ttl = ttl
+	o.option = option
+	return o.expired
+}
+
+type txnFileCommitTSStore struct {
+	unimplementedKVStore
+
+	timestamps     []uint64
+	timestampCalls int
+	timestampErr   error
+	oracle         *txnFileCommitTSOracle
+	regionCache    *locate.RegionCache
+	client         client.Client
+}
+
+func (s *txnFileCommitTSStore) GetTimestampWithRetry(_ *retry.Backoffer, _ string) (uint64, error) {
+	s.timestampCalls++
+	if s.timestampErr != nil {
+		return 0, s.timestampErr
+	}
+	if len(s.timestamps) == 0 {
+		return 0, errors.New("no timestamp configured")
+	}
+	ts := s.timestamps[0]
+	s.timestamps = s.timestamps[1:]
+	return ts, nil
+}
+
+func (s *txnFileCommitTSStore) GetOracle() oracle.Oracle {
+	return s.oracle
+}
+
+func (s *txnFileCommitTSStore) GetRegionCache() *locate.RegionCache {
+	return s.regionCache
+}
+
+func (s *txnFileCommitTSStore) GetTiKVClient() client.Client {
+	return s.client
+}
+
+type txnFileSchemaVer int64
+
+func (v txnFileSchemaVer) SchemaMetaVersion() int64 {
+	return int64(v)
+}
+
+type txnFileSchemaLeaseChecker struct {
+	err       error
+	calls     int
+	checkTS   uint64
+	schemaVer SchemaVer
+}
+
+func (c *txnFileSchemaLeaseChecker) CheckBySchemaVer(checkTS uint64, schemaVer SchemaVer) (*RelatedSchemaChange, error) {
+	c.calls++
+	c.checkTS = checkTS
+	c.schemaVer = schemaVer
+	return nil, c.err
+}
+
+func newTxnFileCommitTSTestCommitter(
+	store *txnFileCommitTSStore,
+	checker SchemaLeaseChecker,
+	upperBoundCheck func(uint64) bool,
+) *twoPhaseCommitter {
+	txn := &KVTxn{
+		store:                   store,
+		startTS:                 1,
+		schemaVer:               txnFileSchemaVer(10),
+		schemaLeaseChecker:      checker,
+		scope:                   oracle.GlobalTxnScope,
+		commitTSUpperBoundCheck: upperBoundCheck,
+	}
+	committer := &twoPhaseCommitter{
+		store:     store,
+		txn:       txn,
+		startTS:   txn.startTS,
+		sessionID: 7,
+	}
+	committer.setDetail(&util.CommitDetails{})
+	return committer
+}
+
+func TestPrepareTxnFileCommitTS(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		commitOracle := &txnFileCommitTSOracle{}
+		store := &txnFileCommitTSStore{
+			timestamps: []uint64{100, 102},
+			oracle:     commitOracle,
+		}
+		checker := &txnFileSchemaLeaseChecker{}
+		upperBoundCalls := 0
+		committer := newTxnFileCommitTSTestCommitter(store, checker, func(commitTS uint64) bool {
+			upperBoundCalls++
+			return commitTS == 102
+		})
+		committer.txn.SetCommitWaitUntilTSO(101)
+		committer.txn.SetCommitWaitUntilTSOTimeout(time.Second)
+
+		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+
+		require.NoError(t, err)
+		require.Equal(t, uint64(102), commitTS)
+		require.Equal(t, 2, store.timestampCalls)
+		require.Equal(t, 1, checker.calls)
+		require.Equal(t, commitTS, checker.checkTS)
+		require.Equal(t, txnFileSchemaVer(10), checker.schemaVer)
+		require.Equal(t, 1, commitOracle.calls)
+		require.Equal(t, uint64(1), commitOracle.startTS)
+		require.Equal(t, uint64(MaxTxnTimeUse), commitOracle.ttl)
+		require.Equal(t, oracle.GlobalTxnScope, commitOracle.option.TxnScope)
+		require.Equal(t, 1, upperBoundCalls)
+		require.Equal(t, uint64(100), committer.getDetail().LagDetails.FirstLagTS)
+		require.Equal(t, uint64(101), committer.getDetail().LagDetails.WaitUntilTS)
+		require.Equal(t, 1, committer.getDetail().LagDetails.BackoffCnt)
+	})
+
+	t.Run("schema invalid", func(t *testing.T) {
+		schemaErr := errors.New("schema changed")
+		commitOracle := &txnFileCommitTSOracle{}
+		store := &txnFileCommitTSStore{timestamps: []uint64{100}, oracle: commitOracle}
+		checker := &txnFileSchemaLeaseChecker{err: schemaErr}
+		upperBoundCalls := 0
+		committer := newTxnFileCommitTSTestCommitter(store, checker, func(uint64) bool {
+			upperBoundCalls++
+			return true
+		})
+
+		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+
+		require.Zero(t, commitTS)
+		require.ErrorIs(t, err, schemaErr)
+		require.Equal(t, 1, checker.calls)
+		require.Zero(t, commitOracle.calls)
+		require.Zero(t, upperBoundCalls)
+	})
+
+	t.Run("transaction expired", func(t *testing.T) {
+		commitOracle := &txnFileCommitTSOracle{expired: true}
+		store := &txnFileCommitTSStore{timestamps: []uint64{100}, oracle: commitOracle}
+		checker := &txnFileSchemaLeaseChecker{}
+		upperBoundCalls := 0
+		committer := newTxnFileCommitTSTestCommitter(store, checker, func(uint64) bool {
+			upperBoundCalls++
+			return true
+		})
+
+		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+
+		require.Zero(t, commitTS)
+		require.ErrorContains(t, err, "txn takes too much time")
+		require.Equal(t, 1, checker.calls)
+		require.Equal(t, 1, commitOracle.calls)
+		require.Zero(t, upperBoundCalls)
+	})
+
+	t.Run("commit timestamp exceeds upper bound", func(t *testing.T) {
+		commitOracle := &txnFileCommitTSOracle{}
+		store := &txnFileCommitTSStore{timestamps: []uint64{100}, oracle: commitOracle}
+		checker := &txnFileSchemaLeaseChecker{}
+		upperBoundCalls := 0
+		committer := newTxnFileCommitTSTestCommitter(store, checker, func(uint64) bool {
+			upperBoundCalls++
+			return false
+		})
+
+		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+
+		require.Zero(t, commitTS)
+		require.ErrorContains(t, err, "check commit ts upper bound fail")
+		require.Equal(t, 1, checker.calls)
+		require.Equal(t, 1, commitOracle.calls)
+		require.Equal(t, 1, upperBoundCalls)
+	})
+}
+
+func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
+	pd := &mockPDClient{}
+	regionCache := locate.NewTestRegionCache()
+	regionCache.SetPDClient(pd)
+	defer regionCache.Close()
+
+	commitOracle := &txnFileCommitTSOracle{}
+	checker := &txnFileSchemaLeaseChecker{}
+	requestCount := 0
+	kvClient := &fnClient{}
+	kvClient.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		requestCount++
+		if requestCount == 1 {
+			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{
+				CommitTsExpired: &kvrpcpb.CommitTsExpired{
+					StartTs:           1,
+					AttemptedCommitTs: req.Commit().CommitVersion,
+					MinCommitTs:       100,
+				},
+			}}}, nil
+		}
+		require.Equal(t, uint64(102), req.Commit().CommitVersion)
+		return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
+	}
+	store := &txnFileCommitTSStore{
+		timestamps:  []uint64{102},
+		oracle:      commitOracle,
+		regionCache: regionCache,
+		client:      kvClient,
+	}
+	upperBoundCalls := 0
+	committer := newTxnFileCommitTSTestCommitter(store, checker, func(commitTS uint64) bool {
+		upperBoundCalls++
+		return commitTS == 102
+	})
+	committer.commitTS = 2
+
+	bo := retry.NewBackoffer(context.Background(), 1000)
+	location, err := regionCache.LocateKey(bo, []byte("k"))
+	require.NoError(t, err)
+	batch := chunkBatch{
+		txnChunkSlice: txnChunkSlice{
+			chunkIDs: []uint64{1},
+			chunkRanges: []txnChunkRange{{
+				smallest: []byte("k"),
+				biggest:  []byte("k"),
+			}},
+		},
+		region:     location,
+		sampleKeys: [][]byte{[]byte("k")},
+		isPrimary:  true,
+	}
+
+	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, requestCount)
+	require.Equal(t, uint64(102), committer.commitTS)
+	require.Equal(t, 1, store.timestampCalls)
+	require.Equal(t, 1, checker.calls)
+	require.Equal(t, 1, commitOracle.calls)
+	require.Equal(t, 1, upperBoundCalls)
+
+	requestCount = 0
+	store.timestamps = []uint64{104}
+	store.timestampCalls = 0
+	checker.calls = 0
+	commitOracle.calls = 0
+	upperBoundCalls = 0
+	committer.commitTS = 2
+	batch.isPrimary = false
+	kvClient.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		requestCount++
+		return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{
+			CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				StartTs:           1,
+				AttemptedCommitTs: req.Commit().CommitVersion,
+				MinCommitTs:       100,
+			},
+		}}}, nil
+	}
+
+	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.ErrorContains(t, err, "txn-file batch is not the primary batch")
+	require.Equal(t, 1, requestCount)
+	require.Equal(t, uint64(2), committer.commitTS)
+	require.Zero(t, store.timestampCalls)
+	require.Zero(t, checker.calls)
+	require.Zero(t, commitOracle.calls)
+	require.Zero(t, upperBoundCalls)
+}
 
 func TestChunkSliceSortAndDedup(t *testing.T) {
 	assert := assert.New(t)
