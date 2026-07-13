@@ -1295,8 +1295,24 @@ func CallDebugRPC(ctx context.Context, client debugpb.DebugClient, req *Request)
 
 // Lease is used to implement grpc stream timeout.
 type Lease struct {
-	Cancel   context.CancelFunc
-	deadline int64 // A time.UnixNano value, if time.Now().UnixNano() > deadline, cancel() would be called.
+	Cancel context.CancelFunc
+	// deadline is the timeout for the current blocking Recv call.
+	// It is set before Recv and reset to 0 after Recv returns, so it does not
+	// expire an idle stream when no Recv is in progress.
+	deadline int64
+	// hardDeadline is the absolute maximum lifetime of the lease.
+	// It is independent of Recv state and is used as a guardrail to clean up
+	// leaked streams whose caller forgets to Close. 0 means disabled.
+	hardDeadline int64
+}
+
+// SetHardTimeout sets an absolute maximum lifetime for a stream lease.
+func (l *Lease) SetHardTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		atomic.StoreInt64(&l.hardDeadline, 0)
+		return
+	}
+	atomic.StoreInt64(&l.hardDeadline, time.Now().Add(timeout).UnixNano())
 }
 
 // Recv overrides the stream client Recv() function.
@@ -1397,6 +1413,11 @@ func keepOnlyActive(array []*Lease, now int64) []*Lease {
 	idx := 0
 	for i := 0; i < len(array); i++ {
 		item := array[i]
+		hardDeadline := atomic.LoadInt64(&item.hardDeadline)
+		if hardDeadline > 0 && hardDeadline <= now {
+			item.Cancel()
+			continue
+		}
 		deadline := atomic.LoadInt64(&item.deadline)
 		if deadline == 0 || deadline > now {
 			array[idx] = array[i]
@@ -1405,6 +1426,7 @@ func keepOnlyActive(array []*Lease, now int64) []*Lease {
 			item.Cancel()
 		}
 	}
+	clear(array[idx:])
 	return array[:idx]
 }
 
