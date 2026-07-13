@@ -94,6 +94,11 @@ const (
 // forwardMetadataKey is the key of gRPC metadata which represents a forwarded request.
 const forwardMetadataKey = "tikv-forwarded-host"
 
+const (
+	mvMaintenanceRequestSource = "internal_mv_maintain"
+	mvMaintenanceStreamHardTTL = time.Hour
+)
+
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
@@ -686,6 +691,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
+	setStreamHardTimeout(ctx, req, &copStream.Lease)
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -695,6 +701,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("copstream returns nothing for the request.")
@@ -721,6 +728,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
+	setStreamHardTimeout(ctx, req, &copStream.Lease)
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -730,6 +738,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("batch copstream returns nothing for the request.")
@@ -755,6 +764,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
+	setStreamHardTimeout(ctx, req, &copStream.Lease)
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -764,11 +774,34 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 	}
 	copStream.MPPDataPacket = first
 	return resp, nil
+}
+
+func setStreamHardTimeout(ctx context.Context, req *tikvrpc.Request, lease *tikvrpc.Lease) {
+	reqSource := req.GetRequestSource()
+	ctxSource := util.RequestSourceFromCtx(ctx)
+	hardTTL := streamHardTTLBySources(reqSource, ctxSource)
+	lease.SetHardTimeout(hardTTL)
+}
+
+func streamHardTTL(ctx context.Context, req *tikvrpc.Request) time.Duration {
+	return streamHardTTLBySources(req.GetRequestSource(), util.RequestSourceFromCtx(ctx))
+}
+
+func streamHardTTLBySources(reqSource, ctxSource string) time.Duration {
+	if isMVMaintenanceRequestSource(reqSource) || isMVMaintenanceRequestSource(ctxSource) {
+		return mvMaintenanceStreamHardTTL
+	}
+	return 0
+}
+
+func isMVMaintenanceRequestSource(source string) bool {
+	return source == mvMaintenanceRequestSource || strings.HasPrefix(source, mvMaintenanceRequestSource+"_")
 }
 
 // Close closes all connections.
