@@ -1058,7 +1058,9 @@ func (c *twoPhaseCommitter) getKeyspaceID() apicodec.KeyspaceID {
 }
 
 func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
-	if c.txn == nil || c.txn.vars.DisableTxnFile {
+	// shouldWriteBinlog(): Disable txn file if should write binlog for safe.
+	// Txn file is enabled on TiDBCloud only, while binlog is just for on-premise.
+	if c.txn == nil || c.txn.vars.DisableTxnFile || c.shouldWriteBinlog() {
 		return false, nil
 	}
 	conf := config.GetGlobalConfig()
