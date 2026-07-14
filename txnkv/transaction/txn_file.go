@@ -519,13 +519,32 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 			return nil, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
+		if regionErr := commitResp.GetRegionError(); regionErr != nil {
+			if batch.isPrimary && regionErr.GetUndeterminedResult() != nil {
+				// Keep the RPC error, if any, as the cause of the ambiguity.
+				if c.getUndeterminedErr() == nil {
+					c.setUndeterminedErr(errors.New(regionErr.String()))
+				}
+				return nil, errors.WithStack(tikverr.ErrResultUndetermined)
+			}
+			return resp, nil
+		}
+		if batch.isPrimary {
+			// TiKV has definitively processed the primary commit request.
+			c.setUndeterminedErr(nil)
+		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {
 				logutil.Logger(bo.GetCtx()).Info("2PC commitTS rejected by TiKV, retry with a newer commitTS",
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Stringer("info", logutil.Hex(rejected)))
-				if !batch.isPrimary {
-					return nil, errors.New("2PC commitTS rejected by TiKV, but the txn-file batch is not the primary batch")
+				if !batch.isPrimary || !bytes.Equal(rejected.Key, c.primary()) {
+					logutil.Logger(bo.GetCtx()).Error("2PC commitTS rejected by TiKV, but the key is not the primary key",
+						zap.Uint64("txnStartTS", c.startTS),
+						zap.String("key", redact.Key(rejected.Key)),
+						zap.String("primary", redact.Key(c.primary())),
+						zap.Bool("batchIsPrimary", batch.isPrimary))
+					return nil, errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
 				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
@@ -725,6 +744,13 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{})
 	stepDone("commit")
 	if err != nil {
+		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
+			logutil.Logger(ctx).Warn("txn file commit result undetermined",
+				zap.Error(err),
+				zap.NamedError("rpcErr", undeterminedErr),
+				zap.Uint64("txnStartTS", c.startTS))
+			err = errors.WithStack(tikverr.ErrResultUndetermined)
+		}
 		return
 	}
 

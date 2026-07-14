@@ -17,7 +17,6 @@ package transaction
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -28,11 +27,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/latch"
@@ -256,6 +258,7 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 					StartTs:           1,
 					AttemptedCommitTs: req.Commit().CommitVersion,
 					MinCommitTs:       100,
+					Key:               []byte("k"),
 				},
 			}}}, nil
 		}
@@ -274,6 +277,7 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 		return commitTS == 102
 	})
 	committer.commitTS = 2
+	committer.primaryKey = []byte("k")
 
 	bo := retry.NewBackoffer(context.Background(), 1000)
 	location, err := regionCache.LocateKey(bo, []byte("k"))
@@ -323,13 +327,232 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 
 	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
 
-	require.ErrorContains(t, err, "txn-file batch is not the primary batch")
+	require.ErrorContains(t, err, "key is not the primary key")
 	require.Equal(t, 1, requestCount)
 	require.Equal(t, uint64(2), committer.commitTS)
 	require.Zero(t, store.timestampCalls)
 	require.Zero(t, checker.calls)
 	require.Zero(t, commitOracle.calls)
 	require.Zero(t, upperBoundCalls)
+
+	requestCount = 0
+	store.timestamps = []uint64{106}
+	store.timestampCalls = 0
+	checker.calls = 0
+	commitOracle.calls = 0
+	upperBoundCalls = 0
+	committer.commitTS = 2
+	batch.isPrimary = true
+	kvClient.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		requestCount++
+		return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{
+			CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				StartTs:           1,
+				AttemptedCommitTs: req.Commit().CommitVersion,
+				MinCommitTs:       100,
+				Key:               []byte("not-primary"),
+			},
+		}}}, nil
+	}
+
+	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.ErrorContains(t, err, "key is not the primary key")
+	require.Equal(t, 1, requestCount)
+	require.Equal(t, uint64(2), committer.commitTS)
+	require.Zero(t, store.timestampCalls)
+	require.Zero(t, checker.calls)
+	require.Zero(t, commitOracle.calls)
+	require.Zero(t, upperBoundCalls)
+}
+
+func newTxnFileCommitTestBatch(
+	t *testing.T,
+	onSend func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error),
+) (*twoPhaseCommitter, *retry.Backoffer, chunkBatch) {
+	t.Helper()
+
+	pd := &mockPDClient{}
+	regionCache := locate.NewTestRegionCache()
+	regionCache.SetPDClient(pd)
+	t.Cleanup(regionCache.Close)
+
+	store := &txnFileCommitTSStore{
+		oracle:      &txnFileCommitTSOracle{},
+		regionCache: regionCache,
+		client:      &fnClient{onSend: onSend},
+	}
+	committer := newTxnFileCommitTSTestCommitter(store, &txnFileSchemaLeaseChecker{}, nil)
+	committer.commitTS = 2
+
+	bo := retry.NewBackoffer(context.Background(), 1000)
+	location, err := regionCache.LocateKey(bo, []byte("k"))
+	require.NoError(t, err)
+	batch := chunkBatch{
+		txnChunkSlice: txnChunkSlice{
+			chunkIDs: []uint64{1},
+			chunkRanges: []txnChunkRange{{
+				smallest: []byte("k"),
+				biggest:  []byte("k"),
+			}},
+		},
+		region:     location,
+		sampleKeys: [][]byte{[]byte("k")},
+		isPrimary:  true,
+	}
+	return committer, bo, batch
+}
+
+func TestTxnFileCommitPrimaryRPCErrorMarksResultUndetermined(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		return nil, context.Canceled
+	})
+
+	_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, context.Canceled, errors.Cause(committer.getUndeterminedErr()))
+}
+
+func TestTxnFileCommitSecondaryRPCErrorIsNotResultUndetermined(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		return nil, context.Canceled
+	})
+	batch.isPrimary = false
+
+	_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, committer.getUndeterminedErr())
+}
+
+func TestTxnFileCommitClearsUndeterminedErrOnDefinitivePrimaryResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		resp *kvrpcpb.CommitResponse
+	}{
+		{
+			name: "success",
+			resp: &kvrpcpb.CommitResponse{},
+		},
+		{
+			name: "key error",
+			resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{Abort: "aborted"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+				return &tikvrpc.Response{Resp: tt.resp}, nil
+			})
+			committer.setUndeterminedErr(errors.New("stale RPC error"))
+
+			_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+			if tt.resp.GetError() == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.Nil(t, committer.getUndeterminedErr())
+		})
+	}
+}
+
+func TestTxnFileCommitPrimaryUndeterminedRegionError(t *testing.T) {
+	regionErr := &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}}
+	requestCount := 0
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		requestCount++
+		return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{RegionError: regionErr}}, nil
+	})
+
+	_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.ErrorIs(t, err, tikverr.ErrResultUndetermined)
+	require.Equal(t, regionErr.String(), errors.Cause(committer.getUndeterminedErr()).Error())
+	require.Equal(t, 1, requestCount)
+}
+
+func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
+	pd := &mockPDClient{}
+	regionCache := locate.NewTestRegionCache()
+	regionCache.SetPDClient(pd)
+	defer regionCache.Close()
+
+	chunkWriter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		_, err := w.Write([]byte(`{"chunk_id":1}`))
+		require.NoError(t, err)
+	}))
+	defer chunkWriter.Close()
+
+	origCfg := config.GetGlobalConfig()
+	newCfg := *origCfg
+	newCfg.TiKVClient.TxnChunkWriterAddr = chunkWriter.Listener.Addr().String()
+	config.StoreGlobalConfig(&newCfg)
+	defer func() {
+		config.StoreGlobalConfig(origCfg)
+		once = sync.Once{}
+		cli = nil
+		errCli = nil
+		scheme = ""
+	}()
+
+	once = sync.Once{}
+	cli = nil
+	errCli = nil
+	scheme = ""
+
+	var commitRequestCount atomic.Int64
+	var rollbackRequestCount atomic.Int64
+	store := &txnFileCommitTSStore{
+		timestamps:  []uint64{2},
+		oracle:      &txnFileCommitTSOracle{},
+		regionCache: regionCache,
+		client: &fnClient{onSend: func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPrewrite:
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+			case tikvrpc.CmdCommit:
+				commitRequestCount.Add(1)
+				return nil, context.Canceled
+			case tikvrpc.CmdBatchRollback:
+				rollbackRequestCount.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
+			default:
+				return nil, errors.Errorf("unexpected request type %s", req.Type)
+			}
+		}},
+	}
+	memDB := unionstore.NewMemDB()
+	require.NoError(t, memDB.Set([]byte("k"), []byte("v")))
+	txn := &KVTxn{
+		store:              store,
+		startTS:            1,
+		startTime:          time.Now(),
+		schemaVer:          txnFileSchemaVer(10),
+		schemaLeaseChecker: &txnFileSchemaLeaseChecker{},
+		scope:              oracle.GlobalTxnScope,
+		vars:               tikv.DefaultVars,
+		us:                 unionstore.NewUnionStore(memDB, nil),
+	}
+	committer := &twoPhaseCommitter{
+		store:         store,
+		txn:           txn,
+		startTS:       txn.startTS,
+		regionTxnSize: map[uint64]int{},
+	}
+	require.NoError(t, committer.initKeysAndMutations(context.Background()))
+	committer.ttlManager.state = stateRunning
+
+	err := committer.executeTxnFile(context.Background())
+
+	require.ErrorIs(t, err, tikverr.ErrResultUndetermined)
+	require.Equal(t, context.Canceled, errors.Cause(committer.getUndeterminedErr()))
+	require.Equal(t, int64(1), commitRequestCount.Load())
+	require.Zero(t, rollbackRequestCount.Load())
 }
 
 func TestChunkSliceSortAndDedup(t *testing.T) {
