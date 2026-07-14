@@ -70,13 +70,15 @@ type txnFileCommitTSStore struct {
 	timestamps     []uint64
 	timestampCalls int
 	timestampErr   error
+	backoffer      *retry.Backoffer
 	oracle         *txnFileCommitTSOracle
 	regionCache    *locate.RegionCache
 	client         client.Client
 }
 
-func (s *txnFileCommitTSStore) GetTimestampWithRetry(_ *retry.Backoffer, _ string) (uint64, error) {
+func (s *txnFileCommitTSStore) GetTimestampWithRetry(bo *retry.Backoffer, _ string) (uint64, error) {
 	s.timestampCalls++
+	s.backoffer = bo
 	if s.timestampErr != nil {
 		return 0, s.timestampErr
 	}
@@ -159,7 +161,7 @@ func TestPrepareTxnFileCommitTS(t *testing.T) {
 		committer.txn.SetCommitWaitUntilTSO(101)
 		committer.txn.SetCommitWaitUntilTSOTimeout(time.Second)
 
-		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+		commitTS, err := committer.prepareTxnFileCommitTS(retry.NewBackoffer(context.Background(), TsoMaxBackoff))
 
 		require.NoError(t, err)
 		require.Equal(t, uint64(102), commitTS)
@@ -188,7 +190,7 @@ func TestPrepareTxnFileCommitTS(t *testing.T) {
 			return true
 		})
 
-		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+		commitTS, err := committer.prepareTxnFileCommitTS(retry.NewBackoffer(context.Background(), TsoMaxBackoff))
 
 		require.Zero(t, commitTS)
 		require.ErrorIs(t, err, schemaErr)
@@ -207,7 +209,7 @@ func TestPrepareTxnFileCommitTS(t *testing.T) {
 			return true
 		})
 
-		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+		commitTS, err := committer.prepareTxnFileCommitTS(retry.NewBackoffer(context.Background(), TsoMaxBackoff))
 
 		require.Zero(t, commitTS)
 		require.ErrorContains(t, err, "txn takes too much time")
@@ -226,7 +228,7 @@ func TestPrepareTxnFileCommitTS(t *testing.T) {
 			return false
 		})
 
-		commitTS, err := committer.prepareTxnFileCommitTS(context.Background())
+		commitTS, err := committer.prepareTxnFileCommitTS(retry.NewBackoffer(context.Background(), TsoMaxBackoff))
 
 		require.Zero(t, commitTS)
 		require.ErrorContains(t, err, "check commit ts upper bound fail")
@@ -295,6 +297,7 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 	require.Equal(t, 2, requestCount)
 	require.Equal(t, uint64(102), committer.commitTS)
 	require.Equal(t, 1, store.timestampCalls)
+	require.Same(t, bo, store.backoffer)
 	require.Equal(t, 1, checker.calls)
 	require.Equal(t, 1, commitOracle.calls)
 	require.Equal(t, 1, upperBoundCalls)

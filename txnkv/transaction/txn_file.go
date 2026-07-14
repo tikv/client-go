@@ -453,10 +453,11 @@ type txnFileCommitAction struct{}
 
 var _ txnFileAction = (*txnFileCommitAction)(nil)
 
-func (c *twoPhaseCommitter) prepareTxnFileCommitTS(ctx context.Context) (uint64, error) {
+func (c *twoPhaseCommitter) prepareTxnFileCommitTS(bo *retry.Backoffer) (uint64, error) {
+	ctx := bo.GetCtx()
 	start := time.Now()
 	logutil.Event(ctx, "start get commit ts")
-	commitTS, err := c.txn.GetTimestampForCommit(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	commitTS, err := c.txn.GetTimestampForCommit(bo, c.txn.GetScope())
 	if err != nil {
 		logutil.Logger(ctx).Warn("txn file get commitTS failed",
 			zap.Error(err),
@@ -535,7 +536,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 				}
 
 				// Update commit ts and retry.
-				commitTS, err1 := c.prepareTxnFileCommitTS(bo.GetCtx())
+				commitTS, err1 := c.prepareTxnFileCommitTS(bo)
 				if err1 != nil {
 					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
 						zap.Error(err1),
@@ -717,7 +718,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 
 	commitBo := retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars)
-	c.commitTS, err = c.prepareTxnFileCommitTS(ctx)
+	c.commitTS, err = c.prepareTxnFileCommitTS(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars))
 	if err != nil {
 		return
 	}
