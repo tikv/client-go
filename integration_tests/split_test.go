@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/gc"
+	"github.com/tikv/pd/client/clients/metastorage"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -392,6 +393,10 @@ func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspace
 	return nil, nil
 }
 
+func (c *mockPDClient) LoadKeyspaceByID(ctx context.Context, id uint32) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }
@@ -452,7 +457,7 @@ func (c *mockPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLoca
 	return nil
 }
 
-func (c *mockPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error) {
+func (c *mockPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan *metastorage.WatchResponse, error) {
 	return nil, nil
 }
 

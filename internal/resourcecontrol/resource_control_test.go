@@ -49,6 +49,59 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.StoreID())
 }
 
+func TestMakeRequestInfoPredictedReadBytes(t *testing.T) {
+	// A read request may carry an optional PredictedReadBytes hint on
+	// tikvrpc.Request; MakeRequestInfo should propagate it to RequestInfo.
+	req := &tikvrpc.Request{
+		Req:                &kvrpcpb.BatchGetRequest{},
+		Context:            kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+		PredictedReadBytes: 256 * 1024,
+	}
+	info := MakeRequestInfo(req)
+	assert.False(t, info.IsWrite())
+	assert.Equal(t, uint64(256*1024), info.PredictedReadBytes(),
+		"predictedReadBytes should propagate from tikvrpc.Request")
+
+	// Without a hint, PredictedReadBytes defaults to 0. This test only
+	// checks client-go propagation; PD still decides request eligibility.
+	reqNoHint := &tikvrpc.Request{
+		Req:     &kvrpcpb.BatchGetRequest{},
+		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 7}},
+	}
+	infoNoHint := MakeRequestInfo(reqNoHint)
+	assert.Equal(t, uint64(0), infoNoHint.PredictedReadBytes(),
+		"zero hint on the request means zero on RequestInfo")
+}
+
+func TestMakeRequestInfoIsCop(t *testing.T) {
+	// Coprocessor requests must carry IsCop()==true so PD can scope
+	// paging_* metrics to them.
+	copReq := &tikvrpc.Request{
+		Type:    tikvrpc.CmdCop,
+		Req:     &coprocessor.Request{},
+		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}},
+	}
+	assert.True(t, MakeRequestInfo(copReq).IsCop())
+
+	copStreamReq := &tikvrpc.Request{
+		Type:    tikvrpc.CmdCopStream,
+		Req:     &coprocessor.Request{},
+		Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}},
+	}
+	assert.True(t, MakeRequestInfo(copStreamReq).IsCop())
+
+	// Non-cop reads (Get, BatchGet, Scan) must carry IsCop()==false so
+	// PD ignores them in the paging accounting branch.
+	for _, req := range []*tikvrpc.Request{
+		{Type: tikvrpc.CmdGet, Req: &kvrpcpb.GetRequest{}, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}}},
+		{Type: tikvrpc.CmdBatchGet, Req: &kvrpcpb.BatchGetRequest{}, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}}},
+		{Type: tikvrpc.CmdScan, Req: &kvrpcpb.ScanRequest{}, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}}},
+	} {
+		assert.False(t, MakeRequestInfo(req).IsCop(),
+			"non-cop cmd type %v must report IsCop()==false", req.Type)
+	}
+}
+
 func TestResponseInfoReadBytes(t *testing.T) {
 	resp := &tikvrpc.Response{
 		Resp: &coprocessor.Response{
