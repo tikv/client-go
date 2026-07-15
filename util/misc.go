@@ -177,6 +177,7 @@ func (o Option[T]) Inner() *T {
 	return o.inner
 }
 
+// GetMaxStartKey returns the lexicographically larger start key, treating an empty key as unbounded below.
 func GetMaxStartKey(lhs []byte, rhs []byte) []byte {
 	if bytes.Compare(lhs, rhs) > 0 {
 		return lhs
@@ -184,6 +185,7 @@ func GetMaxStartKey(lhs []byte, rhs []byte) []byte {
 	return rhs
 }
 
+// GetMinEndKey returns the lexicographically smaller end key, treating an empty key as unbounded above.
 func GetMinEndKey(lhs []byte, rhs []byte) []byte {
 	if len(rhs) == 0 {
 		return lhs
