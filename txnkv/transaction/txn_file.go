@@ -113,6 +113,7 @@ func (c *twoPhaseCommitter) applyTxnFileResourceGroupTagger(req *tikvrpc.Request
 }
 
 func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, sampleKeys [][]byte) {
+	// Note: Batches containing only non-write operations have no sample key, so dynamic tagging is skipped.
 	if len(sampleKeys) == 0 || c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
 		return
 	}
