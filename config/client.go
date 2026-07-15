@@ -267,6 +267,22 @@ func (config *TiKVClient) Valid() error {
 	if config.GetGrpcKeepAliveTimeout() < time.Millisecond*50 {
 		return fmt.Errorf("grpc-keepalive-timeout should be at least 0.05, but got %f", config.GrpcKeepAliveTimeout)
 	}
+	return validateTxnFileConfig(config)
+}
+
+func validateTxnFileConfig(config *TiKVClient) error {
+	if config.TxnChunkMaxSize == 0 {
+		return fmt.Errorf("txn-chunk-max-size should be greater than 0")
+	}
+	if config.TxnChunkMaxSize > math.MaxInt {
+		return fmt.Errorf("txn-chunk-max-size should not exceed %d, but got %d", math.MaxInt, config.TxnChunkMaxSize)
+	}
+	if config.TxnChunkWriterConcurrency == 0 {
+		return fmt.Errorf("txn-chunk-writer-concurrency should be greater than 0")
+	}
+	if config.TxnChunkWriterConcurrency > math.MaxInt {
+		return fmt.Errorf("txn-chunk-writer-concurrency should not exceed %d, but got %d", math.MaxInt, config.TxnChunkWriterConcurrency)
+	}
 	return nil
 }
 

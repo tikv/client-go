@@ -35,6 +35,8 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -88,4 +90,71 @@ func TestValidateGRPCKeepAliveTimeout(t *testing.T) {
 	cfg.GrpcKeepAliveTimeout = 0.04
 	assert.NotNil(t, cfg.Valid())
 	assert.Equal(t, "grpc-keepalive-timeout should be at least 0.05, but got 0.040000", cfg.Valid().Error())
+}
+
+func TestValidateTxnFileConfig(t *testing.T) {
+	maxInt := uint64(math.MaxInt)
+	tests := []struct {
+		name      string
+		configure func(*TiKVClient)
+		err       string
+	}{
+		{
+			name: "default",
+		},
+		{
+			name: "zero chunk size",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkMaxSize = 0
+			},
+			err: "txn-chunk-max-size should be greater than 0",
+		},
+		{
+			name: "maximum chunk size",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkMaxSize = maxInt
+			},
+		},
+		{
+			name: "chunk size exceeds int",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkMaxSize = maxInt + 1
+			},
+			err: fmt.Sprintf("txn-chunk-max-size should not exceed %d, but got %d", maxInt, maxInt+1),
+		},
+		{
+			name: "zero writer concurrency",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkWriterConcurrency = 0
+			},
+			err: "txn-chunk-writer-concurrency should be greater than 0",
+		},
+		{
+			name: "maximum writer concurrency",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkWriterConcurrency = uint(maxInt)
+			},
+		},
+		{
+			name: "writer concurrency exceeds int",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkWriterConcurrency = uint(maxInt) + 1
+			},
+			err: fmt.Sprintf("txn-chunk-writer-concurrency should not exceed %d, but got %d", maxInt, uint(maxInt)+1),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultTiKVClient()
+			if test.configure != nil {
+				test.configure(&cfg)
+			}
+			if test.err == "" {
+				assert.NoError(t, cfg.Valid())
+				return
+			}
+			assert.EqualError(t, cfg.Valid(), test.err)
+		})
+	}
 }
