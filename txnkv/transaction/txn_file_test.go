@@ -644,9 +644,9 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 	defer regionCache.Close()
 
 	chunkWriter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, http.MethodPost, r.Method)
 		_, err := w.Write([]byte(`{"chunk_id":1}`))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	defer chunkWriter.Close()
 
