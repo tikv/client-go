@@ -278,6 +278,10 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 	})
 	committer.commitTS = 2
 	committer.primaryKey = []byte("k")
+	taggerCalls := 0
+	committer.resourceGroupTagger = func(*tikvrpc.Request) {
+		taggerCalls++
+	}
 
 	bo := retry.NewBackoffer(context.Background(), 1000)
 	location, err := regionCache.LocateKey(bo, []byte("k"))
@@ -305,6 +309,7 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 	require.Equal(t, 1, checker.calls)
 	require.Equal(t, 1, commitOracle.calls)
 	require.Equal(t, 1, upperBoundCalls)
+	require.Equal(t, 1, taggerCalls)
 
 	requestCount = 0
 	store.timestamps = []uint64{104}
@@ -400,7 +405,164 @@ func newTxnFileCommitTestBatch(
 		sampleKeys: [][]byte{[]byte("k")},
 		isPrimary:  true,
 	}
+	committer.txnFileCtx = txnFileCtx{slice: batch.txnChunkSlice}
 	return committer, bo, batch
+}
+
+func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
+	tests := []struct {
+		name        string
+		action      txnFileAction
+		requestType tikvrpc.CmdType
+		newResponse func() *tikvrpc.Response
+	}{
+		{
+			name:        "prewrite",
+			action:      txnFilePrewriteAction{},
+			requestType: tikvrpc.CmdPrewrite,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}
+			},
+		},
+		{
+			name:        "commit",
+			action:      txnFileCommitAction{},
+			requestType: tikvrpc.CmdCommit,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}
+			},
+		},
+		{
+			name:        "rollback",
+			action:      txnFileRollbackAction{},
+			requestType: tikvrpc.CmdBatchRollback,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			taggerCalls := 0
+			committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+				require.Equal(t, tt.requestType, req.Type)
+				require.Equal(t, []byte("dynamic-tag"), req.ResourceGroupTag)
+				switch req.Type {
+				case tikvrpc.CmdPrewrite:
+					prewrite := req.Prewrite()
+					require.Empty(t, prewrite.Mutations)
+					require.Equal(t, []uint64{1}, prewrite.TxnFileChunks)
+					require.Equal(t, []byte("k"), prewrite.PrimaryLock)
+					require.NotNil(t, req.ResourceControlContext)
+					require.Equal(t, "txn-file-test", req.ResourceControlContext.ResourceGroupName)
+				case tikvrpc.CmdCommit:
+					require.Equal(t, [][]byte{[]byte("k")}, req.Commit().Keys)
+				case tikvrpc.CmdBatchRollback:
+					require.Equal(t, [][]byte{[]byte("k")}, req.BatchRollback().Keys)
+				}
+				return tt.newResponse(), nil
+			})
+			committer.resourceGroupName = "txn-file-test"
+			committer.resourceGroupTagger = func(req *tikvrpc.Request) {
+				taggerCalls++
+				require.Equal(t, tt.requestType, req.Type)
+				require.NotNil(t, req.ResourceControlContext)
+				require.Equal(t, "txn-file-test", req.ResourceControlContext.ResourceGroupName)
+				switch req.Type {
+				case tikvrpc.CmdPrewrite:
+					prewrite := req.Prewrite()
+					require.Len(t, prewrite.Mutations, 1)
+					require.Equal(t, batch.sampleKeys[0], prewrite.Mutations[0].Key)
+					prewrite.PrimaryLock[0] = 'x'
+					prewrite.TxnFileChunks[0] = 99
+					req.ResourceControlContext.ResourceGroupName = "tagger-mutated"
+				case tikvrpc.CmdCommit:
+					require.Equal(t, batch.sampleKeys, req.Commit().Keys)
+				case tikvrpc.CmdBatchRollback:
+					require.Equal(t, batch.sampleKeys, req.BatchRollback().Keys)
+				}
+				req.ResourceGroupTag = []byte("dynamic-tag")
+			}
+
+			_, err := tt.action.executeBatch(committer, bo, batch)
+
+			require.NoError(t, err)
+			require.Equal(t, 1, taggerCalls)
+		})
+	}
+}
+
+func TestTxnFileActionsPreserveStaticResourceGroupTag(t *testing.T) {
+	tests := []struct {
+		name        string
+		action      txnFileAction
+		requestType tikvrpc.CmdType
+		newResponse func() *tikvrpc.Response
+	}{
+		{
+			name:        "prewrite",
+			action:      txnFilePrewriteAction{},
+			requestType: tikvrpc.CmdPrewrite,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}
+			},
+		},
+		{
+			name:        "commit",
+			action:      txnFileCommitAction{},
+			requestType: tikvrpc.CmdCommit,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}
+			},
+		},
+		{
+			name:        "rollback",
+			action:      txnFileRollbackAction{},
+			requestType: tikvrpc.CmdBatchRollback,
+			newResponse: func() *tikvrpc.Response {
+				return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			taggerCalls := 0
+			committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+				require.Equal(t, tt.requestType, req.Type)
+				require.Equal(t, []byte("static-tag"), req.ResourceGroupTag)
+				return tt.newResponse(), nil
+			})
+			committer.resourceGroupTag = []byte("static-tag")
+			committer.resourceGroupTagger = func(*tikvrpc.Request) {
+				taggerCalls++
+			}
+
+			_, err := tt.action.executeBatch(committer, bo, batch)
+
+			require.NoError(t, err)
+			require.Zero(t, taggerCalls)
+		})
+	}
+}
+
+func TestTxnFilePrewriteTaggerSkipsBatchWithoutSampleKeys(t *testing.T) {
+	taggerCalls := 0
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		require.Empty(t, req.ResourceGroupTag)
+		require.Empty(t, req.Prewrite().Mutations)
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+	})
+	batch.sampleKeys = nil
+	committer.resourceGroupTagger = func(*tikvrpc.Request) {
+		taggerCalls++
+	}
+
+	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+	require.Zero(t, taggerCalls)
 }
 
 func TestTxnFileCommitPrimaryRPCErrorMarksResultUndetermined(t *testing.T) {

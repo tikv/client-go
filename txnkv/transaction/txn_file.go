@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang/protobuf/proto" //nolint:staticcheck
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -103,6 +104,32 @@ func markTxnFileRetryRequest(req *tikvrpc.Request, bo *retry.Backoffer) {
 	if bo.GetTotalSleep() > 0 {
 		req.IsRetryRequest = true
 	}
+}
+
+func (c *twoPhaseCommitter) applyTxnFileResourceGroupTagger(req *tikvrpc.Request) {
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
+	}
+}
+
+func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, sampleKeys [][]byte) {
+	if len(sampleKeys) == 0 || c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
+		return
+	}
+
+	prewrite := req.Prewrite()
+	tagReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
+		Mutations:      []*kvrpcpb.Mutation{{Key: slices.Clone(sampleKeys[0])}},
+		PrimaryLock:    slices.Clone(prewrite.PrimaryLock),
+		StartVersion:   prewrite.StartVersion,
+		LockTtl:        prewrite.LockTtl,
+		MaxCommitTs:    prewrite.MaxCommitTs,
+		AssertionLevel: prewrite.AssertionLevel,
+		TxnFileChunks:  slices.Clone(prewrite.TxnFileChunks),
+		TxnSize:        prewrite.TxnSize,
+	}, *proto.Clone(&req.Context).(*kvrpcpb.Context))
+	c.applyTxnFileResourceGroupTagger(tagReq)
+	req.ResourceGroupTag = tagReq.ResourceGroupTag
 }
 
 // txnChunkSlice should be sorted by txnChunkRange.smallest and no overlapping.
@@ -314,6 +341,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	c.applyTxnFilePrewriteResourceGroupTagger(req, batch.sampleKeys)
 	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
@@ -504,6 +532,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	c.applyTxnFileResourceGroupTagger(req)
 	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	for {
@@ -616,6 +645,7 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
+	c.applyTxnFileResourceGroupTagger(req)
 	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	resp, _, err1 := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutShort)
