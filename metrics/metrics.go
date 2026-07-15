@@ -1211,6 +1211,10 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
+	prometheus.MustRegister(TiKVTxnFileRequestCounter)
+	prometheus.MustRegister(TiKVTxnFileWriteBytes)
+	prometheus.MustRegister(TiKVTxnFileMutationSizeHistogram)
+	prometheus.MustRegister(TiKVTxnFileDuration)
 }
 
 // readCounter reads the value of a prometheus.Counter.
