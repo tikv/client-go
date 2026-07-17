@@ -35,6 +35,8 @@ require (
 	modernc.org/mathutil v1.7.1
 )
 
+replace github.com/pingcap/kvproto => github.com/YuhaoZhang00/kvproto v0.0.0-20260717043146-2c5a1af9f8fa
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

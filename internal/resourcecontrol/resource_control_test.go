@@ -107,8 +107,10 @@ func TestResponseInfoReadBytes(t *testing.T) {
 		Resp: &coprocessor.Response{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
 				ScanDetailV2: &kvrpcpb.ScanDetailV2{
-					TotalVersionsSize:     100,
-					ProcessedVersionsSize: 80,
+					TotalVersionsSize:           100,
+					ProcessedVersionsSize:       80,
+					RemoteTotalVersionsSize:     40,
+					RemoteProcessedVersionsSize: 30,
 				},
 			},
 		},
@@ -116,8 +118,10 @@ func TestResponseInfoReadBytes(t *testing.T) {
 	info := MakeResponseInfo(resp)
 	if config.NextGen {
 		assert.Equal(t, uint64(100), info.ReadBytes())
+		assert.Equal(t, uint64(40), info.RemoteReadBytes())
 	} else {
 		assert.Equal(t, uint64(80), info.ReadBytes())
+		assert.Zero(t, info.RemoteReadBytes())
 	}
 
 	if config.NextGen {
@@ -126,13 +130,16 @@ func TestResponseInfoReadBytes(t *testing.T) {
 			Resp: &coprocessor.Response{
 				ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
 					ScanDetailV2: &kvrpcpb.ScanDetailV2{
-						TotalVersionsSize:     80,
-						ProcessedVersionsSize: 100,
+						TotalVersionsSize:           80,
+						ProcessedVersionsSize:       100,
+						RemoteTotalVersionsSize:     60,
+						RemoteProcessedVersionsSize: 70,
 					},
 				},
 			},
 		}
 		infoCompat := MakeResponseInfo(respCompat)
 		assert.Equal(t, uint64(100), infoCompat.ReadBytes())
+		assert.Equal(t, uint64(70), infoCompat.RemoteReadBytes())
 	}
 }

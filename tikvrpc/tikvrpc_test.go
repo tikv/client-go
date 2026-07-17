@@ -121,6 +121,18 @@ func TestDefaultRequestOrigin(t *testing.T) {
 	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 }
 
+func TestAttachContextAdvertisesRemoteReadPricingForNextGenCop(t *testing.T) {
+	for _, cmd := range []CmdType{CmdCop, CmdCopStream} {
+		req := NewRequest(cmd, &coprocessor.Request{})
+		require.True(t, AttachContext(req, kvrpcpb.Context{}))
+		require.Equal(t, config.NextGen, req.Cop().GetContext().GetClientPricesRemoteReads())
+	}
+
+	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{})
+	require.True(t, AttachContext(req, kvrpcpb.Context{}))
+	require.False(t, req.Get().GetContext().GetClientPricesRemoteReads())
+}
+
 func TestAttachContextSetsRequestContext(t *testing.T) {
 	rpcCtx := kvrpcpb.Context{
 		RegionId:     123,
