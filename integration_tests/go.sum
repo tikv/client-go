@@ -1462,8 +1462,8 @@ github.com/pingcap/metering_sdk v0.0.0-20260324055927-14fead745f1d h1:5JCgncG9X7
 github.com/pingcap/metering_sdk v0.0.0-20260324055927-14fead745f1d/go.mod h1:HMNxmg0/lrn3SPGJ6LTZqP0WwEpcXMu9s/4TWJbzT8w=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 h1:Q9CMGKUztbM0RWHdQu0pD9b9OC47sbISRiMvf9vJ2RY=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3/go.mod h1:tyo4AX5P7udiSKN0Mv3nD9DcUnuLLmFfE22+dEs4vbU=
-github.com/pingcap/tidb v1.1.0-beta.0.20260715060322-10292a4f8697 h1:l3n41AXornt+GTze4r3+otjJAvCITcL57A4BKLoin1s=
-github.com/pingcap/tidb v1.1.0-beta.0.20260715060322-10292a4f8697/go.mod h1:m3u3NygOY0KiSOVJcHIn26z2cx7sYrutXdcAwY6gOOI=
+github.com/pingcap/tidb v1.1.0-beta.0.20260720062231-3966c4dbf204 h1:BUQk/jfoWMCUg/I0iBcfKJa4fiqgXBPalP1YRghaKtM=
+github.com/pingcap/tidb v1.1.0-beta.0.20260720062231-3966c4dbf204/go.mod h1:1mRfnv0rpvD28zJxZPLzNZiVPWjklrIJwaUZ6yZJ8yw=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260715060322-10292a4f8697 h1:Wl+WUds9uSMaT3tEDtNRbe/dHfoaTT9K8L6RY3e/E1c=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260715060322-10292a4f8697/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
 github.com/pingcap/tipb v0.0.0-20260623093813-5f9928e91afe h1:9I5GHZesmR+hv68t00BO7tayKMFfywi+hlpn119GscM=

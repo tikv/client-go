@@ -884,7 +884,7 @@ func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
 	suite.Nil(err)
 	task, ok := req.Req.(*mpp.DispatchTaskRequest)
 	suite.True(ok)
-	suite.Equal(task.Meta.GetKeyspaceId(), testKeyspaceID)
+	suite.Equal(testKeyspaceID, task.Meta.GetKeyspaceId())
 	suite.Equal(task.Meta.ApiVersion, kvrpcpb.APIVersion_V2)
 	suite.Equal(task.Regions[0].Ranges[0].Start, suite.codec.EncodeKey([]byte("a")))
 	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))
