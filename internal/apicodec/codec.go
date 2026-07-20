@@ -6,6 +6,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	mpppb "github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/pd/client/constants"
 )
@@ -113,7 +114,7 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 
 func setAPICtx(c Codec, r *tikvrpc.Request) {
 	r.ApiVersion = c.GetAPIVersion()
-	r.KeyspaceId = uint32(c.GetKeyspaceID())
+	r.Keyspace = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(c.GetKeyspaceID())}
 	keyspaceMeta := c.GetKeyspaceMeta()
 	if keyspaceMeta != nil {
 		r.KeyspaceName = keyspaceMeta.Name
@@ -124,14 +125,14 @@ func setAPICtx(c Codec, r *tikvrpc.Request) {
 		mpp := *r.DispatchMPPTask()
 		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
-		meta.KeyspaceId = r.KeyspaceId
+		meta.Keyspace = &mpppb.TaskMeta_KeyspaceId{KeyspaceId: r.GetKeyspaceId()}
 		meta.ApiVersion = r.ApiVersion
 		mpp.Meta = &meta
 		r.Req = &mpp
 
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
-		compact.KeyspaceId = r.KeyspaceId
+		compact.Keyspace = &kvrpcpb.CompactRequest_KeyspaceId{KeyspaceId: r.GetKeyspaceId()}
 		compact.ApiVersion = r.ApiVersion
 		r.Req = &compact
 	}
