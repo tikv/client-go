@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -455,6 +456,320 @@ func getUnit(d time.Duration) time.Duration {
 		return time.Microsecond
 	}
 	return time.Nanosecond
+}
+
+// PoolTaskDetails aggregates scheduling and execution details reported by
+// read-pool tasks.
+type PoolTaskDetails struct {
+	// TaskCount is the number of read-pool tasks whose details were reported.
+	TaskCount uint64 `json:"task_count"`
+	// PollCount is the sum of reported Future::poll counts.
+	PollCount uint64 `json:"poll_count"`
+	// MaxPollCount is the maximum reported Future::poll count in one sample.
+	MaxPollCount uint64 `json:"max_poll_count"`
+	// MinPollCount is the minimum reported Future::poll count in one sample.
+	MinPollCount uint64 `json:"min_poll_count"`
+	// DispatchCount is the sum of reported worker dispatch counts.
+	DispatchCount uint64 `json:"dispatch_count"`
+	// MaxDispatchCount is the maximum reported worker dispatch count in one sample.
+	MaxDispatchCount uint64 `json:"max_dispatch_count"`
+	// MinDispatchCount is the minimum reported worker dispatch count in one sample.
+	MinDispatchCount uint64 `json:"min_dispatch_count"`
+	// TotalWallTime is the sum of reported pool-task wall-time snapshots.
+	TotalWallTime time.Duration `json:"total_wall_time"`
+	// TaskWallTimeSampleCount is the number of samples with reported pool-task wall time.
+	TaskWallTimeSampleCount uint64 `json:"task_wall_time_sample_count"`
+	// MaxTaskWallTime is the maximum reported pool-task wall time in one sample.
+	MaxTaskWallTime time.Duration `json:"max_task_wall_time"`
+	// MinTaskWallTime is the minimum reported pool-task wall time in one sample.
+	MinTaskWallTime time.Duration `json:"min_task_wall_time"`
+	// TotalQueueWaitTime is the sum of reported ready-queue wait times.
+	TotalQueueWaitTime time.Duration `json:"total_queue_wait_time"`
+	// MaxQueueWaitTime is the maximum ready-queue wait time.
+	MaxQueueWaitTime time.Duration `json:"max_queue_wait_time"`
+	// MinQueueWaitTime is the minimum ready-queue wait time among recorded samples.
+	MinQueueWaitTime time.Duration `json:"min_queue_wait_time"`
+	// TotalWakeWaitTime is the sum of reported times from a pending poll to rescheduling.
+	TotalWakeWaitTime time.Duration `json:"total_wake_wait_time"`
+	// MaxWakeWaitTime is the maximum time from a pending poll to rescheduling.
+	MaxWakeWaitTime time.Duration `json:"max_wake_wait_time"`
+	// MinWakeWaitTime is the minimum time from a pending poll to rescheduling among recorded samples.
+	MinWakeWaitTime time.Duration `json:"min_wake_wait_time"`
+	// FairQueueSampleCount is the number of recorded fair-queue wait samples.
+	FairQueueSampleCount uint64 `json:"fair_queue_sample_count"`
+	// TotalFairQueueWaitedTaskSlices is the sum of reported task slices dispatched
+	// ahead of the sampled tasks while they waited in the fair queue.
+	TotalFairQueueWaitedTaskSlices uint64 `json:"total_fair_queue_waited_task_slices"`
+	// MaxFairQueueWaitedTaskSlices is the maximum number of task slices dispatched
+	// ahead of a sampled task during one fair-queue wait.
+	MaxFairQueueWaitedTaskSlices uint64 `json:"max_fair_queue_waited_task_slices"`
+	// MinFairQueueWaitedTaskSlices is the minimum number of task slices dispatched
+	// ahead of a sampled task during one fair-queue wait.
+	MinFairQueueWaitedTaskSlices uint64 `json:"min_fair_queue_waited_task_slices"`
+	// PollCPUTime is the sum of reported thread CPU time consumed by Future::poll calls.
+	PollCPUTime time.Duration `json:"poll_cpu_time"`
+	// MaxPollCPUTime is the maximum thread CPU time consumed by one Future::poll call.
+	MaxPollCPUTime time.Duration `json:"max_poll_cpu_time"`
+	// MinPollCPUTime is the minimum thread CPU time consumed by one Future::poll call.
+	MinPollCPUTime time.Duration `json:"min_poll_cpu_time"`
+	// PollWallTime is the sum of reported wall time consumed by Future::poll calls.
+	PollWallTime time.Duration `json:"poll_wall_time"`
+	// MinPollWallTime is the minimum wall time consumed by one Future::poll call.
+	MinPollWallTime time.Duration `json:"min_poll_wall_time"`
+	// MaxPollWallTime is the maximum wall time consumed by one Future::poll call.
+	MaxPollWallTime time.Duration `json:"max_poll_wall_time"`
+}
+
+// MergeFromPB merges one response's protobuf details into the aggregate.
+func (d *PoolTaskDetails) MergeFromPB(details *kvrpcpb.PoolTaskDetails) {
+	if d == nil || details == nil {
+		return
+	}
+	hadPollSamples := d.PollCount > 0
+	hadQueueWaitSamples := d.TotalQueueWaitTime > 0
+	hadWakeWaitSamples := d.TotalWakeWaitTime > 0
+	hadFairQueueSamples := d.FairQueueSampleCount > 0
+	hadTaskWallTimeSamples := d.TaskWallTimeSampleCount > 0
+	hadTasks := d.TaskCount > 0
+
+	d.TaskCount++
+	pollCount := details.GetPollCount()
+	d.PollCount += pollCount
+	d.MaxPollCount = max(d.MaxPollCount, pollCount)
+	d.MinPollCount = mergePoolTaskMinimum(d.MinPollCount, pollCount, hadTasks)
+	dispatchCount := details.GetDispatchCount()
+	d.DispatchCount += dispatchCount
+	d.MaxDispatchCount = max(d.MaxDispatchCount, dispatchCount)
+	d.MinDispatchCount = mergePoolTaskMinimum(d.MinDispatchCount, dispatchCount, hadTasks)
+	taskWallTime := time.Duration(details.GetTotalWallNanos())
+	d.TotalWallTime += taskWallTime
+	if taskWallTime > 0 {
+		d.TaskWallTimeSampleCount++
+		d.MaxTaskWallTime = max(d.MaxTaskWallTime, taskWallTime)
+		d.MinTaskWallTime = mergePoolTaskMinimum(d.MinTaskWallTime, taskWallTime, hadTaskWallTimeSamples)
+	}
+
+	d.TotalQueueWaitTime += time.Duration(details.GetTotalQueueWaitNanos())
+	d.MaxQueueWaitTime = max(d.MaxQueueWaitTime, time.Duration(details.GetMaxQueueWaitNanos()))
+	if details.GetTotalQueueWaitNanos() > 0 {
+		d.MinQueueWaitTime = mergePoolTaskMinimum(d.MinQueueWaitTime, time.Duration(details.GetMinQueueWaitNanos()), hadQueueWaitSamples)
+	}
+
+	d.TotalWakeWaitTime += time.Duration(details.GetTotalWakeWaitNanos())
+	d.MaxWakeWaitTime = max(d.MaxWakeWaitTime, time.Duration(details.GetMaxWakeWaitNanos()))
+	if details.GetTotalWakeWaitNanos() > 0 {
+		d.MinWakeWaitTime = mergePoolTaskMinimum(d.MinWakeWaitTime, time.Duration(details.GetMinWakeWaitNanos()), hadWakeWaitSamples)
+	}
+
+	if details.GetFairQueueEnabled() {
+		d.FairQueueSampleCount += dispatchCount
+		d.TotalFairQueueWaitedTaskSlices += details.GetTotalFairQueueWaitedTaskSlices()
+		d.MaxFairQueueWaitedTaskSlices = max(d.MaxFairQueueWaitedTaskSlices, details.GetMaxFairQueueWaitedTaskSlices())
+		d.MinFairQueueWaitedTaskSlices = mergePoolTaskMinimum(
+			d.MinFairQueueWaitedTaskSlices,
+			details.GetMinFairQueueWaitedTaskSlices(),
+			hadFairQueueSamples,
+		)
+	}
+
+	d.PollCPUTime += time.Duration(details.GetPollCpuNanos())
+	d.MaxPollCPUTime = max(d.MaxPollCPUTime, time.Duration(details.GetMaxPollCpuNanos()))
+	d.PollWallTime += time.Duration(details.GetPollWallNanos())
+	d.MaxPollWallTime = max(d.MaxPollWallTime, time.Duration(details.GetMaxPollWallNanos()))
+	if details.GetPollCount() > 0 {
+		d.MinPollCPUTime = mergePoolTaskMinimum(d.MinPollCPUTime, time.Duration(details.GetMinPollCpuNanos()), hadPollSamples)
+		d.MinPollWallTime = mergePoolTaskMinimum(d.MinPollWallTime, time.Duration(details.GetMinPollWallNanos()), hadPollSamples)
+	}
+}
+
+// Merge merges another aggregate into d.
+func (d *PoolTaskDetails) Merge(other *PoolTaskDetails) {
+	if d == nil || other == nil || other.Empty() {
+		return
+	}
+	hadPollSamples := d.PollCount > 0
+	hadQueueWaitSamples := d.TotalQueueWaitTime > 0
+	hadWakeWaitSamples := d.TotalWakeWaitTime > 0
+	hadFairQueueSamples := d.FairQueueSampleCount > 0
+	hadTaskWallTimeSamples := d.TaskWallTimeSampleCount > 0
+	hadTasks := d.TaskCount > 0
+
+	d.TaskCount += other.TaskCount
+	d.PollCount += other.PollCount
+	d.MaxPollCount = max(d.MaxPollCount, other.MaxPollCount)
+	d.MinPollCount = mergePoolTaskMinimum(d.MinPollCount, other.MinPollCount, hadTasks)
+	d.DispatchCount += other.DispatchCount
+	d.MaxDispatchCount = max(d.MaxDispatchCount, other.MaxDispatchCount)
+	d.MinDispatchCount = mergePoolTaskMinimum(d.MinDispatchCount, other.MinDispatchCount, hadTasks)
+	d.TotalWallTime += other.TotalWallTime
+	d.TaskWallTimeSampleCount += other.TaskWallTimeSampleCount
+	d.MaxTaskWallTime = max(d.MaxTaskWallTime, other.MaxTaskWallTime)
+	if other.TotalWallTime > 0 {
+		d.MinTaskWallTime = mergePoolTaskMinimum(d.MinTaskWallTime, other.MinTaskWallTime, hadTaskWallTimeSamples)
+	}
+	d.TotalQueueWaitTime += other.TotalQueueWaitTime
+	d.MaxQueueWaitTime = max(d.MaxQueueWaitTime, other.MaxQueueWaitTime)
+	if other.TotalQueueWaitTime > 0 {
+		d.MinQueueWaitTime = mergePoolTaskMinimum(d.MinQueueWaitTime, other.MinQueueWaitTime, hadQueueWaitSamples)
+	}
+	d.TotalWakeWaitTime += other.TotalWakeWaitTime
+	d.MaxWakeWaitTime = max(d.MaxWakeWaitTime, other.MaxWakeWaitTime)
+	if other.TotalWakeWaitTime > 0 {
+		d.MinWakeWaitTime = mergePoolTaskMinimum(d.MinWakeWaitTime, other.MinWakeWaitTime, hadWakeWaitSamples)
+	}
+	d.FairQueueSampleCount += other.FairQueueSampleCount
+	d.TotalFairQueueWaitedTaskSlices += other.TotalFairQueueWaitedTaskSlices
+	d.MaxFairQueueWaitedTaskSlices = max(d.MaxFairQueueWaitedTaskSlices, other.MaxFairQueueWaitedTaskSlices)
+	if other.FairQueueSampleCount > 0 {
+		d.MinFairQueueWaitedTaskSlices = mergePoolTaskMinimum(
+			d.MinFairQueueWaitedTaskSlices,
+			other.MinFairQueueWaitedTaskSlices,
+			hadFairQueueSamples,
+		)
+	}
+	d.PollCPUTime += other.PollCPUTime
+	d.MaxPollCPUTime = max(d.MaxPollCPUTime, other.MaxPollCPUTime)
+	d.PollWallTime += other.PollWallTime
+	d.MaxPollWallTime = max(d.MaxPollWallTime, other.MaxPollWallTime)
+	if other.PollCount > 0 {
+		d.MinPollCPUTime = mergePoolTaskMinimum(d.MinPollCPUTime, other.MinPollCPUTime, hadPollSamples)
+		d.MinPollWallTime = mergePoolTaskMinimum(d.MinPollWallTime, other.MinPollWallTime, hadPollSamples)
+	}
+}
+
+// Clone returns an independent copy of d.
+func (d *PoolTaskDetails) Clone() *PoolTaskDetails {
+	if d == nil {
+		return nil
+	}
+	clone := *d
+	return &clone
+}
+
+// Empty reports whether no pool-task details were collected.
+func (d *PoolTaskDetails) Empty() bool {
+	return d == nil || d.TaskCount == 0
+}
+
+// String returns a compact human-readable representation of the aggregate.
+func (d *PoolTaskDetails) String() string {
+	if d.Empty() {
+		return ""
+	}
+	var buf strings.Builder
+	buf.WriteString("{tasks:")
+	buf.WriteString(strconv.FormatUint(d.TaskCount, 10))
+	writePoolTaskCountStats(&buf, "poll_count", d.PollCount, d.TaskCount, d.MaxPollCount, d.MinPollCount)
+	writePoolTaskCountStats(&buf, "dispatch_count", d.DispatchCount, 0, d.MaxDispatchCount, d.MinDispatchCount)
+	writePoolTaskTimeStats(
+		&buf,
+		"task_wall_time",
+		d.TotalWallTime,
+		d.TaskWallTimeSampleCount,
+		d.MaxTaskWallTime,
+		d.MinTaskWallTime,
+	)
+	writePoolTaskTimeStats(
+		&buf,
+		"queue_wait",
+		d.TotalQueueWaitTime,
+		d.DispatchCount,
+		d.MaxQueueWaitTime,
+		d.MinQueueWaitTime,
+	)
+	wakeWaitCount := uint64(0)
+	if d.DispatchCount > d.TaskCount {
+		// Each task has one initial dispatch, which
+		// has no preceding pending-to-wake interval.
+		wakeWaitCount = d.DispatchCount - d.TaskCount
+	}
+	writePoolTaskTimeStats(
+		&buf,
+		"wake_wait",
+		d.TotalWakeWaitTime,
+		wakeWaitCount,
+		d.MaxWakeWaitTime,
+		d.MinWakeWaitTime,
+	)
+	buf.WriteString(", fair_queue:{enabled:")
+	buf.WriteString(strconv.FormatBool(d.FairQueueSampleCount > 0))
+	buf.WriteString(", waited_task_slices:{total:")
+	buf.WriteString(strconv.FormatUint(d.TotalFairQueueWaitedTaskSlices, 10))
+	if d.FairQueueSampleCount > 0 {
+		buf.WriteString(", avg:")
+		buf.WriteString(formatPoolTaskAverage(d.TotalFairQueueWaitedTaskSlices, d.FairQueueSampleCount))
+	}
+	buf.WriteString(", max:")
+	buf.WriteString(strconv.FormatUint(d.MaxFairQueueWaitedTaskSlices, 10))
+	buf.WriteString(", min:")
+	buf.WriteString(strconv.FormatUint(d.MinFairQueueWaitedTaskSlices, 10))
+	buf.WriteString("}}")
+	writePoolTaskTimeStats(&buf, "poll_cpu", d.PollCPUTime, d.PollCount, d.MaxPollCPUTime, d.MinPollCPUTime)
+	writePoolTaskTimeStats(&buf, "poll_wall", d.PollWallTime, d.PollCount, d.MaxPollWallTime, d.MinPollWallTime)
+	buf.WriteByte('}')
+	return buf.String()
+}
+
+func writePoolTaskCountStats(
+	buf *strings.Builder,
+	name string,
+	total uint64,
+	averageDivisor uint64,
+	maxCount uint64,
+	minCount uint64,
+) {
+	buf.WriteString(", ")
+	buf.WriteString(name)
+	buf.WriteString(":{total:")
+	buf.WriteString(strconv.FormatUint(total, 10))
+	if averageDivisor > 0 {
+		buf.WriteString(", avg:")
+		buf.WriteString(formatPoolTaskAverage(total, averageDivisor))
+	}
+	buf.WriteString(", max:")
+	buf.WriteString(strconv.FormatUint(maxCount, 10))
+	buf.WriteString(", min:")
+	buf.WriteString(strconv.FormatUint(minCount, 10))
+	buf.WriteByte('}')
+}
+
+func formatPoolTaskAverage(total, count uint64) string {
+	average := strconv.FormatFloat(float64(total)/float64(count), 'f', 2, 64)
+	average = strings.TrimRight(average, "0")
+	return strings.TrimRight(average, ".")
+}
+
+func writePoolTaskTimeStats(
+	buf *strings.Builder,
+	name string,
+	total time.Duration,
+	sampleCount uint64,
+	maxTime time.Duration,
+	minTime time.Duration,
+) {
+	if total == 0 {
+		return
+	}
+	buf.WriteString(", ")
+	buf.WriteString(name)
+	buf.WriteString(":{total:")
+	buf.WriteString(FormatDuration(total))
+	if sampleCount > 0 {
+		buf.WriteString(", avg:")
+		buf.WriteString(FormatDuration(total / time.Duration(sampleCount)))
+	}
+	buf.WriteString(", max:")
+	buf.WriteString(FormatDuration(maxTime))
+	buf.WriteString(", min:")
+	buf.WriteString(FormatDuration(minTime))
+	buf.WriteByte('}')
+}
+
+func mergePoolTaskMinimum[T time.Duration | uint64](current, candidate T, hasCurrent bool) T {
+	if !hasCurrent || candidate < current {
+		return candidate
+	}
+	return current
 }
 
 // ScanDetail contains coprocessor scan detail information.
