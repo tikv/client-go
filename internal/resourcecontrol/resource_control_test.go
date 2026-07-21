@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestMakeRequestInfo(t *testing.T) {
@@ -47,6 +48,97 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(3), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(0), info.StoreID())
+}
+
+func TestMakeRequestInfoBypassCases(t *testing.T) {
+	tests := []struct {
+		name           string
+		req            *tikvrpc.Request
+		expectedBypass bool
+		nextGenOnly    bool
+	}{
+		{
+			name:           "internal others",
+			req:            &tikvrpc.Request{Context: kvrpcpb.Context{RequestSource: "xxx_internal_others"}},
+			expectedBypass: true,
+		},
+		{
+			name: "add index",
+			req: &tikvrpc.Request{
+				Context: kvrpcpb.Context{RequestSource: util.InternalTxnAddIndex},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "merge temp index",
+			req: &tikvrpc.Request{
+				Context: kvrpcpb.Context{RequestSource: util.InternalTxnMergeTempIndex},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "br",
+			req: &tikvrpc.Request{
+				Context: kvrpcpb.Context{RequestSource: util.InternalTxnBR},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "import into",
+			req: &tikvrpc.Request{
+				Context: kvrpcpb.Context{RequestSource: util.InternalImportInto},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "workload learning",
+			req: &tikvrpc.Request{
+				Context: kvrpcpb.Context{RequestSource: util.InternalTxnWorkloadLearning},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "analyze stats",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req: &coprocessor.Request{
+					Tp: reqTypeAnalyze,
+				},
+				Context: kvrpcpb.Context{
+					Peer:          &metapb.Peer{StoreId: 4},
+					RequestSource: util.InternalTxnStats,
+				},
+			},
+			expectedBypass: true,
+			nextGenOnly:    true,
+		},
+		{
+			name: "stats without analyze cop",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req: &coprocessor.Request{
+					Tp: 1,
+				},
+				Context: kvrpcpb.Context{RequestSource: util.InternalTxnStats},
+			},
+			expectedBypass: false,
+			nextGenOnly:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.nextGenOnly && !config.NextGen {
+				t.Skip("rule only applies to nextgen")
+			}
+			assert.Equal(t, tt.expectedBypass, MakeRequestInfo(tt.req).Bypass())
+		})
+	}
 }
 
 func TestMakeRequestInfoPredictedReadBytes(t *testing.T) {
