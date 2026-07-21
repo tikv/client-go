@@ -13,12 +13,20 @@ import (
 
 func TestMakeRequestInfo(t *testing.T) {
 	// Test a non-write request.
-	req := &tikvrpc.Request{Req: &kvrpcpb.BatchGetRequest{}, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 1}}}
+	readRequestSource := "leader_external_Select"
+	req := &tikvrpc.Request{
+		Req: &kvrpcpb.BatchGetRequest{},
+		Context: kvrpcpb.Context{
+			Peer:          &metapb.Peer{StoreId: 1},
+			RequestSource: readRequestSource,
+		},
+	}
 	info := MakeRequestInfo(req)
 	assert.False(t, info.IsWrite())
 	assert.Equal(t, uint64(0), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(1), info.StoreID())
+	assert.Equal(t, readRequestSource, info.RequestSource())
 
 	// Test a prewrite request.
 	mutation := &kvrpcpb.Mutation{Key: []byte("foo"), Value: []byte("bar")}
@@ -31,6 +39,7 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(9), info.WriteBytes())
 	assert.True(t, info.Bypass())
 	assert.Equal(t, uint64(2), info.StoreID())
+	assert.Equal(t, requestSource, info.RequestSource())
 	// Test a commit request.
 	commitReq := &kvrpcpb.CommitRequest{Keys: [][]byte{[]byte("qux")}}
 	req = &tikvrpc.Request{Type: tikvrpc.CmdCommit, Req: commitReq, ReplicaNumber: 2, Context: kvrpcpb.Context{Peer: &metapb.Peer{StoreId: 3}}}
@@ -39,6 +48,7 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(3), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(3), info.StoreID())
+	assert.Empty(t, info.RequestSource())
 
 	// Test Nil Peer in Context
 	req = &tikvrpc.Request{Type: tikvrpc.CmdCommit, Req: commitReq, ReplicaNumber: 2, Context: kvrpcpb.Context{}}
