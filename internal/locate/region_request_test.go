@@ -397,6 +397,148 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
 	s.NotNil(ctx)
 }
 
+func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Require().NoError(err)
+	s.Require().NotNil(region)
+
+	s.Run("Sync", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var acquiredStoreID uint64
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+			acquiredStoreID = storeID
+			time.Sleep(time.Millisecond)
+			return func() { releaseCount.Add(1) }, true, nil
+		}
+		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Require().NoError(err)
+		s.Require().NotNil(resp)
+		s.Equal(s.store, acquiredStoreID)
+		s.Equal(int32(1), releaseCount.Load())
+		s.GreaterOrEqual(s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime, time.Millisecond)
+		s.Equal(
+			s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime,
+			s.regionRequestSender.Stats.RequestAttemptAdmissionMaxWaitTime,
+		)
+	})
+
+	s.Run("Async", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var acquiredStoreID uint64
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+			acquiredStoreID = storeID
+			return func() { releaseCount.Add(1) }, false, nil
+		}
+		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
+
+		complete := false
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Require().NoError(err)
+			s.Require().NotNil(resp)
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(context.Background())
+			s.Require().NoError(err)
+		}
+		s.Equal(s.store, acquiredStoreID)
+		s.Equal(int32(1), releaseCount.Load())
+		s.Zero(s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime)
+		s.Zero(s.regionRequestSender.Stats.RequestAttemptAdmissionMaxWaitTime)
+	})
+
+	s.Run("AsyncAdmissionError", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
+			return nil, false, errors.New("async admission rejected")
+		}
+
+		complete := false
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(resp)
+			s.EqualError(err, "async admission rejected")
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(context.Background())
+			s.Require().NoError(err)
+		}
+	})
+
+	s.Run("AdmissionError", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
+			return func() { releaseCount.Add(1) }, false, errors.New("admission rejected")
+		}
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.EqualError(err, "admission rejected")
+		s.Equal(int32(1), releaseCount.Load())
+	})
+
+	s.Run("Canceled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		bo := retry.NewNoopBackoff(ctx)
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		req.RequestAttemptAdmission = func(ctx context.Context, _ uint64) (func(), bool, error) {
+			<-ctx.Done()
+			return nil, true, ctx.Err()
+		}
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.ErrorIs(err, context.Canceled)
+	})
+
+	s.Run("StoreLimitErrorReleasesAdmission", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
+			return func() { releaseCount.Add(1) }, false, nil
+		}
+
+		store := s.cache.stores.getOrInsertDefault(s.store)
+		defer func(storeLimit int64, tokenCount int64) {
+			kv.StoreLimit.Store(storeLimit)
+			store.tokenCount.Store(tokenCount)
+		}(kv.StoreLimit.Load(), store.tokenCount.Load())
+		kv.StoreLimit.Store(1)
+		store.tokenCount.Store(1)
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.Error(err)
+		s.Equal(int32(1), releaseCount.Load())
+	})
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 	reachable.injectConstantLiveness(s.regionRequestSender.regionCache.stores)
 
@@ -430,6 +572,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
+			return func() { releaseCount.Add(1) }, false, nil
+		}
 		region, err := s.cache.LocateRegionByID(s.bo, s.region)
 		s.Nil(err)
 		s.NotNil(region)
@@ -456,6 +602,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			_, err := rl.Exec(ctx)
 			s.Require().NoError(err)
 		}
+		s.Equal(int32(1), releaseCount.Load())
 	})
 
 	s.Run("RPCCancel", func() {
@@ -1093,6 +1240,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	reqStats.RecordRPCErrorStats("context canceled")
 	reqStats.RecordRPCErrorStats("context canceled")
 	reqStats.RecordRPCErrorStats("region_not_found")
+	reqStats.RecordRequestAttemptAdmissionWaitTime(time.Second)
+	reqStats.RecordRequestAttemptAdmissionWaitTime(2 * time.Second)
 	reqStats.Merge(NewRegionRequestRuntimeStats())
 	reqStats2 := NewRegionRequestRuntimeStats()
 	reqStats2.Merge(reqStats.Clone())
@@ -1105,6 +1254,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	}
 	s.Contains(expecteds, reqStats.String())
 	s.Contains(expecteds, reqStats2.String())
+	s.Equal(3*time.Second, reqStats.RequestAttemptAdmissionWaitTime)
+	s.Equal(2*time.Second, reqStats.RequestAttemptAdmissionMaxWaitTime)
+	s.Equal(reqStats.RequestAttemptAdmissionWaitTime, reqStats2.RequestAttemptAdmissionWaitTime)
+	s.Equal(reqStats.RequestAttemptAdmissionMaxWaitTime, reqStats2.RequestAttemptAdmissionMaxWaitTime)
 	for i := 0; i < 50; i++ {
 		reqStats.RecordRPCErrorStats("err_" + strconv.Itoa(i))
 	}

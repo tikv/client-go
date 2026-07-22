@@ -132,6 +132,11 @@ func (s *RegionRequestSender) String() string {
 type RegionRequestRuntimeStats struct {
 	// RPCStatsList uses to record RPC requests stats, since in most cases, only one kind of rpc request is sent at a time, use slice instead of map for performance.
 	RPCStatsList []RPCRuntimeStats
+	// RequestAttemptAdmissionWaitTime is the total time spent waiting for
+	// request-attempt admission. RequestAttemptAdmissionMaxWaitTime is the
+	// longest wait among all attempts.
+	RequestAttemptAdmissionWaitTime    time.Duration
+	RequestAttemptAdmissionMaxWaitTime time.Duration
 	RequestErrorStats
 }
 
@@ -172,6 +177,14 @@ func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d
 		Count:   1,
 		Consume: d,
 	})
+}
+
+// RecordRequestAttemptAdmissionWaitTime records the admission wait of one RPC attempt.
+func (r *RegionRequestRuntimeStats) RecordRequestAttemptAdmissionWaitTime(d time.Duration) {
+	r.RequestAttemptAdmissionWaitTime += d
+	if d > r.RequestAttemptAdmissionMaxWaitTime {
+		r.RequestAttemptAdmissionMaxWaitTime = d
+	}
 }
 
 // GetRPCStatsCount returns the total rpc types count.
@@ -266,6 +279,8 @@ func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
 	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
 	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
+	newRs.RequestAttemptAdmissionWaitTime = r.RequestAttemptAdmissionWaitTime
+	newRs.RequestAttemptAdmissionMaxWaitTime = r.RequestAttemptAdmissionMaxWaitTime
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
@@ -281,6 +296,10 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	}
 	for i := range rs.RPCStatsList {
 		r.mergeRPCRuntimeStats(rs.RPCStatsList[i])
+	}
+	r.RequestAttemptAdmissionWaitTime += rs.RequestAttemptAdmissionWaitTime
+	if rs.RequestAttemptAdmissionMaxWaitTime > r.RequestAttemptAdmissionMaxWaitTime {
+		r.RequestAttemptAdmissionMaxWaitTime = rs.RequestAttemptAdmissionMaxWaitTime
 	}
 	if len(rs.ErrStats) > 0 {
 		if r.ErrStats == nil {
@@ -547,59 +566,87 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	var (
-		cancels = make([]context.CancelFunc, 0, 3)
-		ctx     = bo.GetCtx()
-		hookCtx = ctx
-	)
-	if limit := kv.StoreLimit.Load(); limit > 0 {
-		if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
-			cb.Invoke(state.toResponseExt())
-			return
+	acquireAdmissionAsync := req.RequestAttemptAdmission != nil
+	sendFirstAttempt := func() {
+		var (
+			cancels = make([]context.CancelFunc, 0, 4)
+			ctx     = bo.GetCtx()
+			hookCtx = ctx
+		)
+		finishBeforeSend := cb.Invoke
+		if acquireAdmissionAsync {
+			finishBeforeSend = cb.Schedule
 		}
-		cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
-	}
-	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
-		cancels = append(cancels, cancel)
-		hookCtx = ctx
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		cancels = append(cancels, cancel)
-	}
-
-	sendToAddr := state.vars.rpcCtx.Addr
-	if state.vars.rpcCtx.ProxyStore == nil {
-		req.ForwardedHost = ""
-	} else {
-		req.ForwardedHost = state.vars.rpcCtx.Addr
-		sendToAddr = state.vars.rpcCtx.ProxyAddr
-	}
-
-	s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
-		state.vars.sendTimes++
-		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
-		var execDetails *util.ExecDetails
-		if val := ctx.Value(util.ExecDetailsKey); val != nil {
-			execDetails = val.(*util.ExecDetails)
-		}
-		if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
-			cb.Invoke(state.toResponseExt())
-			return
-		}
-		// retry
-		cb.Executor().Go(func() {
-			for !state.next() {
-				if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
-					logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
-				}
+		cancelAll := func() {
+			for i := len(cancels) - 1; i >= 0; i-- {
+				cancels[i]()
 			}
-			cb.Schedule(state.toResponseExt())
-		})
-	}))
+		}
+
+		releaseAdmission, err := state.acquireRequestAttemptAdmission()
+		if err != nil {
+			state.vars.err = err
+			finishBeforeSend(state.toResponseExt())
+			return
+		}
+		if releaseAdmission != nil {
+			cancels = append(cancels, releaseAdmission)
+		}
+		if limit := kv.StoreLimit.Load(); limit > 0 {
+			if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
+				cancelAll()
+				finishBeforeSend(state.toResponseExt())
+				return
+			}
+			cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
+		}
+		if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
+			cancels = append(cancels, cancel)
+			hookCtx = ctx
+		}
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			cancels = append(cancels, cancel)
+		}
+
+		sendToAddr := state.vars.rpcCtx.Addr
+		if state.vars.rpcCtx.ProxyStore == nil {
+			req.ForwardedHost = ""
+		} else {
+			req.ForwardedHost = state.vars.rpcCtx.Addr
+			sendToAddr = state.vars.rpcCtx.ProxyAddr
+		}
+
+		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
+			state.vars.sendTimes++
+			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
+			var execDetails *util.ExecDetails
+			if val := ctx.Value(util.ExecDetailsKey); val != nil {
+				execDetails = val.(*util.ExecDetails)
+			}
+			if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
+				cb.Invoke(state.toResponseExt())
+				return
+			}
+			// retry
+			cb.Executor().Go(func() {
+				for !state.next() {
+					if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
+						logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
+					}
+				}
+				cb.Schedule(state.toResponseExt())
+			})
+		}))
+	}
+	if acquireAdmissionAsync {
+		cb.Executor().Go(sendFirstAttempt)
+	} else {
+		sendFirstAttempt()
+	}
 }
 
 func (s *RegionRequestSender) recordRPCAccessInfo(req *tikvrpc.Request, rpcCtx *RPCContext, err string) {
@@ -903,6 +950,26 @@ type sendReqState struct {
 	invariants reqInvariants
 }
 
+func (s *sendReqState) acquireRequestAttemptAdmission() (release func(), err error) {
+	req := s.args.req
+	if req.RequestAttemptAdmission == nil || s.vars.rpcCtx == nil || s.vars.rpcCtx.Store == nil {
+		return nil, nil
+	}
+
+	waitStart := time.Now()
+	release, waited, err := req.RequestAttemptAdmission(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
+	if waited && s.Stats != nil {
+		s.Stats.RecordRequestAttemptAdmissionWaitTime(time.Since(waitStart))
+	}
+	if err != nil && release != nil {
+		// Be defensive about callbacks that return both a release function and an
+		// error. No RPC attempt will be made, so release any acquired capacity.
+		release()
+		release = nil
+	}
+	return release, err
+}
+
 // reqInvariants holds the input state of the request.
 // If the tikvrpc.Request is changed during the retries or other operations.
 // the reqInvariants can tell the initial state.
@@ -1021,6 +1088,15 @@ func (s *sendReqState) next() (done bool) {
 			h := hook.(func(*tikvrpc.Request))
 			h(req)
 		}
+	}
+
+	releaseAdmission, err := s.acquireRequestAttemptAdmission()
+	if err != nil {
+		s.vars.err = err
+		return true
+	}
+	if releaseAdmission != nil {
+		defer releaseAdmission()
 	}
 
 	// judge the store limit switch.

@@ -156,6 +156,42 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeader() {
 	s.Nil(resp.GetRegionError())
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRetryStore() {
+	var firstAddr string
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		if firstAddr == "" {
+			firstAddr = addr
+		}
+		if addr != firstAddr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{
+			RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}},
+		}}, nil
+	}}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	var storeIDs []uint64
+	var releaseCount int
+	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+		storeIDs = append(storeIDs, storeID)
+		return func() { releaseCount++ }, false, nil
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Require().NoError(err)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, loc.Region, time.Second)
+	s.Require().NoError(err)
+	s.Require().NotNil(resp)
+	s.Require().Len(storeIDs, 2)
+	s.NotEqual(storeIDs[0], storeIDs[1])
+	s.Equal(len(storeIDs), releaseCount)
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWithNewLeaderInfo() {
 	cnt := 0
 	var location *KeyLocation
