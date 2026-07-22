@@ -240,11 +240,10 @@ func (t CmdType) String() string {
 }
 
 // RequestAttemptAdmissionFunc waits until an RPC attempt to storeID is admitted.
-// waited should be true only when admission had to block. When this function
-// returns a non-nil release function and a nil error, client-go calls release
-// exactly once after that attempt finishes. Implementations should return
-// promptly when ctx is canceled.
-type RequestAttemptAdmissionFunc func(ctx context.Context, storeID uint64) (release func(), waited bool, err error)
+// When this function returns a non-nil release function and a nil error,
+// client-go calls release exactly once after that attempt finishes.
+// Implementations should return promptly when ctx is canceled.
+type RequestAttemptAdmissionFunc func(ctx context.Context, storeID uint64) (release func(), err error)
 
 // Request wraps all kv/coprocessor requests.
 type Request struct {

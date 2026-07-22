@@ -132,11 +132,6 @@ func (s *RegionRequestSender) String() string {
 type RegionRequestRuntimeStats struct {
 	// RPCStatsList uses to record RPC requests stats, since in most cases, only one kind of rpc request is sent at a time, use slice instead of map for performance.
 	RPCStatsList []RPCRuntimeStats
-	// RequestAttemptAdmissionWaitTime is the total time spent waiting for
-	// request-attempt admission. RequestAttemptAdmissionMaxWaitTime is the
-	// longest wait among all attempts.
-	RequestAttemptAdmissionWaitTime    time.Duration
-	RequestAttemptAdmissionMaxWaitTime time.Duration
 	RequestErrorStats
 }
 
@@ -177,14 +172,6 @@ func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d
 		Count:   1,
 		Consume: d,
 	})
-}
-
-// RecordRequestAttemptAdmissionWaitTime records the admission wait of one RPC attempt.
-func (r *RegionRequestRuntimeStats) RecordRequestAttemptAdmissionWaitTime(d time.Duration) {
-	r.RequestAttemptAdmissionWaitTime += d
-	if d > r.RequestAttemptAdmissionMaxWaitTime {
-		r.RequestAttemptAdmissionMaxWaitTime = d
-	}
 }
 
 // GetRPCStatsCount returns the total rpc types count.
@@ -279,8 +266,6 @@ func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
 	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
 	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
-	newRs.RequestAttemptAdmissionWaitTime = r.RequestAttemptAdmissionWaitTime
-	newRs.RequestAttemptAdmissionMaxWaitTime = r.RequestAttemptAdmissionMaxWaitTime
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
@@ -296,10 +281,6 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	}
 	for i := range rs.RPCStatsList {
 		r.mergeRPCRuntimeStats(rs.RPCStatsList[i])
-	}
-	r.RequestAttemptAdmissionWaitTime += rs.RequestAttemptAdmissionWaitTime
-	if rs.RequestAttemptAdmissionMaxWaitTime > r.RequestAttemptAdmissionMaxWaitTime {
-		r.RequestAttemptAdmissionMaxWaitTime = rs.RequestAttemptAdmissionMaxWaitTime
 	}
 	if len(rs.ErrStats) > 0 {
 		if r.ErrStats == nil {
@@ -956,11 +937,7 @@ func (s *sendReqState) acquireRequestAttemptAdmission() (release func(), err err
 		return nil, nil
 	}
 
-	waitStart := time.Now()
-	release, waited, err := req.RequestAttemptAdmission(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
-	if waited && s.Stats != nil {
-		s.Stats.RecordRequestAttemptAdmissionWaitTime(time.Since(waitStart))
-	}
+	release, err = req.RequestAttemptAdmission(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
 	if err != nil && release != nil {
 		// Be defensive about callbacks that return both a release function and an
 		// error. No RPC attempt will be made, so release any acquired capacity.

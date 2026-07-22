@@ -409,23 +409,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 		})
 		var acquiredStoreID uint64
 		var releaseCount atomic.Int32
-		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
 			acquiredStoreID = storeID
-			time.Sleep(time.Millisecond)
-			return func() { releaseCount.Add(1) }, true, nil
+			return func() { releaseCount.Add(1) }, nil
 		}
-		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 
 		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
 		s.Require().NoError(err)
 		s.Require().NotNil(resp)
 		s.Equal(s.store, acquiredStoreID)
 		s.Equal(int32(1), releaseCount.Load())
-		s.GreaterOrEqual(s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime, time.Millisecond)
-		s.Equal(
-			s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime,
-			s.regionRequestSender.Stats.RequestAttemptAdmissionMaxWaitTime,
-		)
 	})
 
 	s.Run("Async", func() {
@@ -435,11 +428,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 		})
 		var acquiredStoreID uint64
 		var releaseCount atomic.Int32
-		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
 			acquiredStoreID = storeID
-			return func() { releaseCount.Add(1) }, false, nil
+			return func() { releaseCount.Add(1) }, nil
 		}
-		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 
 		complete := false
 		rl := async.NewRunLoop()
@@ -454,8 +446,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 		}
 		s.Equal(s.store, acquiredStoreID)
 		s.Equal(int32(1), releaseCount.Load())
-		s.Zero(s.regionRequestSender.Stats.RequestAttemptAdmissionWaitTime)
-		s.Zero(s.regionRequestSender.Stats.RequestAttemptAdmissionMaxWaitTime)
 	})
 
 	s.Run("AsyncAdmissionError", func() {
@@ -463,8 +453,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
-		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
-			return nil, false, errors.New("async admission rejected")
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return nil, errors.New("async admission rejected")
 		}
 
 		complete := false
@@ -486,8 +476,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 			Value: []byte("value"),
 		})
 		var releaseCount atomic.Int32
-		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
-			return func() { releaseCount.Add(1) }, false, errors.New("admission rejected")
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, errors.New("admission rejected")
 		}
 
 		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
@@ -504,9 +494,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
-		req.RequestAttemptAdmission = func(ctx context.Context, _ uint64) (func(), bool, error) {
+		req.RequestAttemptAdmission = func(ctx context.Context, _ uint64) (func(), error) {
 			<-ctx.Done()
-			return nil, true, ctx.Err()
+			return nil, ctx.Err()
 		}
 
 		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.Region, time.Second, tikvrpc.TiKV)
@@ -520,8 +510,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
 			Value: []byte("value"),
 		})
 		var releaseCount atomic.Int32
-		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
-			return func() { releaseCount.Add(1) }, false, nil
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
 		}
 
 		store := s.cache.stores.getOrInsertDefault(s.store)
@@ -573,8 +563,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			Value: []byte("value"),
 		})
 		var releaseCount atomic.Int32
-		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), bool, error) {
-			return func() { releaseCount.Add(1) }, false, nil
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
 		}
 		region, err := s.cache.LocateRegionByID(s.bo, s.region)
 		s.Nil(err)
@@ -1240,8 +1230,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	reqStats.RecordRPCErrorStats("context canceled")
 	reqStats.RecordRPCErrorStats("context canceled")
 	reqStats.RecordRPCErrorStats("region_not_found")
-	reqStats.RecordRequestAttemptAdmissionWaitTime(time.Second)
-	reqStats.RecordRequestAttemptAdmissionWaitTime(2 * time.Second)
 	reqStats.Merge(NewRegionRequestRuntimeStats())
 	reqStats2 := NewRegionRequestRuntimeStats()
 	reqStats2.Merge(reqStats.Clone())
@@ -1254,10 +1242,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	}
 	s.Contains(expecteds, reqStats.String())
 	s.Contains(expecteds, reqStats2.String())
-	s.Equal(3*time.Second, reqStats.RequestAttemptAdmissionWaitTime)
-	s.Equal(2*time.Second, reqStats.RequestAttemptAdmissionMaxWaitTime)
-	s.Equal(reqStats.RequestAttemptAdmissionWaitTime, reqStats2.RequestAttemptAdmissionWaitTime)
-	s.Equal(reqStats.RequestAttemptAdmissionMaxWaitTime, reqStats2.RequestAttemptAdmissionMaxWaitTime)
 	for i := 0; i < 50; i++ {
 		reqStats.RecordRPCErrorStats("err_" + strconv.Itoa(i))
 	}

@@ -176,9 +176,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	})
 	var storeIDs []uint64
 	var releaseCount int
-	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), bool, error) {
+	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
 		storeIDs = append(storeIDs, storeID)
-		return func() { releaseCount++ }, false, nil
+		return func() { releaseCount++ }, nil
 	}
 
 	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
