@@ -2,6 +2,13 @@ module github.com/tikv/client-go/v2
 
 go 1.25.10
 
+replace (
+	// Temporary replacement for kvproto PR #1503. Remove it after the PR merges.
+	github.com/pingcap/kvproto => github.com/LykxSassinator/kvproto v0.0.0-20260723025057-6a82baebdef0
+	// Temporary replacement for PD PR #11041. Remove it after the PR merges.
+	github.com/tikv/pd/client => github.com/LykxSassinator/pd/client v0.0.0-20260723073558-d09cfb9779a7
+)
+
 require (
 	github.com/VividCortex/ewma v1.2.0
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da

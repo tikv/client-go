@@ -112,6 +112,18 @@ func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.G
 	return c.processRegionResult(region, err)
 }
 
+// GetStoreResponse forwards the optional full GetStore response capability.
+func (c *CodecPDClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	if client, ok := c.Client.(pd.RPCClientExt); ok {
+		return client.GetStoreResponse(ctx, storeID, opts...)
+	}
+	store, err := c.Client.GetStore(ctx, storeID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{Store: store}, nil
+}
+
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {

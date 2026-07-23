@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -58,6 +59,7 @@ type testingKnobs interface {
 
 type storeRegistry interface {
 	fetchStore(ctx context.Context, id uint64, opts ...opt.GetStoreOption) (*metapb.Store, error)
+	fetchStoreResponse(ctx context.Context, id uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error)
 	fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error)
 }
 
@@ -124,6 +126,19 @@ func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64, opts ...opt.
 	return c.pdClient.GetStore(ctx, id, opts...)
 }
 
+func (c *storeCacheImpl) fetchStoreResponse(ctx context.Context, id uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	// Callers that need SchedulingState must request a PD-leader response: Router
+	// only serves store metadata and intentionally leaves this dynamic state unset.
+	if client, ok := c.pdClient.(pd.RPCClientExt); ok {
+		return client.GetStoreResponse(ctx, id, opts...)
+	}
+	store, err := c.pdClient.GetStore(ctx, id, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{Store: store}, nil
+}
+
 func (c *storeCacheImpl) fetchAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	return c.pdClient.GetAllStores(ctx, opts...)
 }
@@ -140,6 +155,9 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 	store, exists := c.storeMu.stores[id]
 	if !exists {
 		store = newUninitializedStore(id)
+		// A local health transition needs a directed PD refresh before this store
+		// can be re-admitted to replica reads. Install that trigger with the cache.
+		store.schedulingState.setCheckHandler(func() { c.markStoreNeedCheck(store) })
 		c.storeMu.stores[id] = store
 	}
 	c.storeMu.Unlock()
@@ -150,6 +168,9 @@ func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 func (c *storeCacheImpl) put(store *Store) {
 	c.storeMu.Lock()
 	defer c.storeMu.Unlock()
+	// Keep the callback bound to the cache that owns this Store, including in
+	// tests that construct and insert a Store directly.
+	store.schedulingState.setCheckHandler(func() { c.markStoreNeedCheck(store) })
 	c.storeMu.stores[store.storeID] = store
 }
 
@@ -235,6 +256,10 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
+	// schedulingState is PD's control-plane view of whether this store may
+	// serve non-leader replica reads. It must not be folded into healthStatus,
+	// which only records local and TiKV-reported observations.
+	schedulingState storeSchedulingState
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -248,7 +273,7 @@ func newStore(
 	state resolveState,
 	labels []*metapb.StoreLabel,
 ) *Store {
-	return &Store{
+	store := &Store{
 		storeID:   id,
 		storeType: storeType,
 		state:     uint64(state),
@@ -256,9 +281,10 @@ func newStore(
 		addr:      addr,
 		peerAddr:  peerAddr,
 		saddr:     statusAddr,
-		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(id),
 	}
+	// Make sure healthStatus field is never null.
+	store.healthStatus = newStoreHealthStatus(id, store.onHealthStatusChanged)
+	return store
 }
 
 // updateMetadataFrom updates the store metadata from the given store meta safely.
@@ -274,11 +300,12 @@ func (s *Store) updateMetadataFrom(store *metapb.Store) {
 
 // newUninitializedStore creates a `Store` instance with only storeID initialized.
 func newUninitializedStore(id uint64) *Store {
-	return &Store{
+	store := &Store{
 		storeID: id,
-		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(id),
 	}
+	// Make sure healthStatus field is never null.
+	store.healthStatus = newStoreHealthStatus(id, store.onHealthStatusChanged)
+	return store
 }
 
 // StoreType returns the type of the store.
@@ -454,12 +481,27 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		return
 	}
 	var store *metapb.Store
-	opts := []opt.GetStoreOption{opt.WithAllowRouterServiceHandleStoreRequest()}
+	// Unlike the metadata-only GetStore path, this request also consumes
+	// SchedulingState. Router deliberately omits that dynamic PD-owned state;
+	// using it here would leave a newly resolved store eligible before PD has
+	// confirmed it. Therefore both the first request and its retries go to the
+	// PD leader. Trying Router first and then querying the leader would add an
+	// RPC without reducing the required leader query.
+	opts := []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()}
 	for {
 		start := time.Now()
-		store, err = c.fetchStore(bo.GetCtx(), s.storeID, opts...)
+		stateCheckEpoch := s.schedulingState.currentCheckEpoch()
+		resp, fetchErr := c.fetchStoreResponse(bo.GetCtx(), s.storeID, opts...)
+		if fetchErr == nil {
+			store, fetchErr = storeFromGetStoreResponse(resp)
+			if fetchErr == nil {
+				// Only the response for the same health-transition epoch may clear
+				// the pending re-admission gate.
+				s.schedulingState.update(resp.GetSchedulingState(), stateCheckEpoch)
+			}
+		}
+		err = fetchErr
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
-		opts = []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()} // after first attempt, retry via PD leader only
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
@@ -491,7 +533,19 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	s.resolveMutex.Lock()
 	defer s.resolveMutex.Unlock()
 	var addr string
-	store, err := c.fetchStore(context.Background(), s.storeID)
+	stateCheckEpoch := s.schedulingState.currentCheckEpoch()
+	// A periodic re-resolve refreshes the PD-owned scheduling decision as well
+	// as metadata, so it cannot use Router's metadata-only response.
+	resp, err := c.fetchStoreResponse(context.Background(), s.storeID, opt.WithPDLeaderHandleStoreRequestOnly())
+	var store *metapb.Store
+	if err == nil {
+		store, err = storeFromGetStoreResponse(resp)
+		if err == nil {
+			// Do not let a response that raced with a newer slow-state transition
+			// release that transition's pending gate.
+			s.schedulingState.update(resp.GetSchedulingState(), stateCheckEpoch)
+		}
+	}
 	if err != nil {
 		metrics.RegionCacheCounterWithGetStoreError.Inc()
 	} else {
@@ -532,10 +586,134 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 		s.updateMetadataFrom(store)
 		s.setResolveState(resolved)
 		// we do not reset healthStatus here since it will be updated in the next health check loop.
+		s.schedulePendingPDStateCheck(c, stateCheckEpoch)
 		return true, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
+	s.schedulePendingPDStateCheck(c, stateCheckEpoch)
 	return true, nil
+}
+
+func (s *Store) schedulePendingPDStateCheck(c storeCache, stateCheckEpoch uint64) {
+	// A slow episode can begin while this request is in flight. Its callback
+	// cannot transition needCheck to needCheck again, so schedule one more
+	// immediate check after the current resolve finishes. Other pending cases
+	// are retried by the normal periodic refresh instead of spinning here.
+	if s.schedulingState.hasNewCheckSince(stateCheckEpoch) {
+		c.markStoreNeedCheck(s)
+	}
+}
+
+func (s *Store) onHealthStatusChanged(bool) {
+	// StoreHealthStatus invokes this only on a local slow/healthy transition.
+	// The transition itself is not PD's scheduling decision, so it starts a
+	// confirmation round instead of changing replica-read eligibility directly.
+	s.schedulingState.onHealthStatusChanged()
+}
+
+func (s *Store) isReplicaReadEligible() bool {
+	// All non-leader candidates share this gate; leaders preserve their existing
+	// fallback behavior even when PD has evicted the store as slow.
+	return s.schedulingState.isEligible(s.healthStatus.IsSlow())
+}
+
+// storeSchedulingState keeps PD's scheduling decision and the confirmation
+// protocol around it. Its atomics are read on the replica-selection hot path,
+// while update and onHealthStatusChanged run concurrently with that path.
+//
+// A non-leader replica is eligible only when local health is normal and PD has
+// either not exposed SchedulingState yet (legacy compatibility), or has most
+// recently confirmed that the store is not evicted and no confirmation is
+// pending for a newer local health transition.
+type storeSchedulingState struct {
+	// supported is set after receiving SchedulingState from a PD leader. False
+	// retains legacy behavior for a PD version that does not expose the field.
+	supported atomic.Bool
+	// evictedAsSlowStore is PD's last confirmed scheduling decision.
+	evictedAsSlowStore atomic.Bool
+	// checkPending fails closed after a local health transition until PD
+	// confirms a decision for that transition.
+	checkPending atomic.Bool
+	// checkEpoch versions local health transitions so an older PD response
+	// cannot clear checkPending for a newer one.
+	checkEpoch atomic.Uint64
+	// onCheck asks the owning store cache to issue that confirmation request.
+	onCheck func()
+}
+
+// setCheckHandler connects an already-created Store to its owning cache.
+func (s *storeSchedulingState) setCheckHandler(handler func()) {
+	s.onCheck = handler
+}
+
+// onHealthStatusChanged begins a new PD confirmation round after a local
+// slow/healthy transition once PD support has been observed. PD may
+// intentionally retain its old decision after local recovery because
+// recovery-time is a PD-owned policy.
+func (s *storeSchedulingState) onHealthStatusChanged() {
+	if !s.supported.Load() {
+		return
+	}
+	// A PD response received while the store is slow must not release it when
+	// the local slow state recovers. Each health state transition therefore gets
+	// a new epoch and requires a fresh PD confirmation.
+	s.checkEpoch.Add(1)
+	s.checkPending.Store(true)
+	if s.onCheck != nil {
+		s.onCheck()
+	}
+}
+
+// update records a PD-leader response. A nil state is unknown rather than
+// false: Router and an older PD can both omit the field.
+func (s *storeSchedulingState) update(state *pdpb.StoreSchedulingState, checkEpoch uint64) {
+	if state == nil {
+		// A PD that predates the field keeps the legacy selection behavior. Once
+		// the field was observed, however, a missing state is unknown and must
+		// not clear a pending check.
+		if s.supported.Load() {
+			s.checkPending.Store(true)
+		}
+		return
+	}
+	s.supported.Store(true)
+	s.evictedAsSlowStore.Store(state.GetEvictedAsSlowStore())
+	if s.checkEpoch.Load() == checkEpoch {
+		s.checkPending.Store(false)
+	}
+}
+
+// isEligible combines local observations with PD's policy decision. The
+// legacy branch is deliberately kept until SchedulingState is first observed.
+func (s *storeSchedulingState) isEligible(localSlow bool) bool {
+	if localSlow {
+		return false
+	}
+	return !s.supported.Load() ||
+		(!s.evictedAsSlowStore.Load() && !s.checkPending.Load())
+}
+
+// hasNewCheckSince reports whether a health transition raced with a request.
+func (s *storeSchedulingState) hasNewCheckSince(checkEpoch uint64) bool {
+	return s.checkPending.Load() && s.checkEpoch.Load() != checkEpoch
+}
+
+// currentCheckEpoch snapshots the transition version before issuing a request.
+func (s *storeSchedulingState) currentCheckEpoch() uint64 {
+	return s.checkEpoch.Load()
+}
+
+// storeFromGetStoreResponse preserves the semantics of pd.Client.GetStore
+// while allowing the caller to consume scheduling_state from the full response.
+func storeFromGetStoreResponse(resp *pdpb.GetStoreResponse) (*metapb.Store, error) {
+	if resp == nil || resp.GetStore() == nil {
+		return nil, errors.New("[pd] store field in rpc response not set")
+	}
+	store := resp.GetStore()
+	if store.GetNodeState() == metapb.NodeState_Removed {
+		return nil, nil
+	}
+	return store, nil
 }
 
 // A quick and dirty solution to find out whether an err is caused by StoreNotFound.
@@ -884,6 +1062,8 @@ type StoreHealthStatus struct {
 
 	isSlow atomic.Bool
 
+	onSlowStateChanged func(bool)
+
 	// A statistic for counting the request latency to this store
 	clientSideSlowScore SlowScoreStat
 
@@ -912,10 +1092,12 @@ func (d HealthStatusDetail) String() string {
 	return fmt.Sprintf("{ ClientSideSlowScore: %d, TiKVSideSlowScore: %d }", d.ClientSideSlowScore, d.TiKVSideSlowScore)
 }
 
-func newStoreHealthStatus(storeID uint64) *StoreHealthStatus {
-	return &StoreHealthStatus{
-		storeID: storeID,
+func newStoreHealthStatus(storeID uint64, callbacks ...func(bool)) *StoreHealthStatus {
+	status := &StoreHealthStatus{storeID: storeID}
+	if len(callbacks) > 0 {
+		status.onSlowStateChanged = callbacks[0]
 	}
+	return status
 }
 
 // IsSlow returns whether current Store is slow.
@@ -1097,6 +1279,9 @@ func (s *StoreHealthStatus) updateSlowFlag() {
 	old := s.isSlow.Swap(isSlow)
 	if old != isSlow {
 		logutil.BgLogger().Info("store health status changed", zap.Uint64("storeID", s.storeID), zap.Bool("isSlow", isSlow), zap.Stringer("healthDetail", healthDetail))
+		if s.onSlowStateChanged != nil {
+			s.onSlowStateChanged(isSlow)
+		}
 	}
 }
 
@@ -1176,6 +1361,9 @@ func (u *storeCacheUpdater) insertMissingStores(ctx context.Context, storeList [
 			logutil.Logger(ctx).Warn("init resolve store failed", zap.Uint64("storeID", store.GetId()), zap.Error(err))
 			continue
 		}
+		// GetAllStores does not carry dynamic scheduling state. Resolve the
+		// individual store through the PD leader before using it for stale reads.
+		u.stores.markStoreNeedCheck(s)
 		updateStoreLivenessGauge(s)
 	}
 }

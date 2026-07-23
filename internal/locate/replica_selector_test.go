@@ -2919,6 +2919,32 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 	}
 }
 
+func TestReplicaReadFiltersPDSchedulingState(t *testing.T) {
+	follower := newStore(1, "store-1", "", "", tikvrpc.TiKV, resolved, nil)
+	leader := newStore(2, "store-2", "", "", tikvrpc.TiKV, resolved, nil)
+	strategy := ReplicaSelectMixedStrategy{leaderIdx: 1}
+
+	require.True(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.healthStatus.isSlow.Store(true)
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.healthStatus.isSlow.Store(false)
+	follower.schedulingState.supported.Store(true)
+	follower.schedulingState.evictedAsSlowStore.Store(true)
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+
+	// PD scheduling state restricts all follower and learner reads. The leader
+	// remains available as the existing leader-read fallback.
+	leader.schedulingState.supported.Store(true)
+	leader.schedulingState.evictedAsSlowStore.Store(true)
+	require.True(t, strategy.isCandidate(&replica{store: leader}, true, false, reachable))
+
+	follower.schedulingState.evictedAsSlowStore.Store(false)
+	follower.schedulingState.checkPending.Store(true)
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.schedulingState.checkPending.Store(false)
+	require.True(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+}
+
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
 	s.Nil(err)
