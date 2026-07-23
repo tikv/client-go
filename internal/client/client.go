@@ -464,6 +464,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("copstream returns nothing for the request.")
@@ -501,6 +502,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("batch copstream returns nothing for the request.")
@@ -535,6 +537,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
+			copStream.Close()
 			return nil, errors.WithStack(err)
 		}
 	}
