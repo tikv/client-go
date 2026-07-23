@@ -495,8 +495,8 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		if fetchErr == nil {
 			store, fetchErr = storeFromGetStoreResponse(resp)
 			if fetchErr == nil {
-				// Only the response for the same health-transition epoch may clear
-				// the pending re-admission gate.
+				// Publish the response together with the health-transition epoch it
+				// confirms. Replica selection only accepts a matching snapshot.
 				s.schedulingState.update(resp.GetSchedulingState(), stateCheckEpoch)
 			}
 		}
@@ -541,8 +541,8 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	if err == nil {
 		store, err = storeFromGetStoreResponse(resp)
 		if err == nil {
-			// Do not let a response that raced with a newer slow-state transition
-			// release that transition's pending gate.
+			// A response is eligible to re-admit a replica only when its snapshot
+			// confirms the current health-transition epoch.
 			s.schedulingState.update(resp.GetSchedulingState(), stateCheckEpoch)
 		}
 	}
@@ -597,8 +597,8 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 func (s *Store) schedulePendingPDStateCheck(c storeCache, stateCheckEpoch uint64) {
 	// A slow episode can begin while this request is in flight. Its callback
 	// cannot transition needCheck to needCheck again, so schedule one more
-	// immediate check after the current resolve finishes. Other pending cases
-	// are retried by the normal periodic refresh instead of spinning here.
+	// immediate check after the current resolve finishes. Other unconfirmed
+	// cases are retried by the normal periodic refresh instead of spinning here.
 	if s.schedulingState.hasNewCheckSince(stateCheckEpoch) {
 		c.markStoreNeedCheck(s)
 	}
@@ -626,19 +626,23 @@ func (s *Store) isReplicaReadEligible() bool {
 // recently confirmed that the store is not evicted and no confirmation is
 // pending for a newer local health transition.
 type storeSchedulingState struct {
-	// supported is set after receiving SchedulingState from a PD leader. False
-	// retains legacy behavior for a PD version that does not expose the field.
-	supported atomic.Bool
-	// evictedAsSlowStore is PD's last confirmed scheduling decision.
-	evictedAsSlowStore atomic.Bool
-	// checkPending fails closed after a local health transition until PD
-	// confirms a decision for that transition.
-	checkPending atomic.Bool
-	// checkEpoch versions local health transitions so an older PD response
-	// cannot clear checkPending for a newer one.
+	// checkEpoch versions local health transitions.
 	checkEpoch atomic.Uint64
+	// snapshot atomically associates PD's decision with the transition epoch it
+	// confirms. A nil value preserves legacy behavior until PD first returns a
+	// scheduling state; a non-nil unknown snapshot fails closed.
+	snapshot atomic.Pointer[pdSchedulingStateSnapshot]
 	// onCheck asks the owning store cache to issue that confirmation request.
 	onCheck func()
+}
+
+// pdSchedulingStateSnapshot is immutable after publication. Keeping the
+// eviction decision and its confirmed epoch together prevents an older PD
+// response from clearing the re-admission gate for a newer health transition.
+type pdSchedulingStateSnapshot struct {
+	stateKnown     bool
+	evicted        bool
+	confirmedEpoch uint64
 }
 
 // setCheckHandler connects an already-created Store to its owning cache.
@@ -651,14 +655,13 @@ func (s *storeSchedulingState) setCheckHandler(handler func()) {
 // intentionally retain its old decision after local recovery because
 // recovery-time is a PD-owned policy.
 func (s *storeSchedulingState) onHealthStatusChanged() {
-	if !s.supported.Load() {
+	if s.snapshot.Load() == nil {
 		return
 	}
-	// A PD response received while the store is slow must not release it when
-	// the local slow state recovers. Each health state transition therefore gets
-	// a new epoch and requires a fresh PD confirmation.
+	// A PD response received while the store is slow must not re-admit it when
+	// local health recovers. Advancing the epoch invalidates the last snapshot
+	// until PD confirms the new epoch.
 	s.checkEpoch.Add(1)
-	s.checkPending.Store(true)
 	if s.onCheck != nil {
 		s.onCheck()
 	}
@@ -670,17 +673,17 @@ func (s *storeSchedulingState) update(state *pdpb.StoreSchedulingState, checkEpo
 	if state == nil {
 		// A PD that predates the field keeps the legacy selection behavior. Once
 		// the field was observed, however, a missing state is unknown and must
-		// not clear a pending check.
-		if s.supported.Load() {
-			s.checkPending.Store(true)
+		// fail closed rather than reusing the last confirmed decision.
+		if s.snapshot.Load() != nil {
+			s.snapshot.Store(&pdSchedulingStateSnapshot{})
 		}
 		return
 	}
-	s.supported.Store(true)
-	s.evictedAsSlowStore.Store(state.GetEvictedAsSlowStore())
-	if s.checkEpoch.Load() == checkEpoch {
-		s.checkPending.Store(false)
-	}
+	s.snapshot.Store(&pdSchedulingStateSnapshot{
+		stateKnown:     true,
+		evicted:        state.GetEvictedAsSlowStore(),
+		confirmedEpoch: checkEpoch,
+	})
 }
 
 // isEligible combines local observations with PD's policy decision. The
@@ -689,13 +692,20 @@ func (s *storeSchedulingState) isEligible(localSlow bool) bool {
 	if localSlow {
 		return false
 	}
-	return !s.supported.Load() ||
-		(!s.evictedAsSlowStore.Load() && !s.checkPending.Load())
+	currentEpoch := s.checkEpoch.Load()
+	snapshot := s.snapshot.Load()
+	return snapshot == nil ||
+		(snapshot.stateKnown && !snapshot.evicted && snapshot.confirmedEpoch == currentEpoch)
 }
 
 // hasNewCheckSince reports whether a health transition raced with a request.
 func (s *storeSchedulingState) hasNewCheckSince(checkEpoch uint64) bool {
-	return s.checkPending.Load() && s.checkEpoch.Load() != checkEpoch
+	currentEpoch := s.checkEpoch.Load()
+	if currentEpoch == checkEpoch {
+		return false
+	}
+	snapshot := s.snapshot.Load()
+	return snapshot != nil && (!snapshot.stateKnown || snapshot.confirmedEpoch != currentEpoch)
 }
 
 // currentCheckEpoch snapshots the transition version before issuing a request.
@@ -1362,7 +1372,8 @@ func (u *storeCacheUpdater) insertMissingStores(ctx context.Context, storeList [
 			continue
 		}
 		// GetAllStores does not carry dynamic scheduling state. Resolve the
-		// individual store through the PD leader before using it for stale reads.
+		// individual store through the PD leader before using it for non-leader
+		// replica reads.
 		u.stores.markStoreNeedCheck(s)
 		updateStoreLivenessGauge(s)
 	}

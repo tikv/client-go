@@ -117,7 +117,7 @@ func (c *CodecPDClient) GetStoreResponse(ctx context.Context, storeID uint64, op
 	if client, ok := c.Client.(pd.RPCClientExt); ok {
 		return client.GetStoreResponse(ctx, storeID, opts...)
 	}
-	store, err := c.Client.GetStore(ctx, storeID, opts...)
+	store, err := c.GetStore(ctx, storeID, opts...)
 	if err != nil {
 		return nil, err
 	}
