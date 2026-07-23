@@ -191,9 +191,10 @@ func isCopRequest(req *tikvrpc.Request) bool {
 // could be calculated by its response size, and the KV CPU time RU cost of a request could
 // be calculated by its execution details info.
 type ResponseInfo struct {
-	readBytes uint64
-	kvCPU     time.Duration
-	respSize  uint64
+	readBytes       uint64
+	remoteReadBytes uint64
+	kvCPU           time.Duration
+	respSize        uint64
 }
 
 // MakeResponseInfo extracts the relevant information from a BatchResponse.
@@ -203,9 +204,10 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	}
 	// Parse the response to extract the info.
 	var (
-		readBytes uint64
-		detailsV2 *kvrpcpb.ExecDetailsV2
-		details   *kvrpcpb.ExecDetails
+		readBytes       uint64
+		remoteReadBytes uint64
+		detailsV2       *kvrpcpb.ExecDetailsV2
+		details         *kvrpcpb.ExecDetails
 	)
 	switch r := resp.Resp.(type) {
 	case *coprocessor.Response:
@@ -242,6 +244,10 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 			// processed versions size is greater than the total versions size,
 			// we use the processed versions size as the read bytes.
 			readBytes = max(scanDetail.GetTotalVersionsSize(), scanDetail.GetProcessedVersionsSize())
+			remoteReadBytes = max(
+				scanDetail.GetRemoteTotalVersionsSize(),
+				scanDetail.GetRemoteProcessedVersionsSize(),
+			)
 		} else {
 			// NOTE: The original design intended to account for all MVCC read
 			// overhead, but TotalVersionsSize did not exist at the time, so
@@ -257,9 +263,10 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPU := getKVCPU(detailsV2, details)
 	return &ResponseInfo{
-		readBytes: readBytes,
-		kvCPU:     kvCPU,
-		respSize:  uint64(resp.GetSize()),
+		readBytes:       readBytes,
+		remoteReadBytes: remoteReadBytes,
+		kvCPU:           kvCPU,
+		respSize:        uint64(resp.GetSize()),
 	}
 }
 
@@ -280,6 +287,13 @@ func getKVCPU(detailsV2 *kvrpcpb.ExecDetailsV2, details *kvrpcpb.ExecDetails) ti
 // ReadBytes returns the read bytes of the response.
 func (res *ResponseInfo) ReadBytes() uint64 {
 	return res.readBytes
+}
+
+// RemoteReadBytes returns the factual subset of ReadBytes processed by a
+// remote coprocessor. It is zero outside NextGen so legacy RU pricing remains
+// unchanged.
+func (res *ResponseInfo) RemoteReadBytes() uint64 {
+	return res.remoteReadBytes
 }
 
 // KVCPU returns the KV CPU time of the response.

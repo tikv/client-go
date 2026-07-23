@@ -884,6 +884,12 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 	if cmd == CmdCopStream {
 		cmd = CmdCop
 	}
+	if cmd == CmdCop {
+		// Only NextGen's RU-v1 controller can price the factual remote read
+		// subset separately. Legacy clients must keep the worker's pre-priced
+		// compatibility response.
+		ctx.ClientPricesRemoteReads = config.NextGen
+	}
 	if patchCmdCtx(req, cmd, ctx) {
 		return true
 	}
