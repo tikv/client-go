@@ -600,6 +600,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
+		}
 		region, err := s.cache.LocateRegionByID(s.bo, s.region)
 		s.Nil(err)
 		s.NotNil(region)
@@ -629,6 +633,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			_, err := rl.Exec(ctx)
 			s.Require().NoError(err)
 		}
+		s.Equal(int32(1), releaseCount.Load())
 	})
 
 	s.Run("Timeout", func() {

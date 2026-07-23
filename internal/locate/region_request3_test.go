@@ -192,6 +192,85 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	s.Equal(len(storeIDs), releaseCount)
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRetryStoreAsync() {
+	var firstAddr string
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		if firstAddr == "" {
+			firstAddr = addr
+		}
+		if addr != firstAddr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{
+			RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}},
+		}}, nil
+	}}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	var mu sync.Mutex
+	var storeIDs []uint64
+	var releaseCount int
+	var activeAttempt int
+	var overlappingAdmission bool
+	var invalidRelease bool
+	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
+		mu.Lock()
+		if activeAttempt != 0 {
+			overlappingAdmission = true
+		}
+		storeIDs = append(storeIDs, storeID)
+		attempt := len(storeIDs)
+		activeAttempt = attempt
+		mu.Unlock()
+
+		released := false
+		return func() {
+			mu.Lock()
+			defer mu.Unlock()
+			releaseCount++
+			if released || activeAttempt != attempt {
+				invalidRelease = true
+				return
+			}
+			released = true
+			activeAttempt = 0
+		}, nil
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Require().NoError(err)
+
+	complete := false
+	var resp *tikvrpc.ResponseExt
+	var sendErr error
+	rl := async.NewRunLoop()
+	s.regionRequestSender.SendReqAsync(bo, req, loc.Region, time.Second, async.NewCallback(rl, func(innerResp *tikvrpc.ResponseExt, innerErr error) {
+		resp, sendErr = innerResp, innerErr
+		complete = true
+	}))
+	runCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for !complete {
+		_, err = rl.Exec(runCtx)
+		s.Require().NoError(err)
+	}
+
+	s.Require().NoError(sendErr)
+	s.Require().NotNil(resp)
+	mu.Lock()
+	defer mu.Unlock()
+	s.Require().Len(storeIDs, 2)
+	s.NotEqual(storeIDs[0], storeIDs[1])
+	s.False(overlappingAdmission, "the first attempt must release admission before the retry acquires it")
+	s.False(invalidRelease)
+	s.Zero(activeAttempt)
+	s.Equal(len(storeIDs), releaseCount)
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWithNewLeaderInfo() {
 	cnt := 0
 	var location *KeyLocation
