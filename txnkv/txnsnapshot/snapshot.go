@@ -948,6 +948,12 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
 	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
+	if details := detail.GetReadPoolTaskDetails(); details != nil {
+		if s.mu.stats.readPoolTaskDetails == nil {
+			s.mu.stats.readPoolTaskDetails = &util.PoolTaskDetails{}
+		}
+		s.mu.stats.readPoolTaskDetails.MergeFromPB(details)
+	}
 }
 
 // Iter return a list of key-value pair after `k`.
@@ -1277,20 +1283,22 @@ func (s *KVSnapshot) SetPipelined(ts uint64) {
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats struct {
-	rpcStats          *locate.RegionRequestRuntimeStats
-	backoffSleepMS    map[string]int
-	backoffTimes      map[string]int
-	scanDetail        util.ScanDetail
-	timeDetail        util.TimeDetail
-	resolveLockDetail util.ResolveLockDetail
+	rpcStats            *locate.RegionRequestRuntimeStats
+	backoffSleepMS      map[string]int
+	backoffTimes        map[string]int
+	scanDetail          util.ScanDetail
+	timeDetail          util.TimeDetail
+	resolveLockDetail   util.ResolveLockDetail
+	readPoolTaskDetails *util.PoolTaskDetails
 }
 
 // Clone implements the RuntimeStats interface.
 func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 	newRs := SnapshotRuntimeStats{
-		scanDetail:        rs.scanDetail,
-		timeDetail:        rs.timeDetail,
-		resolveLockDetail: rs.resolveLockDetail,
+		scanDetail:          rs.scanDetail,
+		timeDetail:          rs.timeDetail,
+		resolveLockDetail:   rs.resolveLockDetail,
+		readPoolTaskDetails: rs.readPoolTaskDetails.Clone(),
 	}
 	if rs.rpcStats != nil {
 		newRs.rpcStats = rs.rpcStats.Clone()
@@ -1333,6 +1341,13 @@ func (rs *SnapshotRuntimeStats) Merge(other *SnapshotRuntimeStats) {
 	rs.scanDetail.Merge(&other.scanDetail)
 	rs.timeDetail.Merge(&other.timeDetail)
 	rs.resolveLockDetail.Merge(&other.resolveLockDetail)
+	if !other.readPoolTaskDetails.Empty() {
+		if rs.readPoolTaskDetails == nil {
+			rs.readPoolTaskDetails = other.readPoolTaskDetails.Clone()
+		} else {
+			rs.readPoolTaskDetails.Merge(other.readPoolTaskDetails)
+		}
+	}
 }
 
 // String implements fmt.Stringer interface.
@@ -1369,12 +1384,24 @@ func (rs *SnapshotRuntimeStats) String() string {
 		buf.WriteString(", ")
 		buf.WriteString(scanDetail)
 	}
+	if !rs.readPoolTaskDetails.Empty() {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("read_pool:")
+		buf.WriteString(rs.readPoolTaskDetails.String())
+	}
 	return buf.String()
 }
 
 // GetTimeDetail returns the timeDetail
 func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
 	return &rs.timeDetail
+}
+
+// GetReadPoolTaskDetails returns a copy of the aggregated read-pool task details.
+func (rs *SnapshotRuntimeStats) GetReadPoolTaskDetails() *util.PoolTaskDetails {
+	return rs.readPoolTaskDetails.Clone()
 }
 
 // GetCmdRPCCount returns the count of the corresponding kind of rpc requests
