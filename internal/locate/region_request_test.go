@@ -651,10 +651,6 @@ func (s *mockTikvGrpcServer) BatchCoprocessor(*coprocessor.BatchRequest, tikvpb.
 	return errors.New("unreachable")
 }
 
-func (s *mockTikvGrpcServer) GetEstimateTiCICount(context.Context, *coprocessor.TiCIEstimateCountRequest) (*coprocessor.TiCIEstimateCountResponse, error) {
-	return nil, errors.New("unreachable")
-}
-
 func (s *mockTikvGrpcServer) DelegateCoprocessor(context.Context, *coprocessor.DelegateRequest) (*coprocessor.DelegateResponse, error) {
 	return nil, errors.New("unreachable")
 }
