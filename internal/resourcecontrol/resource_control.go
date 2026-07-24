@@ -203,15 +203,29 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	}
 	// Parse the response to extract the info.
 	var (
-		readBytes uint64
-		detailsV2 *kvrpcpb.ExecDetailsV2
-		details   *kvrpcpb.ExecDetails
+		readBytes        uint64
+		detailsV2        *kvrpcpb.ExecDetailsV2
+		details          *kvrpcpb.ExecDetails
+		batchedReadBytes uint64
+		batchedKVCPU     time.Duration
 	)
 	switch r := resp.Resp.(type) {
 	case *coprocessor.Response:
 		detailsV2 = r.GetExecDetailsV2()
 		details = r.GetExecDetails()
 		readBytes = uint64(r.Data.Size())
+		// A batched coprocessor request answers several tasks in one response.
+		// Each nested response carries execution details that are not included
+		// in the top-level details, so account for every nested task.
+		for _, batchResp := range r.GetBatchResponses() {
+			batchDetailsV2 := batchResp.GetExecDetailsV2()
+			batchReadBytes := uint64(batchResp.Data.Size())
+			if scanDetail := batchDetailsV2.GetScanDetailV2(); scanDetail != nil {
+				batchReadBytes = scanDetailReadBytes(scanDetail)
+			}
+			batchedReadBytes += batchReadBytes
+			batchedKVCPU += getKVCPU(batchDetailsV2, nil)
+		}
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
@@ -237,8 +251,8 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPU := getKVCPU(detailsV2, details)
 	return &ResponseInfo{
-		readBytes: readBytes,
-		kvCPU:     kvCPU,
+		readBytes: readBytes + batchedReadBytes,
+		kvCPU:     kvCPU + batchedKVCPU,
 		respSize:  uint64(resp.GetSize()),
 	}
 }

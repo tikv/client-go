@@ -138,10 +138,9 @@ func TestResponseInfoReadBytes(t *testing.T) {
 	}
 }
 
-func TestResponseInfoBatchedTasksTopLevelOnly(t *testing.T) {
-	// Characterize the existing settlement behavior before changing it:
-	// MakeResponseInfo accounts for only the top-level response details and
-	// ignores the nested responses of batched coprocessor tasks.
+func TestResponseInfoBatchedTasks(t *testing.T) {
+	// Every nested batched response must contribute scan bytes and KV CPU
+	// because the top-level execution details do not include that work.
 	resp := &tikvrpc.Response{
 		Resp: &coprocessor.Response{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
@@ -177,10 +176,10 @@ func TestResponseInfoBatchedTasksTopLevelOnly(t *testing.T) {
 	}
 
 	info := MakeResponseInfo(resp)
+	expectedReadBytes := uint64(80 + 10 + 20 + 8)
 	if config.NextGen {
-		assert.Equal(t, uint64(100), info.ReadBytes())
-	} else {
-		assert.Equal(t, uint64(80), info.ReadBytes())
+		expectedReadBytes = 100 + 15 + 25 + 8
 	}
-	assert.Equal(t, time.Duration(1000), info.KVCPU())
+	assert.Equal(t, expectedReadBytes, info.ReadBytes())
+	assert.Equal(t, time.Duration(1000+100+200), info.KVCPU())
 }
