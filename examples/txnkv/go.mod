@@ -1,13 +1,9 @@
 module txnkv
 
-go 1.25.10
+go 1.25.8
 
 require (
-<<<<<<< HEAD
-	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53
-=======
 	github.com/pingcap/kvproto v0.0.0-20260721064811-683dad8fa368
->>>>>>> 61ecd7c1 (txnkv: add readPoolTaskDetails to SnapshotRuntimeStats (#2025))
 	github.com/tikv/client-go/v2 v2.0.0
 )
 
@@ -37,11 +33,7 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
-<<<<<<< HEAD
-	github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71 // indirect
-=======
-	github.com/tikv/pd/client v0.0.0-20260708075407-4e05b9d2c2d3 // indirect
->>>>>>> 61ecd7c1 (txnkv: add readPoolTaskDetails to SnapshotRuntimeStats (#2025))
+	github.com/tikv/pd/client v0.0.0-20260716095117-1636e69a936b // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.10 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
@@ -53,10 +45,10 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/grpc v1.79.3 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
+	google.golang.org/grpc v1.75.1 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 )

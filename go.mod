@@ -15,11 +15,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-<<<<<<< HEAD
-	github.com/pingcap/kvproto v0.0.0-20260703015547-e800f9e5a427
-=======
 	github.com/pingcap/kvproto v0.0.0-20260721064811-683dad8fa368
->>>>>>> 61ecd7c1 (txnkv: add readPoolTaskDetails to SnapshotRuntimeStats (#2025))
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
