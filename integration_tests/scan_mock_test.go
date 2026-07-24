@@ -50,6 +50,14 @@ type testScanMockSuite struct {
 	suite.Suite
 }
 
+func (s *testScanMockSuite) key(name string) []byte {
+	return encodeKey("~scan_mock", name)
+}
+
+func (s *testScanMockSuite) alphabetKey(ch byte) []byte {
+	return s.key(string(ch))
+}
+
 func (s *testScanMockSuite) TestScanMultipleRegions() {
 	store := tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	defer store.Close()
@@ -57,7 +65,7 @@ func (s *testScanMockSuite) TestScanMultipleRegions() {
 	txn, err := store.Begin()
 	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		err = txn.Set([]byte{ch}, []byte{ch})
+		err = txn.Set(s.alphabetKey(ch), []byte{ch})
 		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
@@ -65,18 +73,18 @@ func (s *testScanMockSuite) TestScanMultipleRegions() {
 
 	txn, err = store.Begin()
 	s.Nil(err)
-	scanner, err := txn.NewScanner([]byte("a"), nil, 10, false)
+	scanner, err := txn.NewScanner(s.key("a"), nil, 10, false)
 	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		s.Equal([]byte{ch}, scanner.Key())
+		s.Equal(s.alphabetKey(ch), scanner.Key())
 		s.Nil(scanner.Next())
 	}
 	s.False(scanner.Valid())
 
-	scanner, err = txn.NewScanner([]byte("a"), []byte("i"), 10, false)
+	scanner, err = txn.NewScanner(s.key("a"), s.key("i"), 10, false)
 	s.Nil(err)
 	for ch := byte('a'); ch <= byte('h'); ch++ {
-		s.Equal([]byte{ch}, scanner.Key())
+		s.Equal(s.alphabetKey(ch), scanner.Key())
 		s.Nil(scanner.Next())
 	}
 	s.False(scanner.Valid())
@@ -89,7 +97,7 @@ func (s *testScanMockSuite) TestReverseScan() {
 	txn, err := store.Begin()
 	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		err = txn.Set([]byte{ch}, []byte{ch})
+		err = txn.Set(s.alphabetKey(ch), []byte{ch})
 		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
@@ -97,18 +105,18 @@ func (s *testScanMockSuite) TestReverseScan() {
 
 	txn, err = store.Begin()
 	s.Nil(err)
-	scanner, err := txn.NewScanner(nil, []byte("z"), 10, true)
+	scanner, err := txn.NewScanner(nil, s.key("z"), 10, true)
 	s.Nil(err)
 	for ch := byte('y'); ch >= byte('a'); ch-- {
-		s.Equal(string([]byte{ch}), string(scanner.Key()))
+		s.Equal(string(s.alphabetKey(ch)), string(scanner.Key()))
 		s.Nil(scanner.Next())
 	}
 	s.False(scanner.Valid())
 
-	scanner, err = txn.NewScanner([]byte("a"), []byte("i"), 10, true)
+	scanner, err = txn.NewScanner(s.key("a"), s.key("i"), 10, true)
 	s.Nil(err)
 	for ch := byte('h'); ch >= byte('a'); ch-- {
-		s.Equal(string([]byte{ch}), string(scanner.Key()))
+		s.Equal(string(s.alphabetKey(ch)), string(scanner.Key()))
 		s.Nil(scanner.Next())
 	}
 	s.False(scanner.Valid())

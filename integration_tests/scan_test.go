@@ -63,7 +63,7 @@ type testScanSuite struct {
 
 func (s *testScanSuite) SetupSuite() {
 	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
-	s.recordPrefix = []byte("prefix")
+	s.recordPrefix = encodeKey("~scan", "")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
 }
 
@@ -91,10 +91,7 @@ func (s *testScanSuite) beginTxn() transaction.TxnProbe {
 }
 
 func (s *testScanSuite) makeKey(i int) []byte {
-	var key []byte
-	key = append(key, s.recordPrefix...)
-	key = append(key, []byte(fmt.Sprintf("%10d", i))...)
-	return key
+	return encodeKey("~scan", fmt.Sprintf("prefix%10d", i))
 }
 
 func (s *testScanSuite) makeValue(i int) []byte {

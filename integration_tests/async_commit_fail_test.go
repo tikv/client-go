@@ -37,6 +37,7 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	}()
 	// The rpc error will be wrapped to ErrResultUndetermined.
 	t1 := s.beginAsyncCommit()
-	err := t1.Set([]byte("a"), []byte("a1"))
+	err := t1.Set(s.key("a"), []byte("a1"))
 	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
@@ -95,7 +96,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 
 	// Create a new transaction to check. The previous transaction should actually commit.
 	t2 := s.beginAsyncCommit()
-	res, err := t2.Get(context.Background(), []byte("a"))
+	res, err := t2.Get(context.Background(), s.key("a"))
 	s.Nil(err)
 	s.True(bytes.Equal(res.Value, []byte("a1")))
 }
@@ -109,11 +110,11 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {
 	// Split into two regions.
 	splitKey := "s"
 	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
-	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte(splitKey))
+	loc, err := s.store.GetRegionCache().LocateKey(bo, s.key(splitKey))
 	s.Nil(err)
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
-	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte(splitKey), []uint64{newPeerID}, newPeerID)
+	s.cluster.Split(loc.Region.GetID(), newRegionID, s.key(splitKey), []uint64{newPeerID}, newPeerID)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("writeConflict")->sleep(50)`))
@@ -122,9 +123,9 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {
 	}()
 
 	t1 := s.beginAsyncCommit()
-	err = t1.Set([]byte("a"), []byte("a"))
+	err = t1.Set(s.key("a"), []byte("a"))
 	s.Nil(err)
-	err = t1.Set([]byte("z"), []byte("z"))
+	err = t1.Set(s.key("z"), []byte("z"))
 	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
@@ -137,10 +138,10 @@ func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit() {
 	s.putAlphabets(true)
 
 	txn := s.beginAsyncCommit()
-	txn.Set([]byte("a"), []byte("v1"))
-	txn.Set([]byte("b"), []byte("v2"))
-	s.mustPointGet([]byte("a"), []byte("a"))
-	s.mustPointGet([]byte("b"), []byte("b"))
+	txn.Set(s.key("a"), []byte("v1"))
+	txn.Set(s.key("b"), []byte("v2"))
+	s.mustPointGet(s.key("a"), []byte("a"))
+	s.mustPointGet(s.key("b"), []byte("b"))
 
 	// PointGet cannot ignore async commit transactions' locks.
 	s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
@@ -148,14 +149,14 @@ func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit() {
 	err := txn.Commit(ctx)
 	s.Nil(err)
 	s.True(txn.GetCommitter().IsAsyncCommit())
-	s.mustPointGet([]byte("a"), []byte("v1"))
-	s.mustPointGet([]byte("b"), []byte("v2"))
+	s.mustPointGet(s.key("a"), []byte("v1"))
+	s.mustPointGet(s.key("b"), []byte("v2"))
 	s.Nil(failpoint.Disable("tikvclient/asyncCommitDoNothing"))
 
 	// PointGet will not push the `max_ts` to its ts which is MaxUint64.
 	txn2 := s.beginAsyncCommit()
-	s.mustGetFromTxn(txn2, []byte("a"), []byte("v1"))
-	s.mustGetFromTxn(txn2, []byte("b"), []byte("v2"))
+	s.mustGetFromTxn(txn2, s.key("a"), []byte("v1"))
+	s.mustGetFromTxn(txn2, s.key("b"), []byte("v2"))
 	err = txn2.Rollback()
 	s.Nil(err)
 }
@@ -171,11 +172,11 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 	// Split into several regions.
 	for _, splitKey := range []string{"h", "o", "u"} {
 		bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
-		loc, err := s.store.GetRegionCache().LocateKey(bo, []byte(splitKey))
+		loc, err := s.store.GetRegionCache().LocateKey(bo, s.key(splitKey))
 		s.Nil(err)
 		newRegionID := s.cluster.AllocID()
 		newPeerID := s.cluster.AllocID()
-		s.cluster.Split(loc.Region.GetID(), newRegionID, []byte(splitKey), []uint64{newPeerID}, newPeerID)
+		s.cluster.Split(loc.Region.GetID(), newRegionID, s.key(splitKey), []uint64{newPeerID}, newPeerID)
 		s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 	}
 
@@ -191,8 +192,8 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 			s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 			return false
 		}
-		return checkRegionBound([]byte("i"), []byte("h"), []byte("o")) &&
-			checkRegionBound([]byte("p"), []byte("o"), []byte("u"))
+		return checkRegionBound(s.key("i"), s.key("h"), s.key("o")) &&
+			checkRegionBound(s.key("p"), s.key("o"), s.key("u"))
 	}, time.Second, 10*time.Millisecond, "region is not split successfully")
 
 	var sessionID uint64 = 0
@@ -200,12 +201,20 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 		sessionID++
 		ctx := context.WithValue(context.Background(), util.SessionID, sessionID)
 
+		caseKeys := make([]string, 0, len(keys))
+		for _, key := range keys {
+			caseKeys = append(caseKeys, fmt.Sprintf("%s_%d", key, sessionID))
+		}
+
 		txn := s.beginAsyncCommit()
-		for i := range keys {
-			txn.Set([]byte(keys[i]), []byte(values[i]))
+		for i := range caseKeys {
+			txn.Set(s.key(caseKeys[i]), []byte(values[i]))
 		}
 
 		s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
+		defer func() {
+			_ = failpoint.Disable("tikvclient/asyncCommitDoNothing")
+		}()
 
 		err := txn.Commit(ctx)
 		s.Nil(err)
@@ -220,9 +229,9 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 		// Currently when the transaction has no secondary, the `secondaries` field of the txnStatus
 		// will be set nil. So here initialize the `expectedSecondaries` to nil too.
 		var expectedSecondaries [][]byte
-		for _, k := range keys {
-			if !bytes.Equal([]byte(k), primary) {
-				expectedSecondaries = append(expectedSecondaries, []byte(k))
+		for _, k := range caseKeys {
+			if key := s.key(k); !bytes.Equal(key, primary) {
+				expectedSecondaries = append(expectedSecondaries, key)
 			}
 		}
 		sort.Slice(expectedSecondaries, func(i, j int) bool {
@@ -251,7 +260,7 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermin
 	// For an async commit transaction, if RPC returns context.Canceled error when prewriting, the
 	// transaction should go to undetermined state.
 	txn := s.beginAsyncCommit()
-	err := txn.Set([]byte("a"), []byte("va"))
+	err := txn.Set(s.key("a"), []byte("va"))
 	s.Nil(err)
 
 	s.Nil(failpoint.Enable("tikvclient/rpcContextCancelErr", `return(true)`))
@@ -270,7 +279,7 @@ func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
 		s.T().Skip("not supported in real TiKV")
 	}
 	txn := s.beginAsyncCommit()
-	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	s.Nil(txn.Set(s.key("key"), []byte("value")))
 	// prewrite fail for an undetermined result in async commit should return undetermined error.
 	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("undeterminedResult")->return("")`))
 	err := txn.Commit(context.Background())
