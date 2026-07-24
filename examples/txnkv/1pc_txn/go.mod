@@ -1,6 +1,6 @@
 module 1pc_txn
 
-go 1.25.8
+go 1.25.10
 
 require github.com/tikv/client-go/v2 v2.0.0
 
@@ -22,7 +22,11 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122 // indirect
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
+<<<<<<< HEAD
 	github.com/pingcap/kvproto v0.0.0-20260408021215-335c5c64af53 // indirect
+=======
+	github.com/pingcap/kvproto v0.0.0-20260721064811-683dad8fa368 // indirect
+>>>>>>> 61ecd7c1 (txnkv: add readPoolTaskDetails to SnapshotRuntimeStats (#2025))
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.20.5 // indirect
@@ -31,7 +35,11 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
+<<<<<<< HEAD
 	github.com/tikv/pd/client v0.0.0-20260401072359-048f0d8f6f71 // indirect
+=======
+	github.com/tikv/pd/client v0.0.0-20260708075407-4e05b9d2c2d3 // indirect
+>>>>>>> 61ecd7c1 (txnkv: add readPoolTaskDetails to SnapshotRuntimeStats (#2025))
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.10 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
@@ -43,10 +51,10 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
-	google.golang.org/grpc v1.75.1 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/grpc v1.79.3 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 )
