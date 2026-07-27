@@ -242,6 +242,8 @@ func (t CmdType) String() string {
 // RequestAttemptAdmissionFunc waits until an RPC attempt to storeID is admitted.
 // When this function returns a non-nil release function and a nil error,
 // client-go calls release exactly once after that attempt finishes.
+// The context follows the request lifecycle; the per-attempt RPC timeout starts
+// after admission succeeds and does not bound admission wait.
 // Implementations should return promptly when ctx is canceled.
 type RequestAttemptAdmissionFunc func(ctx context.Context, storeID uint64) (release func(), err error)
 

@@ -601,6 +601,7 @@ func (s *RegionRequestSender) SendReqAsync(
 			sendToAddr = state.vars.rpcCtx.ProxyAddr
 		}
 
+		rpcStart := time.Now()
 		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 			state.vars.sendTimes++
 			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
@@ -608,7 +609,7 @@ func (s *RegionRequestSender) SendReqAsync(
 			if val := ctx.Value(util.ExecDetailsKey); val != nil {
 				execDetails = val.(*util.ExecDetails)
 			}
-			if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
+			if state.handleAsyncResponse(rpcStart, canceled, resp, err, execDetails, cancels...) {
 				cb.Invoke(state.toResponseExt())
 				return
 			}
