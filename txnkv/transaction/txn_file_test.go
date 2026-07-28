@@ -707,7 +707,7 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 		regionTxnSize: map[uint64]int{},
 	}
 	require.NoError(t, committer.initKeysAndMutations(context.Background()))
-	committer.ttlManager.state = stateRunning
+	committer.state = stateRunning
 
 	err := committer.executeTxnFile(context.Background())
 
