@@ -51,6 +51,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -61,9 +62,103 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
+
+type firstRecvErrTikvClient struct {
+	tikvpb.TikvClient
+	streamCtx context.Context
+	err       error
+}
+
+func (c *firstRecvErrTikvClient) CoprocessorStream(ctx context.Context, _ *coprocessor.Request, _ ...grpc.CallOption) (tikvpb.Tikv_CoprocessorStreamClient, error) {
+	c.streamCtx = ctx
+	return &firstRecvErrCopStream{err: c.err}, nil
+}
+
+func (c *firstRecvErrTikvClient) BatchCoprocessor(ctx context.Context, _ *coprocessor.BatchRequest, _ ...grpc.CallOption) (tikvpb.Tikv_BatchCoprocessorClient, error) {
+	c.streamCtx = ctx
+	return &firstRecvErrBatchCopStream{err: c.err}, nil
+}
+
+func (c *firstRecvErrTikvClient) EstablishMPPConnection(ctx context.Context, _ *mpp.EstablishMPPConnectionRequest, _ ...grpc.CallOption) (tikvpb.Tikv_EstablishMPPConnectionClient, error) {
+	c.streamCtx = ctx
+	return &firstRecvErrMPPStream{err: c.err}, nil
+}
+
+type firstRecvErrCopStream struct {
+	grpc.ClientStream
+	err error
+}
+
+func (s *firstRecvErrCopStream) Recv() (*coprocessor.Response, error) {
+	return nil, s.err
+}
+
+type firstRecvErrBatchCopStream struct {
+	grpc.ClientStream
+	err error
+}
+
+func (s *firstRecvErrBatchCopStream) Recv() (*coprocessor.BatchResponse, error) {
+	return nil, s.err
+}
+
+type firstRecvErrMPPStream struct {
+	grpc.ClientStream
+	err error
+}
+
+func (s *firstRecvErrMPPStream) Recv() (*mpp.MPPDataPacket, error) {
+	return nil, s.err
+}
+
+func TestStreamFirstRecvErrorClosesLease(t *testing.T) {
+	rpcClient := &RPCClient{}
+	recvErr := errors.New("first recv failed")
+	cases := []struct {
+		name string
+		req  *tikvrpc.Request
+		call func(*firstRecvErrTikvClient, *tikvrpc.Request, *connPool) (*tikvrpc.Response, error)
+	}{
+		{
+			name: "cop stream",
+			req:  tikvrpc.NewRequest(tikvrpc.CmdCopStream, &coprocessor.Request{}),
+			call: func(client *firstRecvErrTikvClient, req *tikvrpc.Request, connPool *connPool) (*tikvrpc.Response, error) {
+				return rpcClient.getCopStreamResponse(context.Background(), client, req, time.Minute, connPool)
+			},
+		},
+		{
+			name: "batch cop stream",
+			req:  tikvrpc.NewRequest(tikvrpc.CmdBatchCop, &coprocessor.BatchRequest{}),
+			call: func(client *firstRecvErrTikvClient, req *tikvrpc.Request, connPool *connPool) (*tikvrpc.Response, error) {
+				return rpcClient.getBatchCopStreamResponse(context.Background(), client, req, time.Minute, connPool)
+			},
+		},
+		{
+			name: "mpp stream",
+			req:  tikvrpc.NewRequest(tikvrpc.CmdMPPConn, &mpp.EstablishMPPConnectionRequest{}),
+			call: func(client *firstRecvErrTikvClient, req *tikvrpc.Request, connPool *connPool) (*tikvrpc.Response, error) {
+				return rpcClient.getMPPStreamResponse(context.Background(), client, req, time.Minute, connPool)
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &firstRecvErrTikvClient{err: recvErr}
+			connPool := &connPool{streamTimeout: make(chan *tikvrpc.Lease, 1)}
+
+			resp, err := tt.call(client, tt.req, connPool)
+
+			require.Nil(t, resp)
+			require.ErrorContains(t, err, recvErr.Error())
+			require.Equal(t, context.Canceled, client.streamCtx.Err())
+		})
+	}
+}
 
 func TestConn(t *testing.T) {
 	defer config.UpdateGlobal(func(conf *config.Config) {
