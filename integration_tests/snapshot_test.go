@@ -427,6 +427,18 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"scan_detail: {total_process_keys: 20, total_process_keys_size: 20, total_keys: 30, get_snapshot_time: 1µs, " +
 		"rocksdb: {delete_skipped_count: 10, key_skipped_count: 2, block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
+
+	detail = &kvrpcpb.ExecDetailsV2{
+		ReadPoolTaskDetails: &kvrpcpb.PoolTaskDetails{
+			PollCount:     2,
+			DispatchCount: 1,
+		},
+	}
+	snapshot.MergeExecDetail(detail)
+	expect += ", read_pool:{tasks:1, poll_count:{total:2, avg:2, max:2, min:2}, " +
+		"dispatch_count:{total:1, max:1, min:1}, " +
+		"fair_queue:{enabled:false, waited_task_slices:{total:0, max:0, min:0}}}"
+	s.Equal(expect, snapshot.FormatStats())
 }
 
 func (s *testSnapshotSuite) TestRCRead() {
