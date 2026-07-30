@@ -8,13 +8,13 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260724054804-059694ae4472
-	github.com/pingcap/tidb v1.1.0-beta.0.20260708073538-b6db59b2742a
+	github.com/pingcap/tidb v1.1.0-beta.0.20260715060322-10292a4f8697
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.14.4
-	github.com/tikv/client-go/v2 v2.0.8-0.20260617030124-661db4f5f4e8
+	github.com/tikv/client-go/v2 v2.0.8-0.20260708122311-01bd8f99f4da
 	github.com/tikv/pd/client v0.0.0-20260729061341-533858f82c9f
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.79.3
@@ -116,7 +116,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20260708073538-b6db59b2742a // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260715060322-10292a4f8697 // indirect
 	github.com/pingcap/tipb v0.0.0-20260623093813-5f9928e91afe // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -177,8 +177,5 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	// Temporary until pingcap/tidb master adapts to the current PD client mock interfaces.
-	github.com/pingcap/tidb => github.com/YuhaoZhang00/tidb v0.0.0-20260702053009-6ce3a970ea5e
-	github.com/pingcap/tidb/pkg/parser => github.com/YuhaoZhang00/tidb/pkg/parser v0.0.0-20260702053009-6ce3a970ea5e
 	github.com/tikv/client-go/v2 => ../
 )
