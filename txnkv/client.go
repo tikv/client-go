@@ -121,7 +121,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 
 // Close releases resources owned by the transactional client, including idle
 // HTTP connections opened for txn-file chunk uploads.
-func (c *Client) Close() error {
+func (c Client) Close() error {
 	err := c.KVStore.Close()
 	transaction.CloseTxnFileIdleConnections()
 	return err

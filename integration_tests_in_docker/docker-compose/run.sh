@@ -143,7 +143,11 @@ cleanup() {
     if [ "${status}" -ne 0 ]; then
         diagnostics
     fi
-    compose down -v --remove-orphans
+    compose down -v --remove-orphans --rmi local
+    down_status=$?
+    if [ "${status}" -eq 0 ] && [ "${down_status}" -ne 0 ]; then
+        status=${down_status}
+    fi
     exit "${status}"
 }
 

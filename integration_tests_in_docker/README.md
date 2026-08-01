@@ -107,9 +107,10 @@ COMPOSE_PROJECT_NAME=<unique-project> \
   ./integration_tests_in_docker/docker-compose/run.sh
 ```
 
-The exit trap always runs `docker compose ... down -v --remove-orphans`, on
-success and failure. This clean-volume teardown permits repeated runs; do not
-expect retained containers or data volumes after the script exits.
+The exit trap always runs
+`docker compose ... down -v --remove-orphans --rmi local`, on success and
+failure. This teardown removes volumes and the locally built test image so
+repeated runs do not retain per-run artifacts.
 
 ### Build context and cache behavior
 
@@ -172,16 +173,3 @@ The suite proves successful txn-file commits and determinate write-conflict
 rollback behavior. It must not claim DFS orphan cleanup, recovery of an
 undetermined commit, or deletion of partially accepted chunk objects: those
 outcomes are outside this fixture's guarantees.
-
-## CI
-
-The integration workflow has one Docker job, `integration-txn-file-docker`.
-It runs only for trusted `push` events—never `pull_request` code—when the
-repository variable `TXN_FILE_DOCKER_RUNNER_LABEL` is non-empty and the
-existing integration skip-label condition allows it. Set that variable to the
-**extra self-hosted label** assigned to an eligible Linux Docker runner with
-sufficient capacity and access to both private registries. The workflow
-combines `self-hosted`, `linux`, and the variable value, so there is no
-public-runner fallback or organization-specific label baked into the
-repository. CI checks out the source and invokes only `run.sh`; Go setup is not
-needed because the tests build inside Docker.
