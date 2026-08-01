@@ -58,6 +58,44 @@ type txnFileCommitTSOracle struct {
 	option  *oracle.Option
 }
 
+type closeIdleRoundTripper struct {
+	closed atomic.Bool
+}
+
+func (*closeIdleRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected request")
+}
+
+func (t *closeIdleRoundTripper) CloseIdleConnections() {
+	t.closed.Store(true)
+}
+
+func TestCloseTxnFileIdleConnections(t *testing.T) {
+	original := cli.Load()
+	t.Cleanup(func() {
+		cli.Store(original)
+	})
+
+	transport := &closeIdleRoundTripper{}
+	cli.Store(&http.Client{Transport: transport})
+
+	CloseTxnFileIdleConnections()
+
+	require.True(t, transport.closed.Load())
+}
+
+func TestTxnFileBatchConcurrency(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CommitterConcurrency = 4
+
+	cfg.TiKVClient.TxnChunkMaxSize = MaxTxnChunkSizeInParallel / 2
+	require.Equal(t, 2, txnFileBatchConcurrency(4, 3, &cfg))
+
+	cfg.TiKVClient.TxnChunkMaxSize = MaxTxnChunkSizeInParallel + 1
+	require.Equal(t, 4, txnFileBatchConcurrency(4, 1, &cfg))
+	require.Equal(t, 1, txnFileBatchConcurrency(4, 2, &cfg))
+}
+
 func (o *txnFileCommitTSOracle) IsExpired(startTS uint64, ttl uint64, option *oracle.Option) bool {
 	o.calls++
 	o.startTS = startTS
@@ -657,13 +695,13 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 	defer func() {
 		config.StoreGlobalConfig(origCfg)
 		once = sync.Once{}
-		cli = nil
+		cli.Store(nil)
 		errCli = nil
 		scheme = ""
 	}()
 
 	once = sync.Once{}
-	cli = nil
+	cli.Store(nil)
 	errCli = nil
 	scheme = ""
 
@@ -707,7 +745,7 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 		regionTxnSize: map[uint64]int{},
 	}
 	require.NoError(t, committer.initKeysAndMutations(context.Background()))
-	committer.ttlManager.state = stateRunning
+	committer.state = stateRunning
 
 	err := committer.executeTxnFile(context.Background())
 
@@ -872,13 +910,13 @@ func TestBuildTxnFilesEntryCounting(t *testing.T) {
 	defer func() {
 		config.StoreGlobalConfig(origCfg)
 		once = sync.Once{}
-		cli = nil
+		cli.Store(nil)
 		errCli = nil
 		scheme = ""
 	}()
 
 	once = sync.Once{}
-	cli = srv.Client()
+	cli.Store(srv.Client())
 	errCli = nil
 	scheme = "http://"
 

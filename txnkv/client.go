@@ -119,6 +119,14 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	return &Client{KVStore: s}, nil
 }
 
+// Close releases resources owned by the transactional client, including idle
+// HTTP connections opened for txn-file chunk uploads.
+func (c *Client) Close() error {
+	err := c.KVStore.Close()
+	transaction.CloseTxnFileIdleConnections()
+	return err
+}
+
 // GetTimestamp returns the current global timestamp.
 func (c *Client) GetTimestamp(ctx context.Context) (uint64, error) {
 	bo := retry.NewBackofferWithVars(ctx, transaction.TsoMaxBackoff, nil)

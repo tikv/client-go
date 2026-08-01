@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/protobuf/proto" //nolint:staticcheck
@@ -826,15 +827,8 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	// we can commit/rollback as many regions as possible.
 	_, returnEarly := action.(txnFilePrewriteAction)
 
-	rateLim := len(batches)
 	cnf := config.GetGlobalConfig()
-	if rateLim > cnf.CommitterConcurrency {
-		rateLim = cnf.CommitterConcurrency
-	}
-	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
-	if chunksCount > maxChunksInParallel {
-		rateLim = maxChunksInParallel
-	}
+	rateLim := txnFileBatchConcurrency(len(batches), chunksCount, cnf)
 	rateLimiter := util.NewRateLimit(rateLim)
 	go func() {
 		for _, batch := range batches {
@@ -865,6 +859,15 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 	regionErrChunks.sortAndDedup()
 	return regionErrChunks, err
+}
+
+func txnFileBatchConcurrency(batchCount, chunkCount int, cfg *config.Config) int {
+	concurrency := min(batchCount, cfg.CommitterConcurrency)
+	maxChunksInParallel := max(1, int(MaxTxnChunkSizeInParallel/cfg.TiKVClient.TxnChunkMaxSize))
+	if chunkCount > maxChunksInParallel {
+		concurrency = min(concurrency, maxChunksInParallel)
+	}
+	return concurrency
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
@@ -1288,7 +1291,7 @@ func (c *twoPhaseCommitter) reportFailureMetrics() {
 var (
 	once   sync.Once
 	scheme string
-	cli    *http.Client
+	cli    atomic.Pointer[http.Client]
 	errCli error
 )
 
@@ -1316,12 +1319,21 @@ func getHTTPClient() (*http.Client, error) {
 			transport.ForceAttemptHTTP2 = true
 		}
 
-		cli = &http.Client{
+		cli.Store(&http.Client{
 			Timeout:   timeout,
 			Transport: transport,
-		}
+		})
 	})
-	return cli, errCli
+	return cli.Load(), errCli
+}
+
+// CloseTxnFileIdleConnections closes idle HTTP connections opened by txn-file
+// chunk uploads. It does not interrupt active requests and is safe to call
+// while another client is using the shared uploader.
+func CloseTxnFileIdleConnections() {
+	if client := cli.Load(); client != nil {
+		client.CloseIdleConnections()
+	}
 }
 
 type chunkWriterClient struct {
