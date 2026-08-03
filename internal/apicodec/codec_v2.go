@@ -64,7 +64,7 @@ type codecV2 struct {
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
-	keyspaceID := keyspaceMeta.Id
+	keyspaceID := keyspaceMeta.GetId()
 	if keyspaceID > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
 	}
@@ -114,7 +114,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return KeyspaceID(c.keyspaceMeta.Id)
+	return KeyspaceID(c.keyspaceMeta.GetId())
 }
 
 func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
