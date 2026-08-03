@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/util"
@@ -22,6 +23,19 @@ const (
 	unifiedTxnSafePointPath       = "/tidb/store/gcworker/saved_safe_point"
 	keyspaceLevelTxnSafePointPath = "/keyspaces/tidb/%d/tidb/store/gcworker/saved_safe_point"
 )
+
+// IsCESKeyspaceLevelGC reports whether a keyspace uses the CES keyspace-level GC metadata format.
+// TODO: Replace this implementation with pd.IsCESKeyspaceLevelGC after API v3 support is merged into client-go.
+func IsCESKeyspaceLevelGC(keyspaceMeta *keyspacepb.KeyspaceMeta) bool {
+	return keyspaceMeta != nil && keyspaceMeta.Config != nil && keyspaceMeta.Config["safe_point_version"] == "v2"
+}
+
+func compatibleTxnSafePointPath(keyspaceMeta *keyspacepb.KeyspaceMeta) string {
+	if pd.IsKeyspaceUsingKeyspaceLevelGC(keyspaceMeta) || IsCESKeyspaceLevelGC(keyspaceMeta) {
+		return fmt.Sprintf(keyspaceLevelTxnSafePointPath, keyspaceMeta.Id)
+	}
+	return unifiedTxnSafePointPath
+}
 
 // compatibleTxnSafePointLoader is used to load txn safe point from etcd for old versions where the GetGCState API
 // is not yet supported.
@@ -101,11 +115,7 @@ func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (ui
 		}
 	}
 
-	key := unifiedTxnSafePointPath
-	keyspaceMeta := l.codec.GetKeyspaceMeta()
-	if pd.IsKeyspaceUsingKeyspaceLevelGC(keyspaceMeta) {
-		key = fmt.Sprintf(keyspaceLevelTxnSafePointPath, keyspaceMeta.Id)
-	}
+	key := compatibleTxnSafePointPath(l.codec.GetKeyspaceMeta())
 
 	// Follow the same implementation as the EtcdSafePointKV by setting the timeout 5 seconds.
 	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
