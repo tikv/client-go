@@ -34,6 +34,15 @@
 
 package kv
 
+import "sync/atomic"
+
+// KillSignalHandler handles kill signals at interruptible KV request checkpoints.
+// Implementations must be safe for concurrent use.
+type KillSignalHandler interface {
+	// HandleSignal returns an error when the current operation should stop.
+	HandleSignal() error
+}
+
 // Variables defines the variables used by KV storage.
 type Variables struct {
 	// BackoffLockFast specifies the LockFast backoff base duration in milliseconds.
@@ -56,6 +65,30 @@ type Variables struct {
 	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
 	// When its value is 0, use the config of "txn-file-min-mutation-size".
 	TxnFileMinMutationSize uint64
+
+	// killSignalHandler takes precedence over Killed when it is set. It is stored
+	// atomically because Variables can be shared by concurrent backoffers.
+	killSignalHandler atomic.Pointer[KillSignalHandler]
+}
+
+// SetKillSignalHandler atomically sets the handler used at interruptible KV request
+// checkpoints. Passing nil clears the handler.
+func (v *Variables) SetKillSignalHandler(handler interface{ HandleSignal() error }) {
+	if handler == nil {
+		v.killSignalHandler.Store(nil)
+		return
+	}
+	typedHandler := KillSignalHandler(handler)
+	v.killSignalHandler.Store(&typedHandler)
+}
+
+// LoadKillSignalHandler atomically loads the handler used at interruptible KV request checkpoints.
+func (v *Variables) LoadKillSignalHandler() KillSignalHandler {
+	handler := v.killSignalHandler.Load()
+	if handler == nil {
+		return nil
+	}
+	return *handler
 }
 
 // NewVariables create a new Variables instance with default values.
