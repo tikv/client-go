@@ -444,7 +444,13 @@ func (b *Backoffer) longestSleepCfg() (*Config, int) {
 }
 
 func (b *Backoffer) CheckKilled() error {
-	if b.vars != nil && b.vars.Killed != nil {
+	if b.vars == nil {
+		return nil
+	}
+	if handler := b.vars.LoadKillSignalHandler(); handler != nil {
+		return handler.HandleSignal()
+	}
+	if b.vars.Killed != nil {
 		killed := atomic.LoadUint32(b.vars.Killed)
 		if killed != 0 {
 			logutil.BgLogger().Info(

@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,7 +47,85 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 )
+
+type killSignalHandlerFunc func() error
+
+func (f killSignalHandlerFunc) HandleSignal() error {
+	return f()
+}
+
+func TestCheckKilled(t *testing.T) {
+	handlerErr := errors.New("killed by handler")
+	called := 0
+	killed := uint32(7)
+	vars := kv.NewVariables(&killed)
+	vars.SetKillSignalHandler(killSignalHandlerFunc(func() error {
+		called++
+		return handlerErr
+	}))
+	bo := NewBackofferWithVars(context.Background(), 1, vars)
+	assert.ErrorIs(t, bo.CheckKilled(), handlerErr)
+	assert.Equal(t, 1, called)
+	vars.SetKillSignalHandler(nil)
+	err := bo.CheckKilled()
+	var interrupted tikverr.ErrQueryInterruptedWithSignal
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+
+	bo = NewBackofferWithVars(context.Background(), 1, kv.NewVariables(&killed))
+	err = bo.CheckKilled()
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+
+	assert.NoError(t, NewBackofferWithVars(context.Background(), 1, nil).CheckKilled())
+}
+
+func TestCheckKilledConcurrentHandlerUpdate(t *testing.T) {
+	firstErr := errors.New("killed by first handler")
+	secondErr := errors.New("killed by second handler")
+	firstHandler := killSignalHandlerFunc(func() error { return firstErr })
+	secondHandler := killSignalHandlerFunc(func() error { return secondErr })
+
+	vars := kv.NewVariables(nil)
+	vars.SetKillSignalHandler(firstHandler)
+	bo := NewBackofferWithVars(context.Background(), 1, vars)
+
+	const iterations = 10000
+	var wg sync.WaitGroup
+	wg.Add(2)
+	start := make(chan struct{})
+	unexpectedErr := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			vars.SetKillSignalHandler(firstHandler)
+			vars.SetKillSignalHandler(secondHandler)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			err := bo.CheckKilled()
+			if !errors.Is(err, firstErr) && !errors.Is(err, secondErr) {
+				select {
+				case unexpectedErr <- err:
+				default:
+				}
+				return
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(unexpectedErr)
+	for err := range unexpectedErr {
+		assert.NoError(t, err)
+	}
+}
 
 func TestBackoffWithMax(t *testing.T) {
 	b := NewBackofferWithVars(context.TODO(), 2000, nil)
