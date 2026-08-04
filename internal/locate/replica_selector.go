@@ -609,8 +609,9 @@ func (s *replicaSelector) onServerIsBusy(
 			// reads are rejected with ServerIsBusy(0) at the pool entrance, so the request
 			// never reaches the raft layer and no NotLeader error is returned even if PD has
 			// already moved the leader away. Retrying the cached leader then hammers the
-			// half-dead store indefinitely. After 2 consecutive such rejections on the cached
-			// leader, mark it suspect-not-leader so that the next attempt probes a follower
+			// half-dead store indefinitely. After 2 such rejections from the same cached
+			// leader within this selector (the count restarts only when the cached leader
+			// changes), mark it suspect-not-leader so that the next attempt probes a follower
 			// with the leader read (req.ReplicaRead is kept unchanged). The follower replies
 			// NotLeader with the real leader hint, which heals the shared region cache via
 			// onNotLeader/updateLeader. Probe at most once per selector; if the store is
