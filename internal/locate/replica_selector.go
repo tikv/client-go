@@ -40,6 +40,11 @@ type replicaSelector struct {
 	proxy                     *replica
 	attempts                  int
 	regionInvalidatedForRetry bool // set when region is hard-invalidated but this selector should still retry on leader
+	// leaderBusyCount counts the ServerIsBusy(0) errors received on the cached leader, and
+	// leaderBusyProbed records whether a suspect-not-leader probe has been fired. Both are
+	// per-selector states used to work around tikv/client-go#2028, see onServerIsBusy.
+	leaderBusyCount  int
+	leaderBusyProbed bool
 }
 
 // disableReadFeaturesForNextGen disables replica-read and stale-read feature
@@ -244,7 +249,10 @@ type ReplicaSelectLeaderStrategy struct {
 
 func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	leader := replicas[s.leaderIdx]
-	if isLeaderCandidate(leader) {
+	// Skip a leader replica flagged with suspectNotLeaderFlag, so that the selector falls
+	// back to the mixed strategy and probes a follower to trigger a NotLeader reply which
+	// heals the region cache (tikv/client-go#2028).
+	if isLeaderCandidate(leader) && !leader.hasFlag(suspectNotLeaderFlag) {
 		return leader
 	}
 	return nil
@@ -583,6 +591,25 @@ func (s *replicaSelector) onServerIsBusy(
 		} else {
 			// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
 			ctx.Store.healthStatus.markAlreadySlow()
+			// Workaround for tikv/client-go#2028: if the store's read pool is wedged, leader
+			// reads are rejected with ServerIsBusy(0) at the pool entrance, so the request
+			// never reaches the raft layer and no NotLeader error is returned even if PD has
+			// already moved the leader away. Retrying the cached leader then hammers the
+			// half-dead store indefinitely. After 2 consecutive such rejections on the cached
+			// leader, mark it suspect-not-leader so that the next attempt probes a follower
+			// with the leader read (req.ReplicaRead is kept unchanged). The follower replies
+			// NotLeader with the real leader hint, which heals the shared region cache via
+			// onNotLeader/updateLeader. Probe at most once per selector; if the store is
+			// still the leader, the hint points back to it, onUpdateLeader clears the flag,
+			// and the only cost is one rejected RPC.
+			if s.replicaReadType == kv.ReplicaReadLeader && !s.isStaleRead && !s.option.leaderOnly &&
+				s.target != nil && s.target.peer.Id == s.region.GetLeaderPeerID() && !s.leaderBusyProbed {
+				s.leaderBusyCount++
+				if s.leaderBusyCount >= 2 {
+					s.target.addFlag(suspectNotLeaderFlag)
+					s.leaderBusyProbed = true
+				}
+			}
 		}
 	}
 	backoffErr := newBackoffErrWithRPCContext("server is busy", ctx)
