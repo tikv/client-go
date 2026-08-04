@@ -42,7 +42,10 @@ type replicaSelector struct {
 	// leaderBusyCount counts the ServerIsBusy(0) errors received on the cached leader, and
 	// leaderBusyProbed records whether a suspect-not-leader probe has been fired. Both are
 	// per-selector states used to work around tikv/client-go#2028, see onServerIsBusy.
+	// leaderBusyPeerID is the peer the count belongs to: the count restarts whenever the
+	// cached leader changes, so a new leader won't inherit the old leader's count.
 	leaderBusyCount  int
+	leaderBusyPeerID uint64
 	leaderBusyProbed bool
 }
 
@@ -306,6 +309,17 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	if s.busyThreshold > 0 {
 		// when can't find an idle replica, no need to invalidate region.
 		return nil
+	}
+	// The leader is skipped only because it is suspected to have lost leadership. When there
+	// is no other replica to probe (single-replica region, or all followers are
+	// unreachable/stale/exhausted) or the probe turns out fruitless, restore the leader and
+	// fall back to the existing backoff-retry behavior instead of invalidating the region
+	// and reloading it from PD for nothing (tikv/client-go#2028).
+	if leader := replicas[s.leaderIdx]; leader.hasFlag(suspectNotLeaderFlag) {
+		leader.deleteFlag(suspectNotLeaderFlag)
+		if isLeaderCandidate(leader) {
+			return leader
+		}
 	}
 	// when meet deadline exceeded error, do fast retry without invalidate region cache.
 	if !hasDeadlineExceededError(selector.replicas) {
@@ -573,6 +587,14 @@ func (s *replicaSelector) onServerIsBusy(
 			// and the only cost is one rejected RPC.
 			if s.replicaReadType == kv.ReplicaReadLeader && !s.isStaleRead && !s.option.leaderOnly &&
 				s.target != nil && s.target.peer.Id == s.region.GetLeaderPeerID() && !s.leaderBusyProbed {
+				// The count belongs to a specific cached leader: whenever the cached leader
+				// changes (e.g. switched by a NotLeader hint), restart the count for the new
+				// leader so that it won't be marked after inheriting the old leader's count.
+				leaderPeerID := s.region.GetLeaderPeerID()
+				if s.leaderBusyPeerID != leaderPeerID {
+					s.leaderBusyPeerID = leaderPeerID
+					s.leaderBusyCount = 0
+				}
 				s.leaderBusyCount++
 				if s.leaderBusyCount >= 2 {
 					s.target.addFlag(suspectNotLeaderFlag)
