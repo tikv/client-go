@@ -2,7 +2,9 @@ package resourcecontrol
 
 import (
 	"testing"
+	"time"
 
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
@@ -45,4 +47,43 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(3), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(0), info.StoreID())
+}
+
+func TestResponseInfoBatchedTasks(t *testing.T) {
+	// Every nested batched response must contribute scan bytes and KV CPU
+	// because the top-level execution details do not include that work.
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					ProcessedVersionsSize: 80,
+				},
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 1000},
+			},
+			BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+				{
+					Data: []byte("data"),
+					ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+						ScanDetailV2: &kvrpcpb.ScanDetailV2{
+							ProcessedVersionsSize: 10,
+						},
+						TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 100},
+					},
+				},
+				{
+					ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+						ScanDetailV2: &kvrpcpb.ScanDetailV2{
+							ProcessedVersionsSize: 20,
+						},
+						TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 200},
+					},
+				},
+				{Data: []byte("12345678")},
+			},
+		},
+	}
+
+	info := MakeResponseInfo(resp)
+	assert.Equal(t, uint64(80+10+20+8), info.ReadBytes())
+	assert.Equal(t, time.Duration(1000+100+200), info.KVCPU())
 }
