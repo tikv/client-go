@@ -317,6 +317,12 @@ func (suite *testCodecV2Suite) TestNewCodecV2RejectsKeyspaceIdentity() {
 	re.Error(err)
 }
 
+func (suite *testCodecV2Suite) TestNewCodecV2RejectsNilMeta() {
+	// A nil meta must fail loudly instead of silently becoming keyspace 0.
+	_, err := NewCodecV2(ModeTxn, nil)
+	suite.Require().Error(err)
+}
+
 func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 	re := suite.Require()
 	codec := suite.codec
