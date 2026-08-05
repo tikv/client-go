@@ -2534,7 +2534,7 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 		},
 		afterRun: func(selector *replicaSelector) {
 			s.True(selector.leaderBusyProbed)
-			s.Equal(2, selector.leaderBusyCount)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
 			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
@@ -2604,7 +2604,7 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 		afterRun: func(selector *replicaSelector) {
 			s.True(selector.leaderBusyProbed)
 			// The busy count doesn't grow anymore once the probe is fired.
-			s.Equal(2, selector.leaderBusyCount)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
 			// The suspect flag is cleared since the hint confirms store1 is the leader.
 			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
 			s.Equal(uint64(1), selector.region.GetLeaderStoreID())
@@ -2660,11 +2660,72 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 		},
 		afterRun: func(selector *replicaSelector) {
 			s.True(selector.leaderBusyProbed)
-			s.Equal(2, selector.leaderBusyCount)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
 			// The count and the suspect flag belong to the peer in store2.
 			s.Equal(selector.replicas[1].peer.Id, selector.leaderBusyPeerID)
 			s.True(selector.replicas[1].hasFlag(suspectNotLeaderFlag))
 			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// The busy count is cumulative per cached leader and doesn't require consecutive
+	// attempts: a busy(0) interleaved with other errors still counts, and the probe fires
+	// once the count reaches the threshold.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}", // busy(0), count(store1)=1.
+				"{addr: store1, replica-read: false, stale-read: false}", // busy with EstimatedWaitMs!=0, not counted.
+				"{addr: store1, replica-read: false, stale-read: false}", // busy(0) again, count(store1)=2, mark and probe.
+				"{addr: store2, replica-read: false, stale-read: false}", // probe a follower.
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      3,
+			backoffDetail:   []string{"tikvServerBusy+3"},
+			regionIsValid:   true,
+		},
+		afterRun: func(selector *replicaSelector) {
+			s.True(selector.leaderBusyProbed)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
+			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Both probed followers reply NotLeader without a hint: the leader is restored (the
+	// suspect flag is cleared) instead of invalidating the region, and the next attempt
+	// selects the old leader again.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, NotLeaderErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}", // probe, NotLeader without a hint.
+				"{addr: store3, replica-read: false, stale-read: false}", // probe, NotLeader without a hint either.
+				"{addr: store1, replica-read: false, stale-read: false}", // no probe result: the leader is restored.
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      4,
+			backoffDetail:   []string{"regionScheduling+2", "tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		afterRun: func(selector *replicaSelector) {
+			s.True(selector.leaderBusyProbed)
+			// The suspect flag is cleared when the leader is restored as the only choice.
+			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			// The cached leader is not switched since no hint is received.
+			s.Equal(uint64(1), selector.region.GetLeaderStoreID())
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
 	}

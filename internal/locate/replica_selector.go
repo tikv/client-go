@@ -584,6 +584,10 @@ func (s *replicaSelector) onRegionNotFound(
 	return false, nil
 }
 
+// leaderBusyProbeThreshold is the number of ServerIsBusy(0) errors received from the same
+// cached leader within one selector that triggers a suspect-not-leader probe.
+const leaderBusyProbeThreshold = 2
+
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
@@ -617,18 +621,18 @@ func (s *replicaSelector) onServerIsBusy(
 			// onNotLeader/updateLeader. Probe at most once per selector; if the store is
 			// still the leader, the hint points back to it, onUpdateLeader clears the flag,
 			// and the only cost is one rejected RPC.
+			leaderPeerID := s.region.GetLeaderPeerID()
 			if s.replicaReadType == kv.ReplicaReadLeader && !s.isStaleRead && !s.option.leaderOnly &&
-				s.target != nil && s.target.peer.Id == s.region.GetLeaderPeerID() && !s.leaderBusyProbed {
+				s.target != nil && s.target.peer != nil && s.target.peer.Id == leaderPeerID && !s.leaderBusyProbed {
 				// The count belongs to a specific cached leader: whenever the cached leader
 				// changes (e.g. switched by a NotLeader hint), restart the count for the new
 				// leader so that it won't be marked after inheriting the old leader's count.
-				leaderPeerID := s.region.GetLeaderPeerID()
 				if s.leaderBusyPeerID != leaderPeerID {
 					s.leaderBusyPeerID = leaderPeerID
 					s.leaderBusyCount = 0
 				}
 				s.leaderBusyCount++
-				if s.leaderBusyCount >= 2 {
+				if s.leaderBusyCount >= leaderBusyProbeThreshold {
 					s.target.addFlag(suspectNotLeaderFlag)
 					s.leaderBusyProbed = true
 				}
