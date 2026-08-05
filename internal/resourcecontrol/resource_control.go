@@ -203,15 +203,29 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	}
 	// Parse the response to extract the info.
 	var (
-		readBytes uint64
-		detailsV2 *kvrpcpb.ExecDetailsV2
-		details   *kvrpcpb.ExecDetails
+		readBytes        uint64
+		detailsV2        *kvrpcpb.ExecDetailsV2
+		details          *kvrpcpb.ExecDetails
+		batchedReadBytes uint64
+		batchedKVCPU     time.Duration
 	)
 	switch r := resp.Resp.(type) {
 	case *coprocessor.Response:
 		detailsV2 = r.GetExecDetailsV2()
 		details = r.GetExecDetails()
 		readBytes = uint64(r.Data.Size())
+		// A batched coprocessor request answers several tasks in one response.
+		// Each nested response carries execution details that are not included
+		// in the top-level details, so account for every nested task.
+		for _, batchResp := range r.GetBatchResponses() {
+			batchDetailsV2 := batchResp.GetExecDetailsV2()
+			batchReadBytes := uint64(batchResp.Data.Size())
+			if scanDetail := batchDetailsV2.GetScanDetailV2(); scanDetail != nil {
+				batchReadBytes = scanDetailReadBytes(scanDetail)
+			}
+			batchedReadBytes += batchReadBytes
+			batchedKVCPU += getKVCPU(batchDetailsV2, nil)
+		}
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
@@ -232,35 +246,39 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	// Try to get read bytes from the `detailsV2`.
 	// TODO: clarify whether we should count the underlying storage engine read bytes or not.
 	if scanDetail := detailsV2.GetScanDetailV2(); scanDetail != nil {
-		if config.NextGen {
-			// Using the total versions size as the read bytes, which includes not
-			// only processed versions size, but also skipped MVCC versions size.
-			// It can reflect the actual read bytes more accurately, especially for
-			// the request with a large number of MVCC versions.
-			//
-			// For compatibility with older versions of TiKV, if the
-			// processed versions size is greater than the total versions size,
-			// we use the processed versions size as the read bytes.
-			readBytes = max(scanDetail.GetTotalVersionsSize(), scanDetail.GetProcessedVersionsSize())
-		} else {
-			// NOTE: The original design intended to account for all MVCC read
-			// overhead, but TotalVersionsSize did not exist at the time, so
-			// ProcessedVersionsSize was used instead, which only counts the
-			// versions that are actually processed and excludes skipped MVCC
-			// versions. Since this behavior has already been released, switching
-			// to TotalVersionsSize would change the RU calculation. To avoid
-			// unexpected impact on existing users, we only fix this in NextGen
-			// and keep the legacy behavior here for now.
-			readBytes = scanDetail.GetProcessedVersionsSize()
-		}
+		readBytes = scanDetailReadBytes(scanDetail)
 	}
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPU := getKVCPU(detailsV2, details)
 	return &ResponseInfo{
-		readBytes: readBytes,
-		kvCPU:     kvCPU,
+		readBytes: readBytes + batchedReadBytes,
+		kvCPU:     kvCPU + batchedKVCPU,
 		respSize:  uint64(resp.GetSize()),
 	}
+}
+
+// scanDetailReadBytes returns the read bytes a scan detail accounts for.
+func scanDetailReadBytes(scanDetail *kvrpcpb.ScanDetailV2) uint64 {
+	if config.NextGen {
+		// Using the total versions size as the read bytes, which includes not
+		// only processed versions size, but also skipped MVCC versions size.
+		// It can reflect the actual read bytes more accurately, especially for
+		// the request with a large number of MVCC versions.
+		//
+		// For compatibility with older versions of TiKV, if the
+		// processed versions size is greater than the total versions size,
+		// we use the processed versions size as the read bytes.
+		return max(scanDetail.GetTotalVersionsSize(), scanDetail.GetProcessedVersionsSize())
+	}
+	// NOTE: The original design intended to account for all MVCC read
+	// overhead, but TotalVersionsSize did not exist at the time, so
+	// ProcessedVersionsSize was used instead, which only counts the
+	// versions that are actually processed and excludes skipped MVCC
+	// versions. Since this behavior has already been released, switching
+	// to TotalVersionsSize would change the RU calculation. To avoid
+	// unexpected impact on existing users, we only fix this in NextGen
+	// and keep the legacy behavior here for now.
+	return scanDetail.GetProcessedVersionsSize()
 }
 
 // TODO: find out a more accurate way to get the actual KV CPU time.
