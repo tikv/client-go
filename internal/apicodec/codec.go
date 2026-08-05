@@ -70,6 +70,9 @@ type Codec interface {
 	GetKeyspace() []byte
 	// GetKeyspaceID return the keyspace id of the codec.
 	GetKeyspaceID() KeyspaceID
+	// GetKeyspaceOneof returns the cached keyspace oneof wrapper of the codec.
+	// The returned wrapper is shared by all encoded requests and must not be modified.
+	GetKeyspaceOneof() *kvrpcpb.Context_KeyspaceId
 	// GetKeyspaceMeta return the keyspace meta of the codec.
 	GetKeyspaceMeta() *keyspacepb.KeyspaceMeta
 	// EncodeRequest encodes with the given Codec.
@@ -114,7 +117,7 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 
 func setAPICtx(c Codec, r *tikvrpc.Request) {
 	r.ApiVersion = c.GetAPIVersion()
-	r.Keyspace = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(c.GetKeyspaceID())}
+	r.Keyspace = c.GetKeyspaceOneof()
 	keyspaceMeta := c.GetKeyspaceMeta()
 	if keyspaceMeta != nil {
 		r.KeyspaceName = keyspaceMeta.Name

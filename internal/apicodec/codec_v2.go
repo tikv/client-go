@@ -59,6 +59,8 @@ type codecV2 struct {
 	endKey       []byte
 	memCodec     memCodec
 	keyspaceMeta *keyspacepb.KeyspaceMeta
+	// keyspaceID is the cached keyspace oneof wrapper shared by all encoded requests.
+	keyspaceID *kvrpcpb.Context_KeyspaceId
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
@@ -76,6 +78,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 		// Region keys in CodecV2 are always encoded in memory comparable form.
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
+		keyspaceID:   &kvrpcpb.Context_KeyspaceId{KeyspaceId: keyspaceID},
 	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
@@ -115,6 +118,10 @@ func (c *codecV2) GetKeyspace() []byte {
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
 	return KeyspaceID(c.keyspaceMeta.GetId())
+}
+
+func (c *codecV2) GetKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
+	return c.keyspaceID
 }
 
 func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {

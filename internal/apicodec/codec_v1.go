@@ -13,6 +13,8 @@ import (
 type codecV1 struct {
 	reqPool  sync.Pool
 	memCodec memCodec
+	// keyspaceID is the cached keyspace oneof wrapper shared by all encoded requests.
+	keyspaceID *kvrpcpb.Context_KeyspaceId
 }
 
 // NewCodecV1 returns a codec that can be used to encode/decode
@@ -28,6 +30,7 @@ func NewCodecV1(mode Mode) Codec {
 		panic("unknown mode")
 	}
 	codec.reqPool.New = func() any { return &tikvrpc.Request{} }
+	codec.keyspaceID = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(NullspaceID)}
 	return codec
 }
 
@@ -41,6 +44,10 @@ func (c *codecV1) GetKeyspace() []byte {
 
 func (c *codecV1) GetKeyspaceID() KeyspaceID {
 	return NullspaceID
+}
+
+func (c *codecV1) GetKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
+	return c.keyspaceID
 }
 
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
