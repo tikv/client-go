@@ -15,7 +15,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.14.4
 	github.com/tikv/client-go/v2 v2.0.8-0.20260722143820-21361f264883
-	github.com/tikv/pd/client v0.0.0-20260804030910-ba23e721aeb5
+	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.82.1
 )
