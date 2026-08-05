@@ -46,7 +46,7 @@ func (c *codecV1) GetKeyspaceID() KeyspaceID {
 	return NullspaceID
 }
 
-func (c *codecV1) GetKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
+func (c *codecV1) getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
 	return c.keyspaceID
 }
 

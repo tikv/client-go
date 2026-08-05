@@ -120,7 +120,7 @@ func (c *codecV2) GetKeyspaceID() KeyspaceID {
 	return KeyspaceID(c.keyspaceMeta.GetId())
 }
 
-func (c *codecV2) GetKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
+func (c *codecV2) getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
 	return c.keyspaceID
 }
 
