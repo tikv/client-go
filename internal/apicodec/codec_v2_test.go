@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -304,6 +305,16 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 		re.Equal(testCase.expectedPrefix, v2Codec.prefix)
 		re.Equal(testCase.expectedEnd, v2Codec.endKey)
 	}
+}
+
+func (suite *testCodecV2Suite) TestNewCodecV2RejectsKeyspaceIdentity() {
+	re := suite.Require()
+	// API V3 identity must not be silently treated as the default keyspace (ID 0).
+	meta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_KeyspaceIdentity{
+		KeyspaceIdentity: &apipb.KeyspaceIdentity{NamespaceId: 1, KeyspaceId: 2},
+	}}
+	_, err := NewCodecV2(ModeTxn, meta)
+	re.Error(err)
 }
 
 func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {

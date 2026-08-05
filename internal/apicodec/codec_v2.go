@@ -66,6 +66,13 @@ type codecV2 struct {
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
+	if keyspaceMeta.GetKeyspaceIdentity() != nil {
+		// API V3 identifies keyspaces by the complete namespace/keyspace
+		// identity, and a zero numeric ID is invalid there. The V2 codec only
+		// supports the numeric keyspace ID arm, so reject the identity form
+		// instead of silently treating it as the default keyspace (ID 0).
+		return nil, errors.Errorf("unsupported keyspace identity: codec V2 only supports the numeric keyspace ID")
+	}
 	keyspaceID := keyspaceMeta.GetId()
 	if keyspaceID > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
