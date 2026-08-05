@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsCESKeyspaceLevelGC(t *testing.T) {
+func TestIsCSEKeyspaceLevelGC(t *testing.T) {
 	testCases := []struct {
 		name string
 		meta *keyspacepb.KeyspaceMeta
@@ -15,13 +15,13 @@ func TestIsCESKeyspaceLevelGC(t *testing.T) {
 	}{
 		{name: "nil keyspace"},
 		{name: "missing config", meta: &keyspacepb.KeyspaceMeta{}},
-		{name: "CES keyspace-level GC", meta: &keyspacepb.KeyspaceMeta{Config: map[string]string{"safe_point_version": "v2"}}, want: true},
+		{name: "CSE keyspace-level GC", meta: &keyspacepb.KeyspaceMeta{Config: map[string]string{"safe_point_version": "v2"}}, want: true},
 		{name: "case-sensitive version", meta: &keyspacepb.KeyspaceMeta{Config: map[string]string{"safe_point_version": "V2"}}},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, IsCESKeyspaceLevelGC(tc.meta))
+			require.Equal(t, tc.want, IsCSEKeyspaceLevelGC(tc.meta))
 		})
 	}
 }
@@ -42,7 +42,7 @@ func TestCompatibleTxnSafePointPath(t *testing.T) {
 			want: "/keyspaces/tidb/1/tidb/store/gcworker/saved_safe_point",
 		},
 		{
-			name: "CES keyspace-level GC",
+			name: "CSE keyspace-level GC",
 			meta: &keyspacepb.KeyspaceMeta{Id: 2, Config: map[string]string{"safe_point_version": "v2"}},
 			want: "/keyspaces/tidb/2/tidb/store/gcworker/saved_safe_point",
 		},

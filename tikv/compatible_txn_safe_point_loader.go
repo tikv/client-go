@@ -24,14 +24,14 @@ const (
 	keyspaceLevelTxnSafePointPath = "/keyspaces/tidb/%d/tidb/store/gcworker/saved_safe_point"
 )
 
-// IsCESKeyspaceLevelGC reports whether a keyspace uses the CES keyspace-level GC metadata format.
-// TODO: Replace this implementation with pd.IsCESKeyspaceLevelGC after API v3 support is merged into client-go.
-func IsCESKeyspaceLevelGC(keyspaceMeta *keyspacepb.KeyspaceMeta) bool {
+// IsCSEKeyspaceLevelGC reports whether a keyspace uses the CSE keyspace-level GC metadata format.
+// TODO: Replace this implementation with pd.IsCSEKeyspaceLevelGC after API v3 support is merged into client-go.
+func IsCSEKeyspaceLevelGC(keyspaceMeta *keyspacepb.KeyspaceMeta) bool {
 	return keyspaceMeta != nil && keyspaceMeta.Config != nil && keyspaceMeta.Config["safe_point_version"] == "v2"
 }
 
 func compatibleTxnSafePointPath(keyspaceMeta *keyspacepb.KeyspaceMeta) string {
-	if pd.IsKeyspaceUsingKeyspaceLevelGC(keyspaceMeta) || IsCESKeyspaceLevelGC(keyspaceMeta) {
+	if pd.IsKeyspaceUsingKeyspaceLevelGC(keyspaceMeta) || IsCSEKeyspaceLevelGC(keyspaceMeta) {
 		return fmt.Sprintf(keyspaceLevelTxnSafePointPath, keyspaceMeta.Id)
 	}
 	return unifiedTxnSafePointPath
