@@ -540,7 +540,7 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 					Reason:       kvrpcpb.LockUpgradeConflict_DuplicateInFlight,
 				},
 			},
-			validate: func(decoded *kvrpcpb.KeyError) {
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
 				re.Equal([]byte("key1"), decoded.LockUpgradeConflict.Key)
 				re.Equal(uint64(11), decoded.LockUpgradeConflict.StartTs)
 				re.Equal(uint64(22), decoded.LockUpgradeConflict.OwnerStartTs)
