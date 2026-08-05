@@ -118,16 +118,22 @@ var NewCodecPDClient = locate.NewCodecPDClient
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
 var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
 
+// NewCodecPDClientWithKeyspaceIdentity creates a CodecPDClient in API v3 with keyspace identity.
+var NewCodecPDClientWithKeyspaceIdentity = locate.NewCodecPDClientWithKeyspaceIdentity
+
 // NewCodecV1 is a constructor for v1 Codec.
 var NewCodecV1 = apicodec.NewCodecV1
 
 // NewCodecV2 is a constructor for v2 Codec.
 var NewCodecV2 = apicodec.NewCodecV2
 
+// NewCodecV3 is a constructor for v3 Codec.
+var NewCodecV3 = apicodec.NewCodecV3
+
 // Codec is responsible for encode/decode requests.
 type Codec = apicodec.Codec
 
-// DecodeKey is used to split a given key to it's APIv2 prefix and actual key.
+// DecodeKey is used to split a given key to its API keyspace prefix and actual key.
 var DecodeKey = apicodec.DecodeKey
 
 // DefaultKeyspaceID is the keyspaceID of the default keyspace.

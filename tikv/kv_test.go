@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
@@ -33,11 +34,31 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pdhttp "github.com/tikv/pd/client/http"
+	pdopt "github.com/tikv/pd/client/opt"
 )
 
 func TestKV(t *testing.T) {
 	util.EnableFailpoints()
 	suite.Run(t, new(testKVSuite))
+}
+
+func TestBuildPDClientOptionsDisableRouterForAPIV3(t *testing.T) {
+	t.Parallel()
+
+	defaultOptions := pdopt.NewOption()
+	for _, o := range buildPDClientOptions(nil) {
+		o(defaultOptions)
+	}
+	require.True(t, defaultOptions.GetEnableRouterClient())
+
+	apiV3Options := pdopt.NewOption()
+	for _, o := range buildPDClientOptions(&apipb.KeyspaceIdentity{
+		NamespaceId: 1,
+		KeyspaceId:  2,
+	}) {
+		o(apiV3Options)
+	}
+	require.False(t, apiV3Options.GetEnableRouterClient())
 }
 
 type testKVSuite struct {
