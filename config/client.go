@@ -273,6 +273,10 @@ func (config *TiKVClient) Valid() error {
 }
 
 func validateTxnFileConfig(config *TiKVClient) error {
+	if config.TxnChunkWriterAddr == "" {
+		// Skip validation when txn file is not enabled.
+		return nil
+	}
 	if config.TxnChunkMaxSize == 0 {
 		return fmt.Errorf("txn-chunk-max-size should be greater than 0")
 	}

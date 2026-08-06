@@ -93,6 +93,10 @@ func TestValidateGRPCKeepAliveTimeout(t *testing.T) {
 }
 
 func TestValidateTxnFileConfig(t *testing.T) {
+	configWithoutTxnFile := DefaultTiKVClient()
+	configWithoutTxnFile.TxnChunkMaxSize = 0
+	assert.NoError(t, configWithoutTxnFile.Valid())
+
 	maxInt := uint64(math.MaxInt)
 	tests := []struct {
 		name      string
@@ -161,6 +165,7 @@ func TestValidateTxnFileConfig(t *testing.T) {
 				assert.NoError(t, cfg.Valid())
 				return
 			}
+			cfg.TxnChunkWriterAddr = "127.0.0.1"
 			assert.EqualError(t, cfg.Valid(), test.err)
 		})
 	}
