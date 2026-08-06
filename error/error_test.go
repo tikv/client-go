@@ -35,6 +35,34 @@ func TestExtractKeyErrLockUpgradeConflict(t *testing.T) {
 	require.Equal(t, kvrpcpb.LockUpgradeConflict_SecondUpgrader, conflict.Reason)
 }
 
+func TestExtractKeyErrSharedLockLost(t *testing.T) {
+	keyErr := &kvrpcpb.KeyError{
+		SharedLockLost: &kvrpcpb.SharedLockLost{
+			Key:     []byte("key"),
+			StartTs: 101,
+		},
+		Conflict: &kvrpcpb.WriteConflict{
+			StartTs: 101,
+			Reason:  kvrpcpb.WriteConflict_PessimisticRetry,
+		},
+	}
+
+	err := ExtractKeyErr(keyErr)
+	require.Error(t, err)
+	require.False(t, IsErrWriteConflict(err))
+	require.False(t, IsErrorUndetermined(err))
+
+	var retryable *ErrRetryable
+	require.False(t, stderrs.As(err, &retryable))
+	var deadlock *ErrDeadlock
+	require.False(t, stderrs.As(err, &deadlock))
+
+	var lost *ErrSharedLockLost
+	require.ErrorAs(t, err, &lost)
+	require.Equal(t, []byte("key"), lost.Key)
+	require.Equal(t, uint64(101), lost.StartTs)
+}
+
 func TestExtractDebugInfoStrFromKeyErr(t *testing.T) {
 	origRedact := errors.RedactLogEnabled.Load()
 	defer errors.RedactLogEnabled.Store(origRedact)
