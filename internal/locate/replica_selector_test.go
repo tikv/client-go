@@ -2624,50 +2624,48 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 
-	if !config.NextGen {
-		// Stale read never triggers the probe even if busy(0) is received on the leader.
-		ca = replicaSelectorAccessPathCase{
-			reqType:   tikvrpc.CmdGet,
-			readType:  kv.ReplicaReadMixed,
-			staleRead: true,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
-			expect: &accessPathResult{
-				accessPath: []string{
-					"{addr: store1, replica-read: false, stale-read: true}",
-					"{addr: store2, replica-read: false, stale-read: true}",
-					"{addr: store3, replica-read: false, stale-read: true}",
-				},
-				respErr:         "",
-				respRegionError: nil,
-				backoffCnt:      0,
-				backoffDetail:   []string{},
-				regionIsValid:   true,
+	// Stale read never triggers the probe even if busy(0) is received on the leader.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
 			},
-			afterRun: assertNotProbed,
-		}
-		s.True(s.runCaseAndCompare(ca))
-
-		// Follower read never triggers the probe.
-		ca = replicaSelectorAccessPathCase{
-			reqType:   tikvrpc.CmdGet,
-			readType:  kv.ReplicaReadFollower,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
-			expect: &accessPathResult{
-				accessPath: []string{
-					"{addr: store2, replica-read: true, stale-read: false}",
-					"{addr: store3, replica-read: true, stale-read: false}",
-					"{addr: store1, replica-read: false, stale-read: false}",
-				},
-				respErr:         "",
-				respRegionError: nil,
-				backoffCnt:      0,
-				backoffDetail:   []string{},
-				regionIsValid:   true,
-			},
-			afterRun: assertNotProbed,
-		}
-		s.True(s.runCaseAndCompare(ca))
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+		afterRun: assertNotProbed,
 	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Follower read never triggers the probe.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+		afterRun: assertNotProbed,
+	}
+	s.True(s.runCaseAndCompare(ca))
 
 	// Requests with the leaderOnly option never trigger the probe.
 	rc := s.getRegion()
