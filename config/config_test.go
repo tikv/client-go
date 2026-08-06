@@ -112,8 +112,15 @@ func TestValidateTxnFileConfig(t *testing.T) {
 		{
 			name: "maximum chunk size",
 			configure: func(cfg *TiKVClient) {
-				cfg.TxnChunkMaxSize = maxInt
+				cfg.TxnChunkMaxSize = MaxTxnChunkSizeInParallel
 			},
+		},
+		{
+			name: "chunk size exceeds parallel budget",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkMaxSize = 4<<30 + 1
+			},
+			err: fmt.Sprintf("txn-chunk-max-size should not exceed %d, but got %d", uint64(4<<30), uint64(4<<30)+1),
 		},
 		{
 			name: "chunk size exceeds int",

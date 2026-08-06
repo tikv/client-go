@@ -64,9 +64,6 @@ var (
 
 const (
 	PreSplitRegionChunks = 4
-
-	// MaxTxnChunkSizeInParallel is the max parallel size when prewrite/commit txn chunks.
-	MaxTxnChunkSizeInParallel uint64 = 4 << 30 // 4GB
 )
 
 type txnFileCtx struct {
@@ -845,7 +842,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	if rateLim > cnf.CommitterConcurrency {
 		rateLim = cnf.CommitterConcurrency
 	}
-	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	maxChunksInParallel := txnFileMaxChunksInParallel(cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
 	if chunksCount > maxChunksInParallel {
 		rateLim = maxChunksInParallel
 	}
@@ -879,6 +876,14 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 	regionErrChunks.sortAndDedup()
 	return regionErrChunks, err
+}
+
+func txnFileMaxChunksInParallel(txnChunkMaxSize uint64) int {
+	maxChunksInParallel := int(config.MaxTxnChunkSizeInParallel / txnChunkMaxSize)
+	if maxChunksInParallel < 1 {
+		return 1
+	}
+	return maxChunksInParallel
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {

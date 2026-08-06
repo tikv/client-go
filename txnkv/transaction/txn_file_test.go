@@ -58,6 +58,36 @@ func TestTxnFileCleanupContextUsesStoreContext(t *testing.T) {
 	require.Equal(t, uint64(42), cleanupCtx.Value(retry.TxnStartKey))
 }
 
+func TestTxnFileMaxChunksInParallel(t *testing.T) {
+	tests := []struct {
+		name           string
+		chunkMaxSize   uint64
+		expectedResult int
+	}{
+		{
+			name:           "default chunk size",
+			chunkMaxSize:   128 * 1024 * 1024,
+			expectedResult: 32,
+		},
+		{
+			name:           "parallel budget boundary",
+			chunkMaxSize:   config.MaxTxnChunkSizeInParallel,
+			expectedResult: 1,
+		},
+		{
+			name:           "chunk size exceeds parallel budget",
+			chunkMaxSize:   config.MaxTxnChunkSizeInParallel + 1,
+			expectedResult: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expectedResult, txnFileMaxChunksInParallel(test.chunkMaxSize))
+		})
+	}
+}
+
 type txnFileCommitTSOracle struct {
 	unimplementedOracle
 
