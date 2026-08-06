@@ -957,16 +957,23 @@ func TestUseTxnFileExcludesPipelinedTxn(t *testing.T) {
 	require.False(t, useTxnFile)
 }
 
-// stubKVStore implements kvstore with only GetRegionCache returning a real
-// RegionCache backed by the mock PD client. All other methods panic because
+// stubKVStore implements kvstore with only GetRegionCache and split-call
+// recording backed by the mock PD client. All other methods panic because
 // buildTxnFiles does not call them.
 type stubKVStore struct {
-	regionCache *locate.RegionCache
+	regionCache              *locate.RegionCache
+	splitRegionsCalls        atomic.Uint32
+	splitTxnFileRegionsCalls atomic.Uint32
 }
 
 func (s *stubKVStore) GetRegionCache() *locate.RegionCache { return s.regionCache }
 func (s *stubKVStore) SplitRegions(_ context.Context, _ [][]byte, _ bool, _ *int64) ([]uint64, error) {
-	panic("not implemented")
+	s.splitRegionsCalls.Add(1)
+	panic("unexpected generic split path")
+}
+func (s *stubKVStore) SplitTxnFileRegions(_ context.Context, _ [][]byte) error {
+	s.splitTxnFileRegionsCalls.Add(1)
+	return nil
 }
 func (s *stubKVStore) WaitScatterRegionFinish(_ context.Context, _ uint64, _ int) error {
 	panic("not implemented")
@@ -987,6 +994,41 @@ func (s *stubKVStore) TxnLatches() *latch.LatchesScheduler    { panic("not imple
 func (s *stubKVStore) GetClusterID() uint64                   { return 0 }
 func (s *stubKVStore) IsClose() bool                          { return false }
 func (s *stubKVStore) Go(_ func()) error                      { panic("not implemented") }
+
+func TestPreSplitTxnFileRegionsUsesDedicatedSplitPath(t *testing.T) {
+	// Given
+	txn := newTestTxn(t, 1)
+	for i := 1; i <= 5; i++ {
+		require.NoError(t, txn.Set([]byte(fmt.Sprintf("k%d", i)), []byte("v")))
+	}
+	committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+	require.NoError(t, err)
+	require.NoError(t, committer.initKeysAndMutations(context.Background()))
+
+	store := &stubKVStore{regionCache: txn.store.cache}
+	committer.store = store
+	slice := txnChunkSlice{
+		chunkIDs: []uint64{1, 2, 3, 4, 5},
+		chunkRanges: []txnChunkRange{
+			newTxnChunkRange([]byte("k1"), []byte("k1"), 1),
+			newTxnChunkRange([]byte("k2"), []byte("k2"), 1),
+			newTxnChunkRange([]byte("k3"), []byte("k3"), 1),
+			newTxnChunkRange([]byte("k4"), []byte("k4"), 1),
+			newTxnChunkRange([]byte("k5"), []byte("k5"), 1),
+		},
+	}
+	committer.txnFileCtx = txnFileCtx{slice: slice}
+
+	// When
+	require.NotPanics(t, func() {
+		err = committer.preSplitTxnFileRegions(retry.NewBackoffer(context.Background(), 1000))
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), store.splitTxnFileRegionsCalls.Load())
+	require.Equal(t, uint32(0), store.splitRegionsCalls.Load())
+}
 
 func TestBuildTxnFilesEntryCounting(t *testing.T) {
 	require := require.New(t)

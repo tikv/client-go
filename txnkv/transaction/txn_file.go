@@ -1220,7 +1220,7 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	if len(splitKeys) == 0 {
 		return nil
 	}
-	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
+	err = c.store.SplitTxnFileRegions(bo.GetCtx(), splitKeys)
 	return errors.Wrap(err, "pre split regions failed")
 }
 

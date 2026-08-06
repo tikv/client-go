@@ -98,6 +98,8 @@ type kvstore interface {
 	GetRegionCache() *locate.RegionCache
 	// SplitRegions splits regions by splitKeys.
 	SplitRegions(ctx context.Context, splitKeys [][]byte, scatter bool, tableID *int64) (regionIDs []uint64, err error)
+	// SplitTxnFileRegions splits regions for file-based transactions and resolves locks encountered by TiKV.
+	SplitTxnFileRegions(ctx context.Context, splitKeys [][]byte) error
 	// WaitScatterRegionFinish implements SplittableStore interface.
 	// backOff is the back off time of the wait scatter region.(Milliseconds)
 	// if backOff <= 0, the default wait scatter back off time will be used.
