@@ -1033,6 +1033,12 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 			}
 		}
 	}
+	if keyError.SharedLockLost != nil {
+		keyError.SharedLockLost.Key, err = c.DecodeKey(keyError.SharedLockLost.Key)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if keyError.LockUpgradeConflict != nil {
 		keyError.LockUpgradeConflict.Key, err = c.DecodeKey(keyError.LockUpgradeConflict.Key)
 		if err != nil {
