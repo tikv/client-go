@@ -690,6 +690,10 @@ func (s step) String() string {
 	return fmt.Sprintf("%s:%s", s.name, s.dur.String())
 }
 
+func txnFileCleanupContext(storeCtx, txnCtx context.Context) context.Context {
+	return context.WithValue(storeCtx, retry.TxnStartKey, txnCtx.Value(retry.TxnStartKey))
+}
+
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if val, err := util.EvalFailpoint("injectErrorOnExecTxnFile"); err == nil {
 		errVal := val.(string)
@@ -724,7 +728,8 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		c.mu.RUnlock()
 		if !committed && !undetermined {
 			if c.txnFileCtx.slice.Len() > 0 {
-				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+				cleanupCtx := txnFileCleanupContext(c.store.Ctx(), ctx)
+				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(cleanupCtx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
 					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
 				}

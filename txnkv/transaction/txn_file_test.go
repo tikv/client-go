@@ -48,6 +48,16 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
+func TestTxnFileCleanupContextUsesStoreContext(t *testing.T) {
+	transactionCtx := context.WithValue(context.Background(), retry.TxnStartKey, uint64(42))
+	cancelledCtx, cancel := context.WithCancel(transactionCtx)
+	cleanupCtx := txnFileCleanupContext(context.Background(), cancelledCtx)
+	cancel()
+
+	require.NoError(t, cleanupCtx.Err())
+	require.Equal(t, uint64(42), cleanupCtx.Value(retry.TxnStartKey))
+}
+
 type txnFileCommitTSOracle struct {
 	unimplementedOracle
 
