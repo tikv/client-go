@@ -27,10 +27,12 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/intest"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -164,6 +166,32 @@ func (s *testKVSuite) TestMinSafeTsFromStores() {
 	ok, ts := s.store.getSafeTS(s.tikvStoreID)
 	s.Require().True(ok)
 	s.Require().Equal(mockClient.tikvSafeTs, ts)
+}
+
+func (s *testKVSuite) TestHandleSplitRegionKeyErrorsExpandsSharedLockHolders() {
+	var observed []*txnlock.Lock
+	resolver := txnlock.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func(locks []*txnlock.Lock) {
+		observed = locks
+		panic("captured shared locks")
+	})
+	keyErrs := []*kvrpcpb.KeyError{{
+		Locked: &kvrpcpb.LockInfo{
+			Key:      []byte("k"),
+			LockType: kvrpcpb.Op_SharedLock,
+			SharedLockInfos: []*kvrpcpb.LockInfo{
+				{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_PessimisticLock},
+				{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_Lock},
+			},
+		},
+	}}
+
+	require.PanicsWithValue(s.T(), "captured shared locks", func() {
+		_ = s.store.handleSplitRegionKeyErrors(retry.NewBackoffer(context.Background(), 1000), keyErrs)
+	})
+	require.Len(s.T(), observed, 2)
+	require.Equal(s.T(), kvrpcpb.Op_PessimisticLock, observed[0].LockType)
+	require.Equal(s.T(), kvrpcpb.Op_Lock, observed[1].LockType)
 }
 
 func (s *testKVSuite) TestMinSafeTsFromStoresWithAllZeros() {

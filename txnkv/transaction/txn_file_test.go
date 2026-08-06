@@ -76,6 +76,7 @@ type txnFileCommitTSStore struct {
 	oracle         *txnFileCommitTSOracle
 	regionCache    *locate.RegionCache
 	client         client.Client
+	lockResolver   *txnlock.LockResolver
 }
 
 func (s *txnFileCommitTSStore) GetTimestampWithRetry(bo *retry.Backoffer, _ string) (uint64, error) {
@@ -102,6 +103,10 @@ func (s *txnFileCommitTSStore) GetRegionCache() *locate.RegionCache {
 
 func (s *txnFileCommitTSStore) GetTiKVClient() client.Client {
 	return s.client
+}
+
+func (s *txnFileCommitTSStore) GetLockResolver() *txnlock.LockResolver {
+	return s.lockResolver
 }
 
 type txnFileSchemaVer int64
@@ -388,6 +393,8 @@ func newTxnFileCommitTestBatch(
 		regionCache: regionCache,
 		client:      &fnClient{onSend: onSend},
 	}
+	store.lockResolver = txnlock.NewLockResolver(store)
+	t.Cleanup(store.lockResolver.Close)
 	committer := newTxnFileCommitTSTestCommitter(store, &txnFileSchemaLeaseChecker{}, nil)
 	committer.commitTS = 2
 
@@ -421,6 +428,34 @@ func TestTxnFilePrewriteUsesPrimaryKey(t *testing.T) {
 	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
 
 	require.NoError(t, err)
+}
+
+func TestTxnFilePrewriteExpandsSharedLockHolders(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, _ *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{Errors: []*kvrpcpb.KeyError{{
+			Locked: &kvrpcpb.LockInfo{
+				Key:      []byte("k"),
+				LockType: kvrpcpb.Op_SharedLock,
+				SharedLockInfos: []*kvrpcpb.LockInfo{
+					{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_PessimisticLock},
+					{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_Lock},
+				},
+			},
+		}}}}, nil
+	})
+	var observed []*txnlock.Lock
+	resolver := txnlock.LockResolverProbe{LockResolver: committer.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func(locks []*txnlock.Lock) {
+		observed = locks
+		panic("captured shared locks")
+	})
+
+	require.PanicsWithValue(t, "captured shared locks", func() {
+		_, _ = (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+	})
+	require.Len(t, observed, 2)
+	require.Equal(t, kvrpcpb.Op_PessimisticLock, observed[0].LockType)
+	require.Equal(t, kvrpcpb.Op_Lock, observed[1].LockType)
 }
 
 func TestTxnFilePrimaryBatchIndexFindsPrimaryRegion(t *testing.T) {

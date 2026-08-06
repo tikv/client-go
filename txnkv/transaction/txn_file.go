@@ -411,32 +411,29 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 				return nil, c.extractKeyExistsErr(e)
 			}
 
-			// Extract lock from key error
-			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+			locksFromKeyErr, err1 := txnlock.ExtractLocksFromKeyErr(keyErr)
 			if err1 != nil {
 				return nil, err1
 			}
-			logutil.Logger(bo.GetCtx()).Info(
-				"prewrite txn file encounters lock",
-				zap.Uint64("session", c.sessionID),
-				zap.Uint64("txnID", c.startTS),
-				zap.Stringer("lock", lock),
-			)
-			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
-			// fail due to a WriteConflict error. So we can construct and return an error here early.
-			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
-			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
-			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-			if lock.TxnID > c.startTS {
-				return nil, tikverr.NewErrWriteConflictWithArgs(
-					c.startTS,
-					lock.TxnID,
-					0,
-					lock.Key,
-					kvrpcpb.WriteConflict_Optimistic,
+			for _, lock := range locksFromKeyErr {
+				logutil.Logger(bo.GetCtx()).Info(
+					"prewrite txn file encounters lock",
+					zap.Uint64("session", c.sessionID),
+					zap.Uint64("txnID", c.startTS),
+					zap.Stringer("lock", lock),
 				)
+				if (lock.TxnID > c.startTS && !c.isPessimistic) ||
+					c.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+					return nil, tikverr.NewErrWriteConflictWithArgs(
+						c.startTS,
+						lock.TxnID,
+						0,
+						lock.Key,
+						kvrpcpb.WriteConflict_Optimistic,
+					)
+				}
+				locks = append(locks, lock)
 			}
-			locks = append(locks, lock)
 		}
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
@@ -446,9 +443,10 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
 		resolveLockOpts := txnlock.ResolveLocksOptions{
-			CallerStartTS: c.startTS,
-			Locks:         locks,
-			Detail:        &c.getDetail().ResolveLock,
+			CallerStartTS:            c.startTS,
+			Locks:                    locks,
+			Detail:                   &c.getDetail().ResolveLock,
+			PessimisticRegionResolve: true,
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
@@ -893,18 +891,20 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
 			return nil, c.extractKeyExistsErr(e)
 		}
-		lock, err2 := txnlock.ExtractLockFromKeyErr(keyErr)
+		locks, err2 := txnlock.ExtractLocksFromKeyErr(keyErr)
 		if err2 != nil {
 			return nil, err2
 		}
-		if lock.TxnID > c.startTS {
-			return nil, tikverr.NewErrWriteConflictWithArgs(
-				c.startTS,
-				lock.TxnID,
-				0,
-				lock.Key,
-				kvrpcpb.WriteConflict_Optimistic,
-			)
+		for _, lock := range locks {
+			if lock.TxnID > c.startTS {
+				return nil, tikverr.NewErrWriteConflictWithArgs(
+					c.startTS,
+					lock.TxnID,
+					0,
+					lock.Key,
+					kvrpcpb.WriteConflict_Optimistic,
+				)
+			}
 		}
 	}
 	regionErr, err1 := resp.GetRegionError()

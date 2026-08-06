@@ -244,21 +244,24 @@ func (s *KVStore) handleSplitRegionKeyErrors(bo *Backoffer, keyErrs []*kvrpcpb.K
 		startTS uint64 = math.MaxUint64 // Set as MaxUint64 and check txn status will not push the minCommiTS.
 	)
 	for _, keyErr := range keyErrs {
-		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+		locksFromKeyErr, err1 := txnlock.ExtractLocksFromKeyErr(keyErr)
 		if err1 != nil {
 			// Split region should return key error of locked only.
 			return err1
 		}
-		logutil.Logger(bo.GetCtx()).Info("split region encounters lock", zap.Stringer("lock", lock))
-		locks = append(locks, lock)
+		for _, lock := range locksFromKeyErr {
+			logutil.Logger(bo.GetCtx()).Info("split region encounters lock", zap.Stringer("lock", lock))
+			locks = append(locks, lock)
+		}
 	}
 
 	token := s.GetLockResolver().RecordResolvingLocks(locks, startTS)
 	defer s.GetLockResolver().ResolveLocksDone(startTS, token)
 
 	resolveLockOpts := txnlock.ResolveLocksOptions{
-		CallerStartTS: startTS,
-		Locks:         locks,
+		CallerStartTS:            startTS,
+		Locks:                    locks,
+		PessimisticRegionResolve: true,
 	}
 	resolveLockRes, err := s.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 	if err != nil {
