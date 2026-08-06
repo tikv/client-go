@@ -860,6 +860,23 @@ func TestIsRequestSourceUseTxnFile(t *testing.T) {
 	}
 }
 
+func TestUseTxnFileExcludesPipelinedTxn(t *testing.T) {
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	txn := newTestTxn(t, 1)
+	txn.isPipelined = true
+	committer := &twoPhaseCommitter{txn: txn.KVTxn}
+
+	useTxnFile, err := committer.useTxnFile(context.Background())
+
+	require.NoError(t, err)
+	require.False(t, useTxnFile)
+}
+
 // stubKVStore implements kvstore with only GetRegionCache returning a real
 // RegionCache backed by the mock PD client. All other methods panic because
 // buildTxnFiles does not call them.
