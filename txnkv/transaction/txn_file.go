@@ -332,7 +332,7 @@ type txnFilePrewriteAction struct{}
 var _ txnFileAction = (*txnFilePrewriteAction)(nil)
 
 func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
-	primaryLock := c.txnFileCtx.slice.chunkRanges[0].smallest
+	primaryLock := c.primary()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
 		StartVersion:   c.startTS,
 		PrimaryLock:    primaryLock,
@@ -976,12 +976,28 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 	return nil, nil
 }
 
+func (c *twoPhaseCommitter) txnFilePrimaryBatchIndex(batches []chunkBatch) (int, error) {
+	primary := c.primary()
+	for i := range batches {
+		if batches[i].region.Contains(primary) {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("txn file: primary out of batches")
+}
+
 func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) error {
 	for {
 		batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
 			return errors.Wrap(err, "txn file: group to batches failed")
 		}
+
+		primaryBatchIndex, err := c.txnFilePrimaryBatchIndex(batches)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		batches[0], batches[primaryBatchIndex] = batches[primaryBatchIndex], batches[0]
 
 		regionErr, err := c.executeTxnFilePrimaryBatch(bo, batches[0], action)
 		if err != nil {

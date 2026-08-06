@@ -411,6 +411,31 @@ func newTxnFileCommitTestBatch(
 	return committer, bo, batch
 }
 
+func TestTxnFilePrewriteUsesPrimaryKey(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		require.Equal(t, []byte("primary"), req.Prewrite().PrimaryLock)
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+	})
+	committer.primaryKey = []byte("primary")
+
+	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+}
+
+func TestTxnFilePrimaryBatchIndexFindsPrimaryRegion(t *testing.T) {
+	committer := &twoPhaseCommitter{primaryKey: []byte("primary")}
+	batches := []chunkBatch{
+		{region: &locate.KeyLocation{EndKey: []byte("primary")}},
+		{region: &locate.KeyLocation{StartKey: []byte("primary")}},
+	}
+
+	index, err := committer.txnFilePrimaryBatchIndex(batches)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, index)
+}
+
 func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
 	tests := []struct {
 		name        string
