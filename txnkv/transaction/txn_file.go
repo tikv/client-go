@@ -75,9 +75,10 @@ type txnFileCtx struct {
 
 type chunkBatch struct {
 	txnChunkSlice
-	region     *locate.KeyLocation
-	sampleKeys [][]byte
-	isPrimary  bool
+	region         *locate.KeyLocation
+	firstKey       []byte
+	sampleDataKeys [][]byte
+	isPrimary      bool
 }
 
 func (b chunkBatch) String() string {
@@ -85,8 +86,8 @@ func (b chunkBatch) String() string {
 		b.region.Region.GetID(), b.isPrimary, b.chunkIDs)
 }
 
-func (b *chunkBatch) getSampleKeys() [][]byte {
-	return b.sampleKeys
+func (b *chunkBatch) getSampleDataKeys() [][]byte {
+	return b.sampleDataKeys
 }
 
 func (b *chunkBatch) getBatchTxnSize() uint64 {
@@ -112,15 +113,18 @@ func (c *twoPhaseCommitter) applyTxnFileResourceGroupTagger(req *tikvrpc.Request
 	}
 }
 
-func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, sampleKeys [][]byte) {
-	// Note: Batches containing only non-write operations have no sample key, so dynamic tagging is skipped.
-	if len(sampleKeys) == 0 || c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
+func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, firstKey []byte) {
+	if c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
 		return
 	}
 
 	prewrite := req.Prewrite()
+	mutations := make([]*kvrpcpb.Mutation, 0, 1)
+	if len(firstKey) > 0 {
+		mutations = append(mutations, &kvrpcpb.Mutation{Key: slices.Clone(firstKey)})
+	}
 	tagReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
-		Mutations:      []*kvrpcpb.Mutation{{Key: slices.Clone(sampleKeys[0])}},
+		Mutations:      mutations,
 		PrimaryLock:    slices.Clone(prewrite.PrimaryLock),
 		StartVersion:   prewrite.StartVersion,
 		LockTtl:        prewrite.LockTtl,
@@ -215,26 +219,31 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	for i, chunkRange := range cs.chunkRanges {
 		chunkID := cs.chunkIDs[i]
 
-		regions, firstKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
+		regions, firstKeys, firstDataKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 
 		for j, r := range regions {
 			firstKey := firstKeys[j]
+			firstDataKey := firstDataKeys[j]
 
 			bk := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
 			if batchMap[bk] == nil {
 				batchMap[bk] = &chunkBatch{
-					region:     r,
-					sampleKeys: make([][]byte, 0, 1),
+					region:         r,
+					firstKey:       firstKey,
+					sampleDataKeys: make([][]byte, 0, 1),
 				}
 			}
 
 			batch := batchMap[bk]
+			if len(batch.firstKey) == 0 {
+				batch.firstKey = firstKey
+			}
 			batch.append(chunkID, chunkRange)
-			if len(firstKey) > 0 {
-				batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			if len(firstDataKey) > 0 {
+				batch.sampleDataKeys = append(batch.sampleDataKeys, firstDataKey)
 			}
 		}
 	}
@@ -280,18 +289,19 @@ func newTxnChunkRange(smallest []byte, biggest []byte, entries uint64) txnChunkR
 	}
 }
 
-func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, error) {
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, [][]byte, error) {
 	regions := make([]*locate.KeyLocation, 0)
 	firstKeys := make([][]byte, 0)
+	firstDataKeys := make([][]byte, 0)
 	startKey := r.smallest
 	exclusiveBiggest := kv.NextKey(r.biggest)
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", redact.Key(startKey)))
-			return nil, nil, errors.Wrap(err, "locate key failed")
+			return nil, nil, nil, errors.Wrap(err, "locate key failed")
 		}
-		firstKey, ok := MutationsHasDataInRange(
+		firstKey, firstDataKey, ok := MutationsHasDataInRange(
 			mutations,
 			util.GetMaxStartKey(r.smallest, loc.StartKey),
 			util.GetMinEndKey(exclusiveBiggest, loc.EndKey),
@@ -299,13 +309,14 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 		if ok {
 			regions = append(regions, loc)
 			firstKeys = append(firstKeys, firstKey)
+			firstDataKeys = append(firstDataKeys, firstDataKey)
 		}
 		if len(loc.EndKey) == 0 {
 			break
 		}
 		startKey = loc.EndKey
 	}
-	return regions, firstKeys, nil
+	return regions, firstKeys, firstDataKeys, nil
 }
 
 type txnFileAction interface {
@@ -342,7 +353,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	c.applyTxnFilePrewriteResourceGroupTagger(req, batch.sampleKeys)
+	c.applyTxnFilePrewriteResourceGroupTagger(req, batch.firstKey)
 	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
@@ -375,8 +386,8 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			if regionErr.GetDiskFull() != nil {
 				return resp, errors.New(regionErr.String())
 			}
-			if len(batch.sampleKeys) > 0 {
-				loc, err := c.store.GetRegionCache().LocateKey(bo, batch.sampleKeys[0])
+			if len(batch.sampleDataKeys) > 0 {
+				loc, err := c.store.GetRegionCache().LocateKey(bo, batch.sampleDataKeys[0])
 				if err != nil {
 					return nil, err
 				}
@@ -517,7 +528,7 @@ func (c *twoPhaseCommitter) prepareTxnFileCommitTS(bo *retry.Backoffer) (uint64,
 
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
+		Keys:          batch.getSampleDataKeys(), // To help detect duplicated request.
 		StartVersion:  c.startTS,
 		CommitVersion: c.commitTS,
 		IsTxnFile:     true,
@@ -631,7 +642,7 @@ var _ txnFileAction = (*txnFileRollbackAction)(nil)
 
 func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
-		Keys:         batch.getSampleKeys(), // To help detect duplicated request.
+		Keys:         batch.getSampleDataKeys(), // To help detect duplicated request.
 		StartVersion: c.startTS,
 		IsTxnFile:    true,
 	}, kvrpcpb.Context{

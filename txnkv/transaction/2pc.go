@@ -340,10 +340,9 @@ type CommitterMutations interface {
 	NeedConstraintCheckInPrewrite(i int) bool
 }
 
-// MutationsHasDataInRange returns whether mutations has data in the range [start, end).
-// If it has, it returns the primary or first write key in the range.
-// Note that the firstDataKey can be empty when the range contains only non-write ops (and not the primary at pos 0).
-func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte /* firstDataKey */, bool) {
+// MutationsHasDataInRange returns the first mutation key and first data key in [start, end).
+// The first data key is the primary or first write key, and can be nil when the range only contains non-write operations.
+func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) (firstKey, firstDataKey []byte, ok bool) {
 	isInRange := func(pos int) bool {
 		return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
 	}
@@ -356,23 +355,20 @@ func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []b
 	pos := sort.Search(mutations.Len(), func(i int) bool {
 		return bytes.Compare(mutations.GetKey(i), start) >= 0
 	})
-	if isInRange(pos) {
-		var firstDataKey []byte
-		for {
-			// Always return primary key if it's in the range.
-			if pos == 0 || isOpForWrite(mutations.GetOp(pos)) {
-				firstDataKey = mutations.GetKey(pos)
-				break
-			}
-
-			pos++
-			if !isInRange(pos) {
-				break
-			}
-		}
-		return firstDataKey, true
+	if !isInRange(pos) {
+		return nil, nil, false
 	}
-	return nil, false
+
+	firstKey = mutations.GetKey(pos)
+	for isInRange(pos) {
+		// Always return primary key if it's in the range.
+		if pos == 0 || isOpForWrite(mutations.GetOp(pos)) {
+			firstDataKey = mutations.GetKey(pos)
+			break
+		}
+		pos++
+	}
+	return firstKey, firstDataKey, true
 }
 
 // PlainMutations contains transaction operations.

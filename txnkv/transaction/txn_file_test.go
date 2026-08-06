@@ -294,9 +294,10 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 				biggest:  []byte("k"),
 			}},
 		},
-		region:     location,
-		sampleKeys: [][]byte{[]byte("k")},
-		isPrimary:  true,
+		region:         location,
+		sampleDataKeys: [][]byte{[]byte("k")},
+		firstKey:       []byte("k"),
+		isPrimary:      true,
 	}
 
 	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
@@ -401,9 +402,10 @@ func newTxnFileCommitTestBatch(
 				biggest:  []byte("k"),
 			}},
 		},
-		region:     location,
-		sampleKeys: [][]byte{[]byte("k")},
-		isPrimary:  true,
+		region:         location,
+		sampleDataKeys: [][]byte{[]byte("k")},
+		firstKey:       []byte("k"),
+		isPrimary:      true,
 	}
 	committer.txnFileCtx = txnFileCtx{slice: batch.txnChunkSlice}
 	return committer, bo, batch
@@ -473,14 +475,14 @@ func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
 				case tikvrpc.CmdPrewrite:
 					prewrite := req.Prewrite()
 					require.Len(t, prewrite.Mutations, 1)
-					require.Equal(t, batch.sampleKeys[0], prewrite.Mutations[0].Key)
+					require.Equal(t, batch.firstKey, prewrite.Mutations[0].Key)
 					prewrite.PrimaryLock[0] = 'x'
 					prewrite.TxnFileChunks[0] = 99
 					req.ResourceControlContext.ResourceGroupName = "tagger-mutated"
 				case tikvrpc.CmdCommit:
-					require.Equal(t, batch.sampleKeys, req.Commit().Keys)
+					require.Equal(t, batch.sampleDataKeys, req.Commit().Keys)
 				case tikvrpc.CmdBatchRollback:
-					require.Equal(t, batch.sampleKeys, req.BatchRollback().Keys)
+					require.Equal(t, batch.sampleDataKeys, req.BatchRollback().Keys)
 				}
 				req.ResourceGroupTag = []byte("dynamic-tag")
 			}
@@ -547,22 +549,45 @@ func TestTxnFileActionsPreserveStaticResourceGroupTag(t *testing.T) {
 	}
 }
 
-func TestTxnFilePrewriteTaggerSkipsBatchWithoutSampleKeys(t *testing.T) {
+func TestTxnFilePrewriteTaggerUsesFirstKeyWithoutSampleDataKeys(t *testing.T) {
 	taggerCalls := 0
 	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
 		require.Empty(t, req.ResourceGroupTag)
 		require.Empty(t, req.Prewrite().Mutations)
 		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
 	})
-	batch.sampleKeys = nil
-	committer.resourceGroupTagger = func(*tikvrpc.Request) {
+	batch.sampleDataKeys = nil
+	committer.resourceGroupTagger = func(req *tikvrpc.Request) {
 		taggerCalls++
+		require.Len(t, req.Prewrite().Mutations, 1)
+		require.Equal(t, batch.firstKey, req.Prewrite().Mutations[0].Key)
 	}
 
 	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
 
 	require.NoError(t, err)
-	require.Zero(t, taggerCalls)
+	require.Equal(t, 1, taggerCalls)
+}
+
+func TestTxnFilePrewriteTaggerAppliesWithoutFirstKey(t *testing.T) {
+	taggerCalls := 0
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		require.Equal(t, []byte("metadata-tag"), req.ResourceGroupTag)
+		require.Empty(t, req.Prewrite().Mutations)
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+	})
+	batch.firstKey = nil
+	batch.sampleDataKeys = nil
+	committer.resourceGroupTagger = func(req *tikvrpc.Request) {
+		taggerCalls++
+		require.Empty(t, req.Prewrite().Mutations)
+		req.ResourceGroupTag = []byte("metadata-tag")
+	}
+
+	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, taggerCalls)
 }
 
 func TestTxnFileCommitPrimaryRPCErrorMarksResultUndetermined(t *testing.T) {
