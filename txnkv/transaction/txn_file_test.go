@@ -79,6 +79,11 @@ func TestTxnFileMaxChunksInParallel(t *testing.T) {
 			chunkMaxSize:   config.MaxTxnChunkSizeInParallel + 1,
 			expectedResult: 1,
 		},
+		{
+			name:           "zero chunk size",
+			chunkMaxSize:   0,
+			expectedResult: 1,
+		},
 	}
 
 	for _, test := range tests {

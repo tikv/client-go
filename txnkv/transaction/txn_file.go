@@ -749,7 +749,13 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
 
-	rcInterceptor := client.ResourceControlInterceptor.Load()
+	rcReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{
+		RequestSource: c.txn.GetRequestSource(),
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: c.resourceGroupName,
+		},
+	})
+	_, rcInterceptor, _ := client.GetResourceControlInfo(buildBo.GetCtx(), rcReq)
 	var ruDetails *util.RUDetails
 	if detail := ctx.Value(util.RUDetailsCtxKey); detail != nil {
 		ruDetails = detail.(*util.RUDetails)
@@ -879,6 +885,9 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 }
 
 func txnFileMaxChunksInParallel(txnChunkMaxSize uint64) int {
+	if txnChunkMaxSize == 0 {
+		return 1
+	}
 	maxChunksInParallel := int(config.MaxTxnChunkSizeInParallel / txnChunkMaxSize)
 	if maxChunksInParallel < 1 {
 		return 1
@@ -1217,7 +1226,7 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 
 func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	bo *retry.Backoffer,
-	rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor,
+	rcInterceptor resourceControlClient.ResourceGroupKVInterceptor,
 	ruDetails *util.RUDetails,
 ) (*resourcecontrol.RequestInfo, error) {
 	if rcInterceptor == nil {
@@ -1268,7 +1277,7 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		false,
 	)
 
-	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := (*rcInterceptor).OnRequestWait(ctx, c.resourceGroupName, reqInfo)
+	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(ctx, c.resourceGroupName, reqInfo)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -1280,13 +1289,13 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	return reqInfo, nil
 }
 
-func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
+func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
 	if rcInterceptor == nil {
 		return nil
 	}
 
 	respInfo := &resourcecontrol.ResponseInfo{}
-	consumption, err := (*rcInterceptor).OnResponse(c.resourceGroupName, reqInfo, respInfo)
+	consumption, err := rcInterceptor.OnResponse(c.resourceGroupName, reqInfo, respInfo)
 	if err != nil {
 		return errors.WithStack(err)
 	}
