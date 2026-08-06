@@ -151,6 +151,7 @@ type twoPhaseCommitter struct {
 	mu struct {
 		sync.RWMutex
 		undeterminedErr error // undeterminedErr saves the rpc error we encounter when commit primary key.
+		fatalTxnErr     error
 		committed       bool
 	}
 	syncLog bool
@@ -2449,6 +2450,23 @@ func (c *twoPhaseCommitter) getUndeterminedErr() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mu.undeterminedErr
+}
+
+func (c *twoPhaseCommitter) setFatalTxnErr(err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.fatalTxnErr == nil {
+		c.mu.fatalTxnErr = err
+	}
+}
+
+func (c *twoPhaseCommitter) getTxnStateErrs() (error, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.undeterminedErr, c.mu.fatalTxnErr
 }
 
 func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
