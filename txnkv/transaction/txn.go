@@ -1515,8 +1515,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 	memBuf := txn.us.GetMemBuffer()
 	for _, key := range keys {
 		valExists := true
-		keyStr := string(key)
-		if val, ok := lockCtx.Values[keyStr]; ok {
+		if val, ok := lockCtx.Values[string(key)]; ok {
 			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
 				if !val.Exists {
 					valExists = false
