@@ -87,7 +87,13 @@ func GetKeyspaceID(client pd.Client, name string) (uint32, error) {
 	if meta.State != keyspacepb.KeyspaceState_ENABLED {
 		return 0, errors.Errorf("keyspace %s not enabled", name)
 	}
-	return meta.Id, nil
+	if meta.GetKeyspaceIdentity() != nil {
+		// API V3 identifies keyspaces by the complete namespace/keyspace
+		// identity; there is no standalone numeric ID, so a zero ID must not
+		// be reported silently.
+		return 0, errors.Errorf("keyspace %s uses an API V3 keyspace identity, which is not supported", name)
+	}
+	return meta.GetId(), nil
 }
 
 // GetKeyspaceMeta attempts to retrieve keyspace meta corresponding to the given keyspace name from PD.

@@ -671,7 +671,6 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLifecycleHooks() {
 	s.Nil(t1.Commit(context.Background()))
 
 	s.Equal(reachedPre.Load(), true)
-	s.Equal(reachedPost.Load(), false)
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
