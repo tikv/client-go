@@ -518,6 +518,19 @@ func TestTxnFilePrimaryBatchIndexFindsPrimaryRegion(t *testing.T) {
 	require.Equal(t, 1, index)
 }
 
+func TestTxnFilePrimaryRollbackPropagatesKeyError(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{Error: &kvrpcpb.KeyError{
+			Abort: "primary rollback failed",
+		}}}, nil
+	})
+
+	regionErr, err := committer.executeTxnFilePrimaryBatch(bo, batch, txnFileRollbackAction{})
+
+	require.Nil(t, regionErr)
+	require.ErrorContains(t, err, "session 7 txn file cleanup failed")
+}
+
 func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
 	tests := []struct {
 		name        string

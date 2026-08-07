@@ -659,6 +659,13 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 	if err1 != nil {
 		return nil, err1
 	}
+	if keyErr := resp.Resp.(*kvrpcpb.BatchRollbackResponse).GetError(); keyErr != nil {
+		err := errors.Errorf("session %d txn file cleanup failed: %s", c.sessionID, keyErr)
+		logutil.BgLogger().Debug("txn file failed cleanup key",
+			zap.Error(err),
+			zap.Uint64("txnStartTS", c.startTS))
+		return nil, err
+	}
 	return resp, nil
 }
 
