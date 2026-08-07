@@ -1175,7 +1175,6 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 		// Relax the requirement for internal requests.
 		minMutationSize = minMutationSize / 2
 	}
-
 	if c.txn.isPessimistic ||
 		c.txn.isPipelined ||
 		c.hasSharedLocks ||
@@ -1183,6 +1182,14 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize ||
 		!IsRequestSourceUseTxnFile(c.txn.RequestSource, conf) {
 		return false, nil
+	}
+	if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
+		// Txn-file chunks do not preserve per-mutation assertions.
+		for i := 0; i < c.mutations.Len(); i++ {
+			if c.mutations.IsAssertExists(i) || c.mutations.IsAssertNotExist(i) {
+				return false, nil
+			}
+		}
 	}
 
 	logutil.Logger(ctx).Debug("transaction use txn file",

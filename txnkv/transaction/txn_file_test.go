@@ -949,6 +949,7 @@ func TestUseTxnFileExcludesPipelinedTxn(t *testing.T) {
 
 	txn := newTestTxn(t, 1)
 	txn.isPipelined = true
+	txn.SetAssertionLevel(kvrpcpb.AssertionLevel_Strict)
 	committer := &twoPhaseCommitter{txn: txn.KVTxn}
 
 	useTxnFile, err := committer.useTxnFile(context.Background())
@@ -978,6 +979,69 @@ func TestUseTxnFileExcludesSharedLockTxn(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.False(t, useTxnFile)
+}
+
+func TestUseTxnFileExcludesMutationAssertions(t *testing.T) {
+	// Given
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	tests := []struct {
+		name           string
+		assertionLevel kvrpcpb.AssertionLevel
+		flag           tikv.FlagsOp
+		want           bool
+	}{
+		{
+			name:           "strict assert exists",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			flag:           tikv.SetAssertExist,
+			want:           false,
+		},
+		{
+			name:           "strict assert not exists",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			flag:           tikv.SetAssertNotExist,
+			want:           false,
+		},
+		{
+			name:           "strict without mutation assertion",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			want:           true,
+		},
+		{
+			name:           "assertion off",
+			assertionLevel: kvrpcpb.AssertionLevel_Off,
+			flag:           tikv.SetAssertExist,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given
+			txn := newTestTxn(t, 1)
+			txn.SetAssertionLevel(tt.assertionLevel)
+			key := []byte("key")
+			require.NoError(t, txn.Set(key, []byte("value")))
+			if tt.flag != 0 {
+				txn.GetMemBuffer().UpdateFlags(key, tt.flag)
+			}
+			committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+			require.NoError(t, err)
+			require.NoError(t, committer.initKeysAndMutations(context.Background()))
+
+			// When
+			useTxnFile, err := committer.useTxnFile(context.Background())
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tt.want, useTxnFile)
+		})
+	}
 }
 
 // stubKVStore implements kvstore with only GetRegionCache and split-call
