@@ -1,4 +1,4 @@
-FROM golang:1.25.10@sha256:c138bff780910acf4254ab3a6f7ff0f64bbd841f27bd82bfa986fe122c109538
+FROM golang:1.25.12@sha256:fe5d57d3b718e7a4986bae156c2d73f44973bfd313073aed08a4de6692bb6161
 
 WORKDIR /workspace
 
