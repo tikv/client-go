@@ -37,7 +37,11 @@ type RunLoop struct {
 	ready    chan struct{}
 	runnable []func()
 	running  []func()
-	state    State
+
+	// state and ready form a notification handshake. Under Exec's single-goroutine contract, while Exec is waiting,
+	// Append is the only concurrent operation that may change StateWaiting to StateIdle. Exactly the Append that performs
+	// the transition sends one notification on ready after releasing lock.
+	state State
 }
 
 // NewRunLoop creates a new run-loop.
@@ -114,8 +118,17 @@ func (l *RunLoop) Exec(ctx context.Context) (int, error) {
 				continue
 			case <-ctx.Done():
 				l.lock.Lock()
-				l.state = StateIdle // waiting -> idle
-				l.lock.Unlock()
+				if l.state == StateWaiting {
+					// No Append has committed to sending a notification.
+					l.state = StateIdle // waiting -> idle
+					l.lock.Unlock()
+				} else {
+					// SAFETY: Under Exec's single-goroutine contract, Append is the only concurrent operation that can
+					// change StateWaiting to StateIdle. Exactly one Append performed that transition and must send one
+					// notification after releasing lock. Consume it before returning so the sender cannot be stranded.
+					l.lock.Unlock()
+					<-l.ready
+				}
 				return 0, ctx.Err()
 			}
 		} else {
