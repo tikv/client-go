@@ -15,7 +15,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20260721064811-683dad8fa368
+	github.com/pingcap/kvproto v0.0.0-20260806092442-d04fa0402753
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
@@ -34,6 +34,8 @@ require (
 	google.golang.org/protobuf v1.36.10
 	modernc.org/mathutil v1.7.1
 )
+
+replace github.com/pingcap/kvproto => github.com/wfxr/kvproto v0.0.0-20260806092442-d04fa0402753
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
