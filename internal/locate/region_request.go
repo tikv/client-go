@@ -640,7 +640,10 @@ func (r *replica) onUpdateLeader() {
 		r.attempts = maxReplicaAttempt - 1
 		r.attemptedTime = 0
 	}
+	// The replica is confirmed to be the leader by a NotLeader hint, so it is no longer
+	// suspected of having lost leadership.
 	r.deleteFlag(notLeaderFlag)
+	r.deleteFlag(suspectNotLeaderFlag)
 }
 
 const (
@@ -648,6 +651,7 @@ const (
 	dataIsNotReadyFlag                                // dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
 	notLeaderFlag                                     // notLeaderFlag indicates the replica is already tried, but the received not leader error.
 	serverIsBusyFlag                                  // serverIsBusyFlag indicates the replica is already tried, but the received server is busy error.
+	suspectNotLeaderFlag                              // suspectNotLeaderFlag indicates the cached leader keeps rejecting leader reads with ServerIsBusy(0), so it is suspected to have lost leadership (tikv/client-go#2028).
 )
 
 func (r *replica) addFlag(flag uint8) {
