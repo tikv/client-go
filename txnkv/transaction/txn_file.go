@@ -1178,6 +1178,7 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 
 	if c.txn.isPessimistic ||
 		c.txn.isPipelined ||
+		c.hasSharedLocks ||
 		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
 		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize ||
 		!IsRequestSourceUseTxnFile(c.txn.RequestSource, conf) {

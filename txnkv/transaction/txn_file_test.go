@@ -957,6 +957,29 @@ func TestUseTxnFileExcludesPipelinedTxn(t *testing.T) {
 	require.False(t, useTxnFile)
 }
 
+func TestUseTxnFileExcludesSharedLockTxn(t *testing.T) {
+	// Given
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	txn := newTestTxn(t, 1)
+	require.NoError(t, txn.Set([]byte("key"), []byte("value")))
+	committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+	require.NoError(t, err)
+	require.NoError(t, committer.initKeysAndMutations(context.Background()))
+	committer.hasSharedLocks = true
+
+	// When
+	useTxnFile, err := committer.useTxnFile(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.False(t, useTxnFile)
+}
+
 // stubKVStore implements kvstore with only GetRegionCache and split-call
 // recording backed by the mock PD client. All other methods panic because
 // buildTxnFiles does not call them.
