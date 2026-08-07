@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
@@ -142,6 +143,22 @@ func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64, opts 
 	s, err := m.Client.GetStore(ctx, storeID, opts...)
 	recordPDWaitTime(ctx, start)
 	return s, err
+}
+
+// GetStoreResponse forwards the optional full GetStore response capability.
+func (m InterceptedPDClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	start := time.Now()
+	if client, ok := m.Client.(pd.RPCClientExt); ok {
+		resp, err := client.GetStoreResponse(ctx, storeID, opts...)
+		recordPDWaitTime(ctx, start)
+		return resp, err
+	}
+	store, err := m.Client.GetStore(ctx, storeID, opts...)
+	recordPDWaitTime(ctx, start)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{Store: store}, nil
 }
 
 // WithCallerComponent implements pd.Client#WithCallerComponent.

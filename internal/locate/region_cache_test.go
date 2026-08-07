@@ -55,6 +55,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -66,6 +67,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	uatomic "go.uber.org/atomic"
 )
 
@@ -74,6 +76,46 @@ type inspectedPDClient struct {
 	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error)
 	getRegionByID    func(ctx context.Context, cli pd.Client, id uint64, opts ...opt.GetRegionOption) (*router.Region, error)
 	batchScanRegions func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
+}
+
+type fallbackStoreResponsePDClient struct {
+	pd.Client
+	store *metapb.Store
+}
+
+func (c *fallbackStoreResponsePDClient) GetStore(context.Context, uint64, ...opt.GetStoreOption) (*metapb.Store, error) {
+	return c.store, nil
+}
+
+type extendedStoreResponsePDClient struct {
+	*fallbackStoreResponsePDClient
+	response *pdpb.GetStoreResponse
+}
+
+func (c *extendedStoreResponsePDClient) GetStoreResponse(context.Context, uint64, ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	return c.response, nil
+}
+
+type delayedStoreResponsePDClient struct {
+	pd.Client
+	response *pdpb.GetStoreResponse
+	started  chan struct{}
+	release  chan struct{}
+	block    sync.Once
+}
+
+func (c *delayedStoreResponsePDClient) GetStoreResponse(context.Context, uint64, ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	shouldBlock := false
+	c.block.Do(func() { shouldBlock = true })
+	if shouldBlock {
+		close(c.started)
+		<-c.release
+	}
+	return c.response, nil
+}
+
+func (c *delayedStoreResponsePDClient) WithCallerComponent(caller.Component) pd.Client {
+	return c
 }
 
 func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
@@ -2477,6 +2519,144 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	// Store 2 is never affected by updating store 1
 	s.LessOrEqual(store2.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	s.False(store2.healthStatus.IsSlow())
+}
+
+func (s *testRegionCacheSuite) TestPDStateCheckFollowsSlowEpisodes() {
+	store := newStore(1, "", "", "", tikvrpc.TiKV, resolved, nil)
+	var checkCount atomic.Int32
+	store.schedulingState.setCheckHandler(func() { checkCount.Add(1) })
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, 0)
+	s.True(store.schedulingState.isEligible(false))
+
+	store.healthStatus.updateTiKVServerSideSlowScore(100, time.Now())
+	firstEpoch := store.schedulingState.currentCheckEpoch()
+	s.Equal(uint64(1), firstEpoch)
+	s.False(store.schedulingState.isEligible(false))
+	s.Equal(int32(1), checkCount.Load())
+
+	// A response started before the current health transition cannot confirm the
+	// new epoch or re-admit this store.
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, firstEpoch-1)
+	s.False(store.schedulingState.isEligible(false))
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, firstEpoch)
+	s.True(store.schedulingState.isEligible(false))
+
+	store.healthStatus.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Second))
+	store.healthStatus.updateTiKVServerSideSlowScore(50, time.Now())
+	recoveryEpoch := store.schedulingState.currentCheckEpoch()
+	s.Equal(firstEpoch+1, recoveryEpoch)
+	s.False(store.schedulingState.isEligible(false))
+	s.Equal(int32(2), checkCount.Load())
+
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, firstEpoch)
+	s.False(store.schedulingState.isEligible(false))
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, recoveryEpoch)
+	s.True(store.schedulingState.isEligible(false))
+
+	store.healthStatus.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Second))
+	store.healthStatus.updateTiKVServerSideSlowScore(100, time.Now())
+	nextSlowEpoch := store.schedulingState.currentCheckEpoch()
+	s.Equal(recoveryEpoch+1, nextSlowEpoch)
+	s.False(store.schedulingState.isEligible(false))
+	s.Equal(int32(3), checkCount.Load())
+
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, recoveryEpoch)
+	s.False(store.schedulingState.isEligible(false))
+	store.schedulingState.update(nil, nextSlowEpoch)
+	s.False(store.schedulingState.isEligible(false))
+}
+
+func (s *testRegionCacheSuite) TestPDStateCheckKeepsStoreIneligibleUntilLatestResponse() {
+	storeMeta := &metapb.Store{Id: 1, Address: "store-1"}
+	pdClient := &delayedStoreResponsePDClient{
+		response: &pdpb.GetStoreResponse{
+			Store:           storeMeta,
+			SchedulingState: &pdpb.StoreSchedulingState{},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cache := newStoreCache(pdClient)
+	store := newStore(storeMeta.GetId(), storeMeta.GetAddress(), "", "", tikvrpc.TiKV, resolved, nil)
+	cache.put(store)
+	store.schedulingState.update(&pdpb.StoreSchedulingState{}, 0)
+
+	resolveDone := make(chan error, 1)
+	go func() {
+		_, err := store.reResolve(cache)
+		resolveDone <- err
+	}()
+	<-pdClient.started
+
+	// The request in flight captured epoch 0. A slow episode and local recovery
+	// advance the current epoch twice before that response can be published.
+	store.healthStatus.updateTiKVServerSideSlowScore(100, time.Now())
+	firstEpoch := store.schedulingState.currentCheckEpoch()
+	s.Equal(uint64(1), firstEpoch)
+	store.healthStatus.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Second))
+	store.healthStatus.updateTiKVServerSideSlowScore(50, time.Now())
+	latestEpoch := store.schedulingState.currentCheckEpoch()
+	s.Equal(firstEpoch+1, latestEpoch)
+	s.False(store.isReplicaReadEligible())
+
+	close(pdClient.release)
+	s.NoError(<-resolveDone)
+	// The old response confirms epoch 0, so the store must remain excluded and
+	// be scheduled for the next confirmation round.
+	s.Equal(needCheck, store.getResolveState())
+	s.False(store.isReplicaReadEligible())
+
+	_, err := store.reResolve(cache)
+	s.NoError(err)
+	s.Equal(resolved, store.getResolveState())
+	s.True(store.isReplicaReadEligible())
+}
+
+func TestStoreFromGetStoreResponse(t *testing.T) {
+	_, err := storeFromGetStoreResponse(nil)
+	require.Error(t, err)
+
+	_, err = storeFromGetStoreResponse(&pdpb.GetStoreResponse{})
+	require.Error(t, err)
+
+	store, err := storeFromGetStoreResponse(&pdpb.GetStoreResponse{
+		Store: &metapb.Store{NodeState: metapb.NodeState_Removed},
+	})
+	require.NoError(t, err)
+	require.Nil(t, store)
+
+	store, err = storeFromGetStoreResponse(&pdpb.GetStoreResponse{
+		Store: &metapb.Store{Id: 1, Address: "store-1"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), store.GetId())
+}
+
+func TestFetchStoreResponseWithOptionalRPCClientExt(t *testing.T) {
+	store := &metapb.Store{Id: 1, Address: "store-1"}
+
+	fallbackCache := &storeCacheImpl{
+		pdClient: &fallbackStoreResponsePDClient{store: store},
+	}
+	resp, err := fallbackCache.fetchStoreResponse(context.Background(), store.GetId())
+	require.NoError(t, err)
+	require.Equal(t, store, resp.GetStore())
+	require.Nil(t, resp.GetSchedulingState())
+
+	extendedCache := &storeCacheImpl{
+		pdClient: &extendedStoreResponsePDClient{
+			fallbackStoreResponsePDClient: &fallbackStoreResponsePDClient{store: store},
+			response: &pdpb.GetStoreResponse{
+				Store: store,
+				SchedulingState: &pdpb.StoreSchedulingState{
+					EvictedAsSlowStore: true,
+				},
+			},
+		},
+	}
+	resp, err = extendedCache.fetchStoreResponse(context.Background(), store.GetId())
+	require.NoError(t, err)
+	require.True(t, resp.GetSchedulingState().GetEvictedAsSlowStore())
 }
 
 func (s *testRegionCacheSuite) TestSplitThenLocateInvalidRegion() {

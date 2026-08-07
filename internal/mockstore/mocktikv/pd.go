@@ -338,6 +338,19 @@ func (c *pdClient) GetStore(ctx context.Context, storeID uint64, opts ...opt.Get
 	return store, nil
 }
 
+func (c *pdClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	store, err := c.GetStore(ctx, storeID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{
+		Store: store,
+		SchedulingState: &pdpb.StoreSchedulingState{
+			EvictedAsSlowStore: false,
+		},
+	}, nil
+}
+
 func (c *pdClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	if _, err := util.EvalFailpoint("mustLeader"); err == nil {
 		op := &opt.GetStoreOp{}

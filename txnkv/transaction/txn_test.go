@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -56,6 +57,17 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt
 	return &metapb.Store{
 		Id:      storeID,
 		Address: "mock-store",
+	}, nil
+}
+
+func (c *mockPDClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	store, err := c.GetStore(ctx, storeID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{
+		Store:           store,
+		SchedulingState: &pdpb.StoreSchedulingState{},
 	}, nil
 }
 

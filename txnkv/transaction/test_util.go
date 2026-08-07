@@ -230,6 +230,11 @@ func (u *unimplementedPDClient) GetStore(ctx context.Context, storeID uint64, op
 	panic("unimplemented")
 }
 
+// GetStoreResponse implements pd.RPCClientExt.
+func (u *unimplementedPDClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	panic("unimplemented")
+}
+
 // GetTS implements pd.Client.
 func (u *unimplementedPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 	panic("unimplemented")
