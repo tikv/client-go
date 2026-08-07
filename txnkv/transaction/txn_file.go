@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/protobuf/proto" //nolint:staticcheck
@@ -1355,7 +1356,7 @@ func (c *twoPhaseCommitter) reportFailureMetrics() {
 var (
 	once   sync.Once
 	scheme string
-	cli    *http.Client
+	cli    atomic.Pointer[http.Client]
 	errCli error
 )
 
@@ -1371,6 +1372,7 @@ func getHTTPClient() (*http.Client, error) {
 		transport := &http.Transport{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
 		}
 		if len(cfg.Security.ClusterSSLCA) != 0 {
 			scheme = "https://"
@@ -1383,12 +1385,21 @@ func getHTTPClient() (*http.Client, error) {
 			transport.ForceAttemptHTTP2 = true
 		}
 
-		cli = &http.Client{
+		cli.Store(&http.Client{
 			Timeout:   timeout,
 			Transport: transport,
-		}
+		})
 	})
-	return cli, errCli
+	return cli.Load(), errCli
+}
+
+// CloseTxnFileIdleConnections closes idle HTTP connections opened by txn-file
+// chunk uploads. It does not interrupt active requests and is safe to call
+// while another client is using the shared uploader.
+func CloseTxnFileIdleConnections() {
+	if client := cli.Load(); client != nil {
+		client.CloseIdleConnections()
+	}
 }
 
 type chunkWriterClient struct {

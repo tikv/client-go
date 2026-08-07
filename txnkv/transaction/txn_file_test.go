@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -103,6 +105,84 @@ type txnFileCommitTSOracle struct {
 	startTS uint64
 	ttl     uint64
 	option  *oracle.Option
+}
+
+func TestCloseTxnFileIdleConnections(t *testing.T) {
+	original := cli.Load()
+	t.Cleanup(func() {
+		cli.Store(original)
+	})
+
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+	client := server.Client()
+	cli.Store(client)
+
+	resp, err := client.Get(server.URL)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "HTTP connection did not become idle")
+	}
+
+	CloseTxnFileIdleConnections()
+
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "idle HTTP connection was not closed")
+	}
+}
+
+func TestCloseTxnFileIdleConnectionsBeforeInitialization(t *testing.T) {
+	original := cli.Load()
+	t.Cleanup(func() {
+		cli.Store(original)
+	})
+	cli.Store(nil)
+
+	require.NotPanics(t, CloseTxnFileIdleConnections)
+}
+
+func TestTxnFileHTTPClientHasIdleConnectionTimeout(t *testing.T) {
+	t.Cleanup(func() {
+		once = sync.Once{}
+		cli.Store(nil)
+		errCli = nil
+		scheme = ""
+	})
+	once = sync.Once{}
+	cli.Store(nil)
+	errCli = nil
+	scheme = ""
+
+	client, err := getHTTPClient()
+
+	require.NoError(t, err)
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, 90*time.Second, transport.IdleConnTimeout)
 }
 
 func (o *txnFileCommitTSOracle) IsExpired(startTS uint64, ttl uint64, option *oracle.Option) bool {
@@ -802,13 +882,13 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 	defer func() {
 		config.StoreGlobalConfig(origCfg)
 		once = sync.Once{}
-		cli = nil
+		cli.Store(nil)
 		errCli = nil
 		scheme = ""
 	}()
 
 	once = sync.Once{}
-	cli = nil
+	cli.Store(nil)
 	errCli = nil
 	scheme = ""
 
@@ -914,13 +994,13 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	defer func() {
 		config.StoreGlobalConfig(origCfg)
 		once = sync.Once{}
-		cli = nil
+		cli.Store(nil)
 		errCli = nil
 		scheme = ""
 	}()
 
 	once = sync.Once{}
-	cli = nil
+	cli.Store(nil)
 	errCli = nil
 	scheme = ""
 
@@ -1283,13 +1363,13 @@ func TestBuildTxnFilesEntryCounting(t *testing.T) {
 	defer func() {
 		config.StoreGlobalConfig(origCfg)
 		once = sync.Once{}
-		cli = nil
+		cli.Store(nil)
 		errCli = nil
 		scheme = ""
 	}()
 
 	once = sync.Once{}
-	cli = srv.Client()
+	cli.Store(srv.Client())
 	errCli = nil
 	scheme = "http://"
 
