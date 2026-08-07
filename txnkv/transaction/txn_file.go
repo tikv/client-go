@@ -662,6 +662,13 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 	if err1 != nil {
 		return nil, err1
 	}
+	if keyErr := resp.Resp.(*kvrpcpb.BatchRollbackResponse).GetError(); keyErr != nil {
+		err := errors.Errorf("session %d txn file cleanup failed: %s", c.sessionID, keyErr)
+		logutil.BgLogger().Debug("txn file failed cleanup key",
+			zap.Error(err),
+			zap.Uint64("txnStartTS", c.startTS))
+		return nil, err
+	}
 	return resp, nil
 }
 
@@ -792,6 +799,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
+	c.txn.GetMemBuffer().GetMemDB().DiscardValues()
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{})
 	stepDone("commit")
 	if err != nil {
@@ -805,8 +813,13 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		return
 	}
 
-	err = c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails)
-	return
+	if accountingErr := c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails); accountingErr != nil {
+		metrics.TxnFileErrorAccounting.Inc()
+		logutil.Logger(ctx).Warn("txn file: resource control accounting failed after commit",
+			zap.Uint64("txnStartTS", c.startTS),
+			zap.Error(accountingErr))
+	}
+	return nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction) (txnChunkSlice, error) {
@@ -1364,6 +1377,7 @@ func getHTTPClient() (*http.Client, error) {
 		transport := &http.Transport{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
 		}
 		if len(cfg.Security.ClusterSSLCA) != 0 {
 			scheme = "https://"

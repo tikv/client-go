@@ -207,6 +207,7 @@ var (
 
 	TxnFileRequestsOk           prometheus.Counter
 	TxnFileRequestsError        prometheus.Counter
+	TxnFileErrorAccounting      prometheus.Counter
 	TxnFileWriteBytesInternal   prometheus.Counter
 	TxnFileWriteBytesGeneral    prometheus.Counter
 	TxnFileMutationSizeInternal prometheus.Observer
@@ -389,6 +390,7 @@ func initShortcuts() {
 
 	TxnFileRequestsOk = TiKVTxnFileRequestCounter.WithLabelValues("ok")
 	TxnFileRequestsError = TiKVTxnFileRequestCounter.WithLabelValues("err")
+	TxnFileErrorAccounting = TiKVTxnFileErrorCounter.WithLabelValues("accounting")
 	TxnFileWriteBytesInternal = TiKVTxnFileWriteBytes.WithLabelValues(LblInternal)
 	TxnFileWriteBytesGeneral = TiKVTxnFileWriteBytes.WithLabelValues(LblGeneral)
 	TxnFileMutationSizeInternal = TiKVTxnFileMutationSizeHistogram.WithLabelValues(LblInternal)

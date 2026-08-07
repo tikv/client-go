@@ -16,9 +16,13 @@ package transaction
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -29,6 +33,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 func TestTxnFileCleanupContextUsesStoreContext(t *testing.T) {
@@ -103,30 +109,82 @@ type txnFileCommitTSOracle struct {
 	option  *oracle.Option
 }
 
-type closeIdleRoundTripper struct {
-	closed atomic.Bool
-}
-
-func (*closeIdleRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("unexpected request")
-}
-
-func (t *closeIdleRoundTripper) CloseIdleConnections() {
-	t.closed.Store(true)
-}
-
 func TestCloseTxnFileIdleConnections(t *testing.T) {
 	original := cli.Load()
 	t.Cleanup(func() {
 		cli.Store(original)
 	})
 
-	transport := &closeIdleRoundTripper{}
-	cli.Store(&http.Client{Transport: transport})
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+	client := server.Client()
+	cli.Store(client)
+
+	resp, err := client.Get(server.URL)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "HTTP connection did not become idle")
+	}
 
 	CloseTxnFileIdleConnections()
 
-	require.True(t, transport.closed.Load())
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "idle HTTP connection was not closed")
+	}
+}
+
+func TestCloseTxnFileIdleConnectionsBeforeInitialization(t *testing.T) {
+	original := cli.Load()
+	t.Cleanup(func() {
+		cli.Store(original)
+	})
+	cli.Store(nil)
+
+	require.NotPanics(t, CloseTxnFileIdleConnections)
+}
+
+func TestTxnFileHTTPClientHasIdleConnectionTimeout(t *testing.T) {
+	t.Cleanup(func() {
+		once = sync.Once{}
+		cli.Store(nil)
+		errCli = nil
+		scheme = ""
+	})
+	once = sync.Once{}
+	cli.Store(nil)
+	errCli = nil
+	scheme = ""
+
+	client, err := getHTTPClient()
+
+	require.NoError(t, err)
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, 90*time.Second, transport.IdleConnTimeout)
 }
 
 func TestTxnFileBatchConcurrency(t *testing.T) {
@@ -554,6 +612,19 @@ func TestTxnFilePrimaryBatchIndexFindsPrimaryRegion(t *testing.T) {
 	require.Equal(t, 1, index)
 }
 
+func TestTxnFilePrimaryRollbackPropagatesKeyError(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{Error: &kvrpcpb.KeyError{
+			Abort: "primary rollback failed",
+		}}}, nil
+	})
+
+	regionErr, err := committer.executeTxnFilePrimaryBatch(bo, batch, txnFileRollbackAction{})
+
+	require.Nil(t, regionErr)
+	require.ErrorContains(t, err, "session 7 txn file cleanup failed")
+}
+
 func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -883,6 +954,141 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 	require.Equal(t, context.Canceled, errors.Cause(committer.getUndeterminedErr()))
 	require.Equal(t, int64(1), commitRequestCount.Load())
 	require.Zero(t, rollbackRequestCount.Load())
+}
+
+type txnFileResponseErrorInterceptor struct {
+	responseCalls int
+}
+
+func (i *txnFileResponseErrorInterceptor) OnRequestWait(
+	context.Context, string, resourceControlClient.RequestInfo,
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	return &rmpb.Consumption{}, &rmpb.Consumption{}, 0, 0, nil
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponse(
+	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, error) {
+	i.responseCalls++
+	return nil, errors.New("post-commit accounting failed")
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponseWait(
+	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, time.Duration, error) {
+	return &rmpb.Consumption{}, 0, nil
+}
+
+func (i *txnFileResponseErrorInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
+	return false
+}
+
+func (i *txnFileResponseErrorInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return resourceControlClient.DefaultRUVersion
+}
+
+func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T) {
+	pd := &mockPDClient{}
+	regionCache := locate.NewTestRegionCache()
+	regionCache.SetPDClient(pd)
+	defer regionCache.Close()
+
+	memDB := unionstore.NewMemDB()
+	require.NoError(t, memDB.Set([]byte("k"), []byte("v")))
+	uploadedChunks := make(chan []byte, 1)
+	chunkWriter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		chunk, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		uploadedChunks <- chunk
+		_, err = w.Write([]byte(`{"chunk_id":1}`))
+		assert.NoError(t, err)
+	}))
+	defer chunkWriter.Close()
+
+	origCfg := config.GetGlobalConfig()
+	newCfg := *origCfg
+	newCfg.TiKVClient.TxnChunkWriterAddr = chunkWriter.Listener.Addr().String()
+	newCfg.TiKVClient.TxnFileMinMutationSize = 1
+	config.StoreGlobalConfig(&newCfg)
+	defer func() {
+		config.StoreGlobalConfig(origCfg)
+		once = sync.Once{}
+		cli.Store(nil)
+		errCli = nil
+		scheme = ""
+	}()
+
+	once = sync.Once{}
+	cli.Store(nil)
+	errCli = nil
+	scheme = ""
+
+	interceptor := &txnFileResponseErrorInterceptor{}
+	var rcInterceptor resourceControlClient.ResourceGroupKVInterceptor = interceptor
+	client.ResourceControlSwitch.Store(true)
+	client.ResourceControlInterceptor.Store(&rcInterceptor)
+	t.Cleanup(func() {
+		client.ResourceControlSwitch.Store(false)
+		client.ResourceControlInterceptor.Store(nil)
+	})
+
+	var commitRequestCount atomic.Int64
+	var rollbackRequestCount atomic.Int64
+	store := &txnFileCommitTSStore{
+		timestamps:  []uint64{2},
+		oracle:      &txnFileCommitTSOracle{},
+		regionCache: regionCache,
+		client: &fnClient{onSend: func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPrewrite:
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+			case tikvrpc.CmdCommit:
+				commitRequestCount.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
+			case tikvrpc.CmdBatchRollback:
+				rollbackRequestCount.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
+			default:
+				return nil, errors.Errorf("unexpected request type %s", req.Type)
+			}
+		}},
+	}
+	txn := &KVTxn{
+		store:              store,
+		startTS:            1,
+		startTime:          time.Now(),
+		valid:              true,
+		schemaVer:          txnFileSchemaVer(10),
+		schemaLeaseChecker: &txnFileSchemaLeaseChecker{},
+		scope:              oracle.GlobalTxnScope,
+		vars:               tikv.DefaultVars,
+		us:                 unionstore.NewUnionStore(memDB, nil),
+		resourceGroupName:  "txn-file-test",
+		RequestSource:      &util.RequestSource{},
+	}
+	committer, err := newTwoPhaseCommitter(txn, 0)
+	require.NoError(t, err)
+	txn.committer = committer
+
+	err = txn.Commit(context.Background())
+
+	require.NoError(t, err)
+	expectedChunk := binary.LittleEndian.AppendUint16(nil, uint16(len("k")))
+	expectedChunk = append(expectedChunk, "k"...)
+	expectedChunk = append(expectedChunk, byte(kvrpcpb.Op_Put))
+	expectedChunk = binary.LittleEndian.AppendUint32(expectedChunk, uint32(len("v")))
+	expectedChunk = append(expectedChunk, "v"...)
+	expectedChunk = binary.LittleEndian.AppendUint32(expectedChunk, crc32.ChecksumIEEE(expectedChunk))
+	require.Equal(t, expectedChunk, <-uploadedChunks)
+	require.Equal(t, int64(1), commitRequestCount.Load())
+	require.Zero(t, rollbackRequestCount.Load())
+	require.Equal(t, 1, interceptor.responseCalls)
+	require.True(t, committer.mu.committed)
+	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
+	require.Panics(t, func() {
+		_, _ = memDB.Get(context.Background(), []byte("k"))
+	})
 }
 
 func TestChunkSliceSortAndDedup(t *testing.T) {
