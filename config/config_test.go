@@ -93,6 +93,10 @@ func TestValidateGRPCKeepAliveTimeout(t *testing.T) {
 }
 
 func TestValidateTxnFileConfig(t *testing.T) {
+	configWithoutTxnFile := DefaultTiKVClient()
+	configWithoutTxnFile.TxnChunkMaxSize = 0
+	assert.NoError(t, configWithoutTxnFile.Valid())
+
 	maxInt := uint64(math.MaxInt)
 	tests := []struct {
 		name      string
@@ -112,8 +116,15 @@ func TestValidateTxnFileConfig(t *testing.T) {
 		{
 			name: "maximum chunk size",
 			configure: func(cfg *TiKVClient) {
-				cfg.TxnChunkMaxSize = maxInt
+				cfg.TxnChunkMaxSize = MaxTxnChunkSizeInParallel
 			},
+		},
+		{
+			name: "chunk size exceeds parallel budget",
+			configure: func(cfg *TiKVClient) {
+				cfg.TxnChunkMaxSize = 4<<30 + 1
+			},
+			err: fmt.Sprintf("txn-chunk-max-size should not exceed %d, but got %d", uint64(4<<30), uint64(4<<30)+1),
 		},
 		{
 			name: "chunk size exceeds int",
@@ -154,6 +165,7 @@ func TestValidateTxnFileConfig(t *testing.T) {
 				assert.NoError(t, cfg.Valid())
 				return
 			}
+			cfg.TxnChunkWriterAddr = "127.0.0.1"
 			assert.EqualError(t, cfg.Valid(), test.err)
 		})
 	}

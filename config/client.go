@@ -49,6 +49,8 @@ const (
 	DefGrpcInitialConnWindowSize  = 1 << 27 // 128MiB
 	DefMaxConcurrencyRequestLimit = math.MaxInt64
 	DefBatchPolicy                = BatchPolicyStandard
+	// MaxTxnChunkSizeInParallel is the maximum total size of transaction chunks processed in parallel.
+	MaxTxnChunkSizeInParallel uint64 = 4 << 30 // 4GB
 )
 
 const (
@@ -271,11 +273,18 @@ func (config *TiKVClient) Valid() error {
 }
 
 func validateTxnFileConfig(config *TiKVClient) error {
+	if config.TxnChunkWriterAddr == "" {
+		// Skip validation when txn file is not enabled.
+		return nil
+	}
 	if config.TxnChunkMaxSize == 0 {
 		return fmt.Errorf("txn-chunk-max-size should be greater than 0")
 	}
 	if config.TxnChunkMaxSize > math.MaxInt {
 		return fmt.Errorf("txn-chunk-max-size should not exceed %d, but got %d", math.MaxInt, config.TxnChunkMaxSize)
+	}
+	if config.TxnChunkMaxSize > MaxTxnChunkSizeInParallel {
+		return fmt.Errorf("txn-chunk-max-size should not exceed %d, but got %d", MaxTxnChunkSizeInParallel, config.TxnChunkMaxSize)
 	}
 	if config.TxnChunkWriterConcurrency == 0 {
 		return fmt.Errorf("txn-chunk-writer-concurrency should be greater than 0")

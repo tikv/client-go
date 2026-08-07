@@ -48,6 +48,51 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
+func TestTxnFileCleanupContextUsesStoreContext(t *testing.T) {
+	transactionCtx := context.WithValue(context.Background(), retry.TxnStartKey, uint64(42))
+	cancelledCtx, cancel := context.WithCancel(transactionCtx)
+	cleanupCtx := txnFileCleanupContext(context.Background(), cancelledCtx)
+	cancel()
+
+	require.NoError(t, cleanupCtx.Err())
+	require.Equal(t, uint64(42), cleanupCtx.Value(retry.TxnStartKey))
+}
+
+func TestTxnFileMaxChunksInParallel(t *testing.T) {
+	tests := []struct {
+		name           string
+		chunkMaxSize   uint64
+		expectedResult int
+	}{
+		{
+			name:           "default chunk size",
+			chunkMaxSize:   128 * 1024 * 1024,
+			expectedResult: 32,
+		},
+		{
+			name:           "parallel budget boundary",
+			chunkMaxSize:   config.MaxTxnChunkSizeInParallel,
+			expectedResult: 1,
+		},
+		{
+			name:           "chunk size exceeds parallel budget",
+			chunkMaxSize:   config.MaxTxnChunkSizeInParallel + 1,
+			expectedResult: 1,
+		},
+		{
+			name:           "zero chunk size",
+			chunkMaxSize:   0,
+			expectedResult: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expectedResult, txnFileMaxChunksInParallel(test.chunkMaxSize))
+		})
+	}
+}
+
 type txnFileCommitTSOracle struct {
 	unimplementedOracle
 
@@ -114,6 +159,7 @@ type txnFileCommitTSStore struct {
 	oracle         *txnFileCommitTSOracle
 	regionCache    *locate.RegionCache
 	client         client.Client
+	lockResolver   *txnlock.LockResolver
 }
 
 func (s *txnFileCommitTSStore) GetTimestampWithRetry(bo *retry.Backoffer, _ string) (uint64, error) {
@@ -140,6 +186,10 @@ func (s *txnFileCommitTSStore) GetRegionCache() *locate.RegionCache {
 
 func (s *txnFileCommitTSStore) GetTiKVClient() client.Client {
 	return s.client
+}
+
+func (s *txnFileCommitTSStore) GetLockResolver() *txnlock.LockResolver {
+	return s.lockResolver
 }
 
 type txnFileSchemaVer int64
@@ -332,9 +382,10 @@ func TestTxnFileCommitTSExpiredRetryUsesPreparedTimestamp(t *testing.T) {
 				biggest:  []byte("k"),
 			}},
 		},
-		region:     location,
-		sampleKeys: [][]byte{[]byte("k")},
-		isPrimary:  true,
+		region:         location,
+		sampleDataKeys: [][]byte{[]byte("k")},
+		firstKey:       []byte("k"),
+		isPrimary:      true,
 	}
 
 	_, err = (txnFileCommitAction{}).executeBatch(committer, bo, batch)
@@ -425,6 +476,8 @@ func newTxnFileCommitTestBatch(
 		regionCache: regionCache,
 		client:      &fnClient{onSend: onSend},
 	}
+	store.lockResolver = txnlock.NewLockResolver(store)
+	t.Cleanup(store.lockResolver.Close)
 	committer := newTxnFileCommitTSTestCommitter(store, &txnFileSchemaLeaseChecker{}, nil)
 	committer.commitTS = 2
 
@@ -439,12 +492,66 @@ func newTxnFileCommitTestBatch(
 				biggest:  []byte("k"),
 			}},
 		},
-		region:     location,
-		sampleKeys: [][]byte{[]byte("k")},
-		isPrimary:  true,
+		region:         location,
+		sampleDataKeys: [][]byte{[]byte("k")},
+		firstKey:       []byte("k"),
+		isPrimary:      true,
 	}
 	committer.txnFileCtx = txnFileCtx{slice: batch.txnChunkSlice}
 	return committer, bo, batch
+}
+
+func TestTxnFilePrewriteUsesPrimaryKey(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		require.Equal(t, []byte("primary"), req.Prewrite().PrimaryLock)
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+	})
+	committer.primaryKey = []byte("primary")
+
+	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+}
+
+func TestTxnFilePrewriteExpandsSharedLockHolders(t *testing.T) {
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, _ *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{Errors: []*kvrpcpb.KeyError{{
+			Locked: &kvrpcpb.LockInfo{
+				Key:      []byte("k"),
+				LockType: kvrpcpb.Op_SharedLock,
+				SharedLockInfos: []*kvrpcpb.LockInfo{
+					{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_PessimisticLock},
+					{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_Lock},
+				},
+			},
+		}}}}, nil
+	})
+	var observed []*txnlock.Lock
+	resolver := txnlock.LockResolverProbe{LockResolver: committer.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func(locks []*txnlock.Lock) {
+		observed = locks
+		panic("captured shared locks")
+	})
+
+	require.PanicsWithValue(t, "captured shared locks", func() {
+		_, _ = (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+	})
+	require.Len(t, observed, 2)
+	require.Equal(t, kvrpcpb.Op_PessimisticLock, observed[0].LockType)
+	require.Equal(t, kvrpcpb.Op_Lock, observed[1].LockType)
+}
+
+func TestTxnFilePrimaryBatchIndexFindsPrimaryRegion(t *testing.T) {
+	committer := &twoPhaseCommitter{primaryKey: []byte("primary")}
+	batches := []chunkBatch{
+		{region: &locate.KeyLocation{EndKey: []byte("primary")}},
+		{region: &locate.KeyLocation{StartKey: []byte("primary")}},
+	}
+
+	index, err := committer.txnFilePrimaryBatchIndex(batches)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, index)
 }
 
 func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
@@ -511,14 +618,14 @@ func TestTxnFileActionsApplyResourceGroupTagger(t *testing.T) {
 				case tikvrpc.CmdPrewrite:
 					prewrite := req.Prewrite()
 					require.Len(t, prewrite.Mutations, 1)
-					require.Equal(t, batch.sampleKeys[0], prewrite.Mutations[0].Key)
+					require.Equal(t, batch.firstKey, prewrite.Mutations[0].Key)
 					prewrite.PrimaryLock[0] = 'x'
 					prewrite.TxnFileChunks[0] = 99
 					req.ResourceControlContext.ResourceGroupName = "tagger-mutated"
 				case tikvrpc.CmdCommit:
-					require.Equal(t, batch.sampleKeys, req.Commit().Keys)
+					require.Equal(t, batch.sampleDataKeys, req.Commit().Keys)
 				case tikvrpc.CmdBatchRollback:
-					require.Equal(t, batch.sampleKeys, req.BatchRollback().Keys)
+					require.Equal(t, batch.sampleDataKeys, req.BatchRollback().Keys)
 				}
 				req.ResourceGroupTag = []byte("dynamic-tag")
 			}
@@ -585,22 +692,45 @@ func TestTxnFileActionsPreserveStaticResourceGroupTag(t *testing.T) {
 	}
 }
 
-func TestTxnFilePrewriteTaggerSkipsBatchWithoutSampleKeys(t *testing.T) {
+func TestTxnFilePrewriteTaggerUsesFirstKeyWithoutSampleDataKeys(t *testing.T) {
 	taggerCalls := 0
 	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
 		require.Empty(t, req.ResourceGroupTag)
 		require.Empty(t, req.Prewrite().Mutations)
 		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
 	})
-	batch.sampleKeys = nil
-	committer.resourceGroupTagger = func(*tikvrpc.Request) {
+	batch.sampleDataKeys = nil
+	committer.resourceGroupTagger = func(req *tikvrpc.Request) {
 		taggerCalls++
+		require.Len(t, req.Prewrite().Mutations, 1)
+		require.Equal(t, batch.firstKey, req.Prewrite().Mutations[0].Key)
 	}
 
 	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
 
 	require.NoError(t, err)
-	require.Zero(t, taggerCalls)
+	require.Equal(t, 1, taggerCalls)
+}
+
+func TestTxnFilePrewriteTaggerAppliesWithoutFirstKey(t *testing.T) {
+	taggerCalls := 0
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		require.Equal(t, []byte("metadata-tag"), req.ResourceGroupTag)
+		require.Empty(t, req.Prewrite().Mutations)
+		return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+	})
+	batch.firstKey = nil
+	batch.sampleDataKeys = nil
+	committer.resourceGroupTagger = func(req *tikvrpc.Request) {
+		taggerCalls++
+		require.Empty(t, req.Prewrite().Mutations)
+		req.ResourceGroupTag = []byte("metadata-tag")
+	}
+
+	_, err := (txnFilePrewriteAction{}).executeBatch(committer, bo, batch)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, taggerCalls)
 }
 
 func TestTxnFileCommitPrimaryRPCErrorMarksResultUndetermined(t *testing.T) {
@@ -848,16 +978,127 @@ func TestIsRequestSourceUseTxnFile(t *testing.T) {
 	}
 }
 
-// stubKVStore implements kvstore with only GetRegionCache returning a real
-// RegionCache backed by the mock PD client. All other methods panic because
+func TestUseTxnFileExcludesPipelinedTxn(t *testing.T) {
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	txn := newTestTxn(t, 1)
+	txn.isPipelined = true
+	txn.SetAssertionLevel(kvrpcpb.AssertionLevel_Strict)
+	committer := &twoPhaseCommitter{txn: txn.KVTxn}
+
+	useTxnFile, err := committer.useTxnFile(context.Background())
+
+	require.NoError(t, err)
+	require.False(t, useTxnFile)
+}
+
+func TestUseTxnFileExcludesSharedLockTxn(t *testing.T) {
+	// Given
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	txn := newTestTxn(t, 1)
+	require.NoError(t, txn.Set([]byte("key"), []byte("value")))
+	committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+	require.NoError(t, err)
+	require.NoError(t, committer.initKeysAndMutations(context.Background()))
+	committer.hasSharedLocks = true
+
+	// When
+	useTxnFile, err := committer.useTxnFile(context.Background())
+
+	// Then
+	require.NoError(t, err)
+	require.False(t, useTxnFile)
+}
+
+func TestUseTxnFileExcludesMutationAssertions(t *testing.T) {
+	// Given
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 0
+	})
+	t.Cleanup(restore)
+
+	tests := []struct {
+		name           string
+		assertionLevel kvrpcpb.AssertionLevel
+		flag           tikv.FlagsOp
+		want           bool
+	}{
+		{
+			name:           "strict assert exists",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			flag:           tikv.SetAssertExist,
+			want:           false,
+		},
+		{
+			name:           "strict assert not exists",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			flag:           tikv.SetAssertNotExist,
+			want:           false,
+		},
+		{
+			name:           "strict without mutation assertion",
+			assertionLevel: kvrpcpb.AssertionLevel_Strict,
+			want:           true,
+		},
+		{
+			name:           "assertion off",
+			assertionLevel: kvrpcpb.AssertionLevel_Off,
+			flag:           tikv.SetAssertExist,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given
+			txn := newTestTxn(t, 1)
+			txn.SetAssertionLevel(tt.assertionLevel)
+			key := []byte("key")
+			require.NoError(t, txn.Set(key, []byte("value")))
+			if tt.flag != 0 {
+				txn.GetMemBuffer().UpdateFlags(key, tt.flag)
+			}
+			committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+			require.NoError(t, err)
+			require.NoError(t, committer.initKeysAndMutations(context.Background()))
+
+			// When
+			useTxnFile, err := committer.useTxnFile(context.Background())
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tt.want, useTxnFile)
+		})
+	}
+}
+
+// stubKVStore implements kvstore with only GetRegionCache and split-call
+// recording backed by the mock PD client. All other methods panic because
 // buildTxnFiles does not call them.
 type stubKVStore struct {
-	regionCache *locate.RegionCache
+	regionCache              *locate.RegionCache
+	splitRegionsCalls        atomic.Uint32
+	splitTxnFileRegionsCalls atomic.Uint32
 }
 
 func (s *stubKVStore) GetRegionCache() *locate.RegionCache { return s.regionCache }
 func (s *stubKVStore) SplitRegions(_ context.Context, _ [][]byte, _ bool, _ *int64) ([]uint64, error) {
-	panic("not implemented")
+	s.splitRegionsCalls.Add(1)
+	panic("unexpected generic split path")
+}
+func (s *stubKVStore) SplitTxnFileRegions(_ context.Context, _ [][]byte) error {
+	s.splitTxnFileRegionsCalls.Add(1)
+	return nil
 }
 func (s *stubKVStore) WaitScatterRegionFinish(_ context.Context, _ uint64, _ int) error {
 	panic("not implemented")
@@ -878,6 +1119,41 @@ func (s *stubKVStore) TxnLatches() *latch.LatchesScheduler    { panic("not imple
 func (s *stubKVStore) GetClusterID() uint64                   { return 0 }
 func (s *stubKVStore) IsClose() bool                          { return false }
 func (s *stubKVStore) Go(_ func()) error                      { panic("not implemented") }
+
+func TestPreSplitTxnFileRegionsUsesDedicatedSplitPath(t *testing.T) {
+	// Given
+	txn := newTestTxn(t, 1)
+	for i := 1; i <= 5; i++ {
+		require.NoError(t, txn.Set([]byte(fmt.Sprintf("k%d", i)), []byte("v")))
+	}
+	committer, err := newTwoPhaseCommitter(txn.KVTxn, 1)
+	require.NoError(t, err)
+	require.NoError(t, committer.initKeysAndMutations(context.Background()))
+
+	store := &stubKVStore{regionCache: txn.store.cache}
+	committer.store = store
+	slice := txnChunkSlice{
+		chunkIDs: []uint64{1, 2, 3, 4, 5},
+		chunkRanges: []txnChunkRange{
+			newTxnChunkRange([]byte("k1"), []byte("k1"), 1),
+			newTxnChunkRange([]byte("k2"), []byte("k2"), 1),
+			newTxnChunkRange([]byte("k3"), []byte("k3"), 1),
+			newTxnChunkRange([]byte("k4"), []byte("k4"), 1),
+			newTxnChunkRange([]byte("k5"), []byte("k5"), 1),
+		},
+	}
+	committer.txnFileCtx = txnFileCtx{slice: slice}
+
+	// When
+	require.NotPanics(t, func() {
+		err = committer.preSplitTxnFileRegions(retry.NewBackoffer(context.Background(), 1000))
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), store.splitTxnFileRegionsCalls.Load())
+	require.Equal(t, uint32(0), store.splitRegionsCalls.Load())
+}
 
 func TestBuildTxnFilesEntryCounting(t *testing.T) {
 	require := require.New(t)

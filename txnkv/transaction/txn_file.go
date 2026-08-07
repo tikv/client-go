@@ -65,7 +65,6 @@ var (
 
 const (
 	PreSplitRegionChunks = 4
-
 	// MaxTxnChunkSizeInParallel is the max parallel size when prewrite/commit txn chunks.
 	MaxTxnChunkSizeInParallel uint64 = 4 << 30 // 4GB
 )
@@ -76,9 +75,10 @@ type txnFileCtx struct {
 
 type chunkBatch struct {
 	txnChunkSlice
-	region     *locate.KeyLocation
-	sampleKeys [][]byte
-	isPrimary  bool
+	region         *locate.KeyLocation
+	firstKey       []byte
+	sampleDataKeys [][]byte
+	isPrimary      bool
 }
 
 func (b chunkBatch) String() string {
@@ -86,8 +86,8 @@ func (b chunkBatch) String() string {
 		b.region.Region.GetID(), b.isPrimary, b.chunkIDs)
 }
 
-func (b *chunkBatch) getSampleKeys() [][]byte {
-	return b.sampleKeys
+func (b *chunkBatch) getSampleDataKeys() [][]byte {
+	return b.sampleDataKeys
 }
 
 func (b *chunkBatch) getBatchTxnSize() uint64 {
@@ -113,15 +113,18 @@ func (c *twoPhaseCommitter) applyTxnFileResourceGroupTagger(req *tikvrpc.Request
 	}
 }
 
-func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, sampleKeys [][]byte) {
-	// Note: Batches containing only non-write operations have no sample key, so dynamic tagging is skipped.
-	if len(sampleKeys) == 0 || c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
+func (c *twoPhaseCommitter) applyTxnFilePrewriteResourceGroupTagger(req *tikvrpc.Request, firstKey []byte) {
+	if c.resourceGroupTag != nil || c.resourceGroupTagger == nil {
 		return
 	}
 
 	prewrite := req.Prewrite()
+	mutations := make([]*kvrpcpb.Mutation, 0, 1)
+	if len(firstKey) > 0 {
+		mutations = append(mutations, &kvrpcpb.Mutation{Key: slices.Clone(firstKey)})
+	}
 	tagReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
-		Mutations:      []*kvrpcpb.Mutation{{Key: slices.Clone(sampleKeys[0])}},
+		Mutations:      mutations,
 		PrimaryLock:    slices.Clone(prewrite.PrimaryLock),
 		StartVersion:   prewrite.StartVersion,
 		LockTtl:        prewrite.LockTtl,
@@ -216,26 +219,31 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	for i, chunkRange := range cs.chunkRanges {
 		chunkID := cs.chunkIDs[i]
 
-		regions, firstKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
+		regions, firstKeys, firstDataKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 
 		for j, r := range regions {
 			firstKey := firstKeys[j]
+			firstDataKey := firstDataKeys[j]
 
 			bk := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
 			if batchMap[bk] == nil {
 				batchMap[bk] = &chunkBatch{
-					region:     r,
-					sampleKeys: make([][]byte, 0, 1),
+					region:         r,
+					firstKey:       firstKey,
+					sampleDataKeys: make([][]byte, 0, 1),
 				}
 			}
 
 			batch := batchMap[bk]
+			if len(batch.firstKey) == 0 {
+				batch.firstKey = firstKey
+			}
 			batch.append(chunkID, chunkRange)
-			if len(firstKey) > 0 {
-				batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			if len(firstDataKey) > 0 {
+				batch.sampleDataKeys = append(batch.sampleDataKeys, firstDataKey)
 			}
 		}
 	}
@@ -281,18 +289,19 @@ func newTxnChunkRange(smallest []byte, biggest []byte, entries uint64) txnChunkR
 	}
 }
 
-func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, error) {
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, [][]byte, error) {
 	regions := make([]*locate.KeyLocation, 0)
 	firstKeys := make([][]byte, 0)
+	firstDataKeys := make([][]byte, 0)
 	startKey := r.smallest
 	exclusiveBiggest := kv.NextKey(r.biggest)
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", redact.Key(startKey)))
-			return nil, nil, errors.Wrap(err, "locate key failed")
+			return nil, nil, nil, errors.Wrap(err, "locate key failed")
 		}
-		firstKey, ok := MutationsHasDataInRange(
+		firstKey, firstDataKey, ok := MutationsHasDataInRange(
 			mutations,
 			util.GetMaxStartKey(r.smallest, loc.StartKey),
 			util.GetMinEndKey(exclusiveBiggest, loc.EndKey),
@@ -300,13 +309,14 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 		if ok {
 			regions = append(regions, loc)
 			firstKeys = append(firstKeys, firstKey)
+			firstDataKeys = append(firstDataKeys, firstDataKey)
 		}
 		if len(loc.EndKey) == 0 {
 			break
 		}
 		startKey = loc.EndKey
 	}
-	return regions, firstKeys, nil
+	return regions, firstKeys, firstDataKeys, nil
 }
 
 type txnFileAction interface {
@@ -322,7 +332,7 @@ type txnFilePrewriteAction struct{}
 var _ txnFileAction = (*txnFilePrewriteAction)(nil)
 
 func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
-	primaryLock := c.txnFileCtx.slice.chunkRanges[0].smallest
+	primaryLock := c.primary()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
 		StartVersion:   c.startTS,
 		PrimaryLock:    primaryLock,
@@ -343,7 +353,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	c.applyTxnFilePrewriteResourceGroupTagger(req, batch.sampleKeys)
+	c.applyTxnFilePrewriteResourceGroupTagger(req, batch.firstKey)
 	markTxnFileRetryRequest(req, bo)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
@@ -376,8 +386,8 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			if regionErr.GetDiskFull() != nil {
 				return resp, errors.New(regionErr.String())
 			}
-			if len(batch.sampleKeys) > 0 {
-				loc, err := c.store.GetRegionCache().LocateKey(bo, batch.sampleKeys[0])
+			if len(batch.sampleDataKeys) > 0 {
+				loc, err := c.store.GetRegionCache().LocateKey(bo, batch.sampleDataKeys[0])
 				if err != nil {
 					return nil, err
 				}
@@ -401,32 +411,29 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 				return nil, c.extractKeyExistsErr(e)
 			}
 
-			// Extract lock from key error
-			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+			locksFromKeyErr, err1 := txnlock.ExtractLocksFromKeyErr(keyErr)
 			if err1 != nil {
 				return nil, err1
 			}
-			logutil.Logger(bo.GetCtx()).Info(
-				"prewrite txn file encounters lock",
-				zap.Uint64("session", c.sessionID),
-				zap.Uint64("txnID", c.startTS),
-				zap.Stringer("lock", lock),
-			)
-			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
-			// fail due to a WriteConflict error. So we can construct and return an error here early.
-			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
-			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
-			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-			if lock.TxnID > c.startTS {
-				return nil, tikverr.NewErrWriteConflictWithArgs(
-					c.startTS,
-					lock.TxnID,
-					0,
-					lock.Key,
-					kvrpcpb.WriteConflict_Optimistic,
+			for _, lock := range locksFromKeyErr {
+				logutil.Logger(bo.GetCtx()).Info(
+					"prewrite txn file encounters lock",
+					zap.Uint64("session", c.sessionID),
+					zap.Uint64("txnID", c.startTS),
+					zap.Stringer("lock", lock),
 				)
+				if (lock.TxnID > c.startTS && !c.isPessimistic) ||
+					c.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+					return nil, tikverr.NewErrWriteConflictWithArgs(
+						c.startTS,
+						lock.TxnID,
+						0,
+						lock.Key,
+						kvrpcpb.WriteConflict_Optimistic,
+					)
+				}
+				locks = append(locks, lock)
 			}
-			locks = append(locks, lock)
 		}
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
@@ -436,9 +443,10 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
 		resolveLockOpts := txnlock.ResolveLocksOptions{
-			CallerStartTS: c.startTS,
-			Locks:         locks,
-			Detail:        &c.getDetail().ResolveLock,
+			CallerStartTS:            c.startTS,
+			Locks:                    locks,
+			Detail:                   &c.getDetail().ResolveLock,
+			PessimisticRegionResolve: true,
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
@@ -518,7 +526,7 @@ func (c *twoPhaseCommitter) prepareTxnFileCommitTS(bo *retry.Backoffer) (uint64,
 
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
+		Keys:          batch.getSampleDataKeys(), // To help detect duplicated request.
 		StartVersion:  c.startTS,
 		CommitVersion: c.commitTS,
 		IsTxnFile:     true,
@@ -632,7 +640,7 @@ var _ txnFileAction = (*txnFileRollbackAction)(nil)
 
 func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
-		Keys:         batch.getSampleKeys(), // To help detect duplicated request.
+		Keys:         batch.getSampleDataKeys(), // To help detect duplicated request.
 		StartVersion: c.startTS,
 		IsTxnFile:    true,
 	}, kvrpcpb.Context{
@@ -682,6 +690,10 @@ func (s step) String() string {
 	return fmt.Sprintf("%s:%s", s.name, s.dur.String())
 }
 
+func txnFileCleanupContext(storeCtx, txnCtx context.Context) context.Context {
+	return context.WithValue(storeCtx, retry.TxnStartKey, txnCtx.Value(retry.TxnStartKey))
+}
+
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if val, err := util.EvalFailpoint("injectErrorOnExecTxnFile"); err == nil {
 		errVal := val.(string)
@@ -716,7 +728,8 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		c.mu.RUnlock()
 		if !committed && !undetermined {
 			if c.txnFileCtx.slice.Len() > 0 {
-				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+				cleanupCtx := txnFileCleanupContext(c.store.Ctx(), ctx)
+				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(cleanupCtx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
 					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
 				}
@@ -739,7 +752,13 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
 
-	rcInterceptor := client.ResourceControlInterceptor.Load()
+	rcReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{
+		RequestSource: c.txn.GetRequestSource(),
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: c.resourceGroupName,
+		},
+	})
+	_, rcInterceptor, _ := client.GetResourceControlInfo(buildBo.GetCtx(), rcReq)
 	var ruDetails *util.RUDetails
 	if detail := ctx.Value(util.RUDetailsCtxKey); detail != nil {
 		ruDetails = detail.(*util.RUDetails)
@@ -870,6 +889,17 @@ func txnFileBatchConcurrency(batchCount, chunkCount int, cfg *config.Config) int
 	return concurrency
 }
 
+func txnFileMaxChunksInParallel(txnChunkMaxSize uint64) int {
+	if txnChunkMaxSize == 0 {
+		return 1
+	}
+	maxChunksInParallel := int(config.MaxTxnChunkSizeInParallel / txnChunkMaxSize)
+	if maxChunksInParallel < 1 {
+		return 1
+	}
+	return maxChunksInParallel
+}
+
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
 	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
@@ -885,18 +915,20 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
 			return nil, c.extractKeyExistsErr(e)
 		}
-		lock, err2 := txnlock.ExtractLockFromKeyErr(keyErr)
+		locks, err2 := txnlock.ExtractLocksFromKeyErr(keyErr)
 		if err2 != nil {
 			return nil, err2
 		}
-		if lock.TxnID > c.startTS {
-			return nil, tikverr.NewErrWriteConflictWithArgs(
-				c.startTS,
-				lock.TxnID,
-				0,
-				lock.Key,
-				kvrpcpb.WriteConflict_Optimistic,
-			)
+		for _, lock := range locks {
+			if lock.TxnID > c.startTS {
+				return nil, tikverr.NewErrWriteConflictWithArgs(
+					c.startTS,
+					lock.TxnID,
+					0,
+					lock.Key,
+					kvrpcpb.WriteConflict_Optimistic,
+				)
+			}
 		}
 	}
 	regionErr, err1 := resp.GetRegionError()
@@ -968,12 +1000,28 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 	return nil, nil
 }
 
+func (c *twoPhaseCommitter) txnFilePrimaryBatchIndex(batches []chunkBatch) (int, error) {
+	primary := c.primary()
+	for i := range batches {
+		if batches[i].region.Contains(primary) {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("txn file: primary out of batches")
+}
+
 func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) error {
 	for {
 		batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
 			return errors.Wrap(err, "txn file: group to batches failed")
 		}
+
+		primaryBatchIndex, err := c.txnFilePrimaryBatchIndex(batches)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		batches[0], batches[primaryBatchIndex] = batches[primaryBatchIndex], batches[0]
 
 		regionErr, err := c.executeTxnFilePrimaryBatch(bo, batches[0], action)
 		if err != nil {
@@ -1132,12 +1180,21 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 		// Relax the requirement for internal requests.
 		minMutationSize = minMutationSize / 2
 	}
-
 	if c.txn.isPessimistic ||
+		c.txn.isPipelined ||
+		c.hasSharedLocks ||
 		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
 		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize ||
 		!IsRequestSourceUseTxnFile(c.txn.RequestSource, conf) {
 		return false, nil
+	}
+	if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
+		// Txn-file chunks do not preserve per-mutation assertions.
+		for i := 0; i < c.mutations.Len(); i++ {
+			if c.mutations.IsAssertExists(i) || c.mutations.IsAssertNotExist(i) {
+				return false, nil
+			}
+		}
 	}
 
 	logutil.Logger(ctx).Debug("transaction use txn file",
@@ -1176,13 +1233,13 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	if len(splitKeys) == 0 {
 		return nil
 	}
-	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
+	err = c.store.SplitTxnFileRegions(bo.GetCtx(), splitKeys)
 	return errors.Wrap(err, "pre split regions failed")
 }
 
 func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	bo *retry.Backoffer,
-	rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor,
+	rcInterceptor resourceControlClient.ResourceGroupKVInterceptor,
 	ruDetails *util.RUDetails,
 ) (*resourcecontrol.RequestInfo, error) {
 	if rcInterceptor == nil {
@@ -1233,7 +1290,7 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		false,
 	)
 
-	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := (*rcInterceptor).OnRequestWait(ctx, c.resourceGroupName, reqInfo)
+	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(ctx, c.resourceGroupName, reqInfo)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -1245,13 +1302,13 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	return reqInfo, nil
 }
 
-func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
+func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
 	if rcInterceptor == nil {
 		return nil
 	}
 
 	respInfo := &resourcecontrol.ResponseInfo{}
-	consumption, err := (*rcInterceptor).OnResponse(c.resourceGroupName, reqInfo, respInfo)
+	consumption, err := rcInterceptor.OnResponse(c.resourceGroupName, reqInfo, respInfo)
 	if err != nil {
 		return errors.WithStack(err)
 	}

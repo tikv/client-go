@@ -1,6 +1,6 @@
 module txnkv
 
-go 1.25.10
+go 1.25.12
 
 require (
 	github.com/pingcap/kvproto v0.0.0-20260721064811-683dad8fa368

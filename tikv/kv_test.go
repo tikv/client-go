@@ -27,10 +27,12 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/intest"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -107,6 +109,22 @@ type storeSafeTsMockClient struct {
 	tiflashSafeTs uint64
 }
 
+type splitRegionKeyErrorMockClient struct {
+	Client
+	responses []*tikvrpc.Response
+	calls     atomic.Int32
+}
+
+func (c *splitRegionKeyErrorMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdSplitRegion {
+		call := int(c.calls.Add(1)) - 1
+		if call < len(c.responses) {
+			return c.responses[call], nil
+		}
+	}
+	return c.Client.SendRequest(ctx, addr, req, timeout)
+}
+
 func newStoreSafeTsMockClient(s *testKVSuite) *storeSafeTsMockClient {
 	return &storeSafeTsMockClient{
 		Client:        s.store.GetTiKVClient(),
@@ -114,6 +132,76 @@ func newStoreSafeTsMockClient(s *testKVSuite) *storeSafeTsMockClient {
 		tikvSafeTs:    100,
 		tiflashSafeTs: 80,
 	}
+}
+
+func (s *testKVSuite) TestSplitRegionsPreservesLegacyKeyErrorBehavior() {
+	// Given
+	client := &splitRegionKeyErrorMockClient{
+		Client: s.store.GetTiKVClient(),
+		responses: []*tikvrpc.Response{{Resp: &kvrpcpb.SplitRegionResponse{
+			Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.LockInfo{
+				Key: []byte("k"), LockVersion: 1, LockTtl: 1,
+			}}},
+		}}},
+	}
+	s.store.SetTiKVClient(client)
+	resolver := txnlock.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func([]*txnlock.Lock) {
+		panic("generic split must not resolve locks")
+	})
+
+	// When
+	var regionIDs []uint64
+	var err error
+	require.NotPanics(s.T(), func() {
+		regionIDs, err = s.store.SplitRegions(context.Background(), [][]byte{[]byte("k")}, false, nil)
+	})
+
+	// Then
+	s.Require().NoError(err)
+	s.Require().Empty(regionIDs)
+	s.Require().Equal(int32(1), client.calls.Load())
+}
+
+func (s *testKVSuite) TestSplitTxnFileRegionsResolvesLockAndRetries() {
+	// Given
+	client := &splitRegionKeyErrorMockClient{
+		Client: s.store.GetTiKVClient(),
+		responses: []*tikvrpc.Response{{Resp: &kvrpcpb.SplitRegionResponse{
+			Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.LockInfo{
+				Key: []byte("k"), PrimaryLock: []byte("k"), LockVersion: 1,
+			}}},
+		}}},
+	}
+	s.store.SetTiKVClient(client)
+	var observed atomic.Int32
+	resolver := txnlock.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func([]*txnlock.Lock) {
+		observed.Add(1)
+	})
+
+	// When
+	err := s.store.SplitTxnFileRegions(context.Background(), [][]byte{[]byte("k")})
+
+	// Then
+	s.Require().NoError(err)
+	s.Require().GreaterOrEqual(observed.Load(), int32(1))
+	s.Require().GreaterOrEqual(client.calls.Load(), int32(2))
+}
+
+func (s *testKVSuite) TestSplitTxnFileRegionsSplitsWithoutScattering() {
+	// Given
+	require.NoError(s.T(), failpoint.Enable("tikvclient/mockScatterRegionTimeout", `return(true)`))
+	s.T().Cleanup(func() {
+		require.NoError(s.T(), failpoint.Disable("tikvclient/mockScatterRegionTimeout"))
+	})
+	splitKey := []byte("txn-file-split")
+
+	// When
+	err := s.store.SplitTxnFileRegions(context.Background(), [][]byte{splitKey})
+
+	// Then
+	s.Require().NoError(err)
 }
 
 func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -164,6 +252,32 @@ func (s *testKVSuite) TestMinSafeTsFromStores() {
 	ok, ts := s.store.getSafeTS(s.tikvStoreID)
 	s.Require().True(ok)
 	s.Require().Equal(mockClient.tikvSafeTs, ts)
+}
+
+func (s *testKVSuite) TestHandleSplitRegionKeyErrorsExpandsSharedLockHolders() {
+	var observed []*txnlock.Lock
+	resolver := txnlock.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+	resolver.SetMeetLockCallback(func(locks []*txnlock.Lock) {
+		observed = locks
+		panic("captured shared locks")
+	})
+	keyErrs := []*kvrpcpb.KeyError{{
+		Locked: &kvrpcpb.LockInfo{
+			Key:      []byte("k"),
+			LockType: kvrpcpb.Op_SharedLock,
+			SharedLockInfos: []*kvrpcpb.LockInfo{
+				{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_PessimisticLock},
+				{Key: []byte("k"), LockVersion: 1, LockType: kvrpcpb.Op_Lock},
+			},
+		},
+	}}
+
+	require.PanicsWithValue(s.T(), "captured shared locks", func() {
+		_ = s.store.handleSplitRegionKeyErrors(retry.NewBackoffer(context.Background(), 1000), keyErrs)
+	})
+	require.Len(s.T(), observed, 2)
+	require.Equal(s.T(), kvrpcpb.Op_PessimisticLock, observed[0].LockType)
+	require.Equal(s.T(), kvrpcpb.Op_Lock, observed[1].LockType)
 }
 
 func (s *testKVSuite) TestMinSafeTsFromStoresWithAllZeros() {
