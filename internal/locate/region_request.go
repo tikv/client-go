@@ -547,59 +547,88 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	var (
-		cancels = make([]context.CancelFunc, 0, 3)
-		ctx     = bo.GetCtx()
-		hookCtx = ctx
-	)
-	if limit := kv.StoreLimit.Load(); limit > 0 {
-		if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
-			cb.Invoke(state.toResponseExt())
-			return
+	acquireAdmissionAsync := req.RequestAttemptAdmission != nil
+	sendFirstAttempt := func() {
+		var (
+			cancels = make([]context.CancelFunc, 0, 4)
+			ctx     = bo.GetCtx()
+			hookCtx = ctx
+		)
+		finishBeforeSend := cb.Invoke
+		if acquireAdmissionAsync {
+			finishBeforeSend = cb.Schedule
 		}
-		cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
-	}
-	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
-		cancels = append(cancels, cancel)
-		hookCtx = ctx
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		cancels = append(cancels, cancel)
-	}
-
-	sendToAddr := state.vars.rpcCtx.Addr
-	if state.vars.rpcCtx.ProxyStore == nil {
-		req.ForwardedHost = ""
-	} else {
-		req.ForwardedHost = state.vars.rpcCtx.Addr
-		sendToAddr = state.vars.rpcCtx.ProxyAddr
-	}
-
-	s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
-		state.vars.sendTimes++
-		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
-		var execDetails *util.ExecDetails
-		if val := ctx.Value(util.ExecDetailsKey); val != nil {
-			execDetails = val.(*util.ExecDetails)
-		}
-		if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
-			cb.Invoke(state.toResponseExt())
-			return
-		}
-		// retry
-		cb.Executor().Go(func() {
-			for !state.next() {
-				if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
-					logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
-				}
+		cancelAll := func() {
+			for i := len(cancels) - 1; i >= 0; i-- {
+				cancels[i]()
 			}
-			cb.Schedule(state.toResponseExt())
-		})
-	}))
+		}
+
+		releaseAdmission, err := state.acquireRequestAttemptAdmission()
+		if err != nil {
+			state.vars.err = err
+			finishBeforeSend(state.toResponseExt())
+			return
+		}
+		if releaseAdmission != nil {
+			cancels = append(cancels, releaseAdmission)
+		}
+		if limit := kv.StoreLimit.Load(); limit > 0 {
+			if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
+				cancelAll()
+				finishBeforeSend(state.toResponseExt())
+				return
+			}
+			cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
+		}
+		if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
+			cancels = append(cancels, cancel)
+			hookCtx = ctx
+		}
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			cancels = append(cancels, cancel)
+		}
+
+		sendToAddr := state.vars.rpcCtx.Addr
+		if state.vars.rpcCtx.ProxyStore == nil {
+			req.ForwardedHost = ""
+		} else {
+			req.ForwardedHost = state.vars.rpcCtx.Addr
+			sendToAddr = state.vars.rpcCtx.ProxyAddr
+		}
+
+		rpcStart := time.Now()
+		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
+			state.vars.sendTimes++
+			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
+			var execDetails *util.ExecDetails
+			if val := ctx.Value(util.ExecDetailsKey); val != nil {
+				execDetails = val.(*util.ExecDetails)
+			}
+			if state.handleAsyncResponse(rpcStart, canceled, resp, err, execDetails, cancels...) {
+				cb.Invoke(state.toResponseExt())
+				return
+			}
+			// retry
+			cb.Executor().Go(func() {
+				for !state.next() {
+					if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
+						logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
+					}
+				}
+				cb.Schedule(state.toResponseExt())
+			})
+		}))
+	}
+	if acquireAdmissionAsync {
+		cb.Executor().Go(sendFirstAttempt)
+	} else {
+		sendFirstAttempt()
+	}
 }
 
 func (s *RegionRequestSender) recordRPCAccessInfo(req *tikvrpc.Request, rpcCtx *RPCContext, err string) {
@@ -907,6 +936,22 @@ type sendReqState struct {
 	invariants reqInvariants
 }
 
+func (s *sendReqState) acquireRequestAttemptAdmission() (release func(), err error) {
+	req := s.args.req
+	if req.RequestAttemptAdmission == nil || s.vars.rpcCtx == nil || s.vars.rpcCtx.Store == nil {
+		return nil, nil
+	}
+
+	release, err = req.RequestAttemptAdmission(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
+	if err != nil && release != nil {
+		// Be defensive about callbacks that return both a release function and an
+		// error. No RPC attempt will be made, so release any acquired capacity.
+		release()
+		release = nil
+	}
+	return release, err
+}
+
 // reqInvariants holds the input state of the request.
 // If the tikvrpc.Request is changed during the retries or other operations.
 // the reqInvariants can tell the initial state.
@@ -1025,6 +1070,15 @@ func (s *sendReqState) next() (done bool) {
 			h := hook.(func(*tikvrpc.Request))
 			h(req)
 		}
+	}
+
+	releaseAdmission, err := s.acquireRequestAttemptAdmission()
+	if err != nil {
+		s.vars.err = err
+		return true
+	}
+	if releaseAdmission != nil {
+		defer releaseAdmission()
 	}
 
 	// judge the store limit switch.

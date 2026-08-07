@@ -44,6 +44,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -397,6 +398,229 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
 	s.NotNil(ctx)
 }
 
+func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptAdmission() {
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Require().NoError(err)
+	s.Require().NotNil(region)
+
+	s.Run("Sync", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var acquiredStoreID uint64
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
+			acquiredStoreID = storeID
+			return func() { releaseCount.Add(1) }, nil
+		}
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Require().NoError(err)
+		s.Require().NotNil(resp)
+		s.Equal(s.store, acquiredStoreID)
+		s.Equal(int32(1), releaseCount.Load())
+	})
+
+	s.Run("Async", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var acquiredStoreID uint64
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
+			acquiredStoreID = storeID
+			return func() { releaseCount.Add(1) }, nil
+		}
+
+		complete := false
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Require().NoError(err)
+			s.Require().NotNil(resp)
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(context.Background())
+			s.Require().NoError(err)
+		}
+		s.Equal(s.store, acquiredStoreID)
+		s.Equal(int32(1), releaseCount.Load())
+	})
+
+	s.Run("AsyncAdmissionWaitExcludedFromRPCStats", func() {
+		synctest.Test(s.T(), func(t *testing.T) {
+			req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+				Key:   []byte("key"),
+				Value: []byte("value"),
+			})
+			admissionStarted := make(chan struct{})
+			admit := make(chan struct{})
+			req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+				close(admissionStarted)
+				<-admit
+				return func() {}, nil
+			}
+
+			stats := NewRegionRequestRuntimeStats()
+			s.regionRequestSender.Stats = stats
+			defer func() { s.regionRequestSender.Stats = nil }()
+
+			complete := false
+			rl := async.NewRunLoop()
+			s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				complete = true
+			}))
+
+			<-admissionStarted
+			const admissionWait = time.Hour
+			time.Sleep(admissionWait)
+			close(admit)
+
+			runCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			for !complete {
+				_, err := rl.Exec(runCtx)
+				require.NoError(t, err)
+			}
+
+			require.Len(t, stats.RPCStatsList, 1)
+			require.Equal(t, tikvrpc.CmdRawPut, stats.RPCStatsList[0].Cmd)
+			require.Equal(t, uint32(1), stats.RPCStatsList[0].Count)
+			require.Less(t, stats.RPCStatsList[0].Consume, admissionWait,
+				"RPC runtime must not include request-attempt admission wait")
+		})
+	})
+
+	s.Run("AsyncAdmissionCanceled", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		admissionStarted := make(chan struct{})
+		req.RequestAttemptAdmission = func(ctx context.Context, _ uint64) (func(), error) {
+			close(admissionStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+
+		originalClient := s.regionRequestSender.client
+		var sendCount atomic.Int32
+		s.regionRequestSender.client = &fnClient{fn: func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+			sendCount.Add(1)
+			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{}}, nil
+		}}
+		defer func() { s.regionRequestSender.client = originalClient }()
+
+		bo, cancelRequest := s.bo.Fork()
+		defer cancelRequest()
+
+		complete := false
+		var sendErr error
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(resp)
+			sendErr = err
+			complete = true
+		}))
+
+		<-admissionStarted
+		cancelRequest()
+
+		runCtx, cancelRun := context.WithTimeout(context.Background(), time.Second)
+		defer cancelRun()
+		for !complete {
+			_, err := rl.Exec(runCtx)
+			s.Require().NoError(err)
+		}
+		s.ErrorIs(sendErr, context.Canceled)
+		s.Zero(sendCount.Load())
+	})
+
+	s.Run("AsyncAdmissionError", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return nil, errors.New("async admission rejected")
+		}
+
+		complete := false
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(resp)
+			s.EqualError(err, "async admission rejected")
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(context.Background())
+			s.Require().NoError(err)
+		}
+	})
+
+	s.Run("AdmissionError", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, errors.New("admission rejected")
+		}
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.EqualError(err, "admission rejected")
+		s.Equal(int32(1), releaseCount.Load())
+	})
+
+	s.Run("Canceled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		bo := retry.NewNoopBackoff(ctx)
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		req.RequestAttemptAdmission = func(ctx context.Context, _ uint64) (func(), error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.ErrorIs(err, context.Canceled)
+	})
+
+	s.Run("StoreLimitErrorReleasesAdmission", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
+		}
+
+		store := s.cache.stores.getOrInsertDefault(s.store)
+		defer func(storeLimit int64, tokenCount int64) {
+			kv.StoreLimit.Store(storeLimit)
+			store.tokenCount.Store(tokenCount)
+		}(kv.StoreLimit.Load(), store.tokenCount.Load())
+		kv.StoreLimit.Store(1)
+		store.tokenCount.Store(1)
+
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(resp)
+		s.Error(err)
+		s.Equal(int32(1), releaseCount.Load())
+	})
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 	reachable.injectConstantLiveness(s.regionRequestSender.regionCache.stores)
 
@@ -430,6 +654,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
+		}
 		region, err := s.cache.LocateRegionByID(s.bo, s.region)
 		s.Nil(err)
 		s.NotNil(region)
@@ -456,6 +684,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			_, err := rl.Exec(ctx)
 			s.Require().NoError(err)
 		}
+		s.Equal(int32(1), releaseCount.Load())
 	})
 
 	s.Run("RPCCancel", func() {
@@ -463,6 +692,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			Key:   []byte("key"),
 			Value: []byte("value"),
 		})
+		var releaseCount atomic.Int32
+		req.RequestAttemptAdmission = func(context.Context, uint64) (func(), error) {
+			return func() { releaseCount.Add(1) }, nil
+		}
 		region, err := s.cache.LocateRegionByID(s.bo, s.region)
 		s.Nil(err)
 		s.NotNil(region)
@@ -492,6 +725,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			_, err := rl.Exec(ctx)
 			s.Require().NoError(err)
 		}
+		s.Equal(int32(1), releaseCount.Load())
 	})
 
 	s.Run("Timeout", func() {

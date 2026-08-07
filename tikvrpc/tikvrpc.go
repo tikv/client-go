@@ -239,6 +239,14 @@ func (t CmdType) String() string {
 	return "Unknown"
 }
 
+// RequestAttemptAdmissionFunc waits until an RPC attempt to storeID is admitted.
+// When this function returns a non-nil release function and a nil error,
+// client-go calls release exactly once after that attempt finishes.
+// The context follows the request lifecycle; the per-attempt RPC timeout starts
+// after admission succeeds and does not bound admission wait.
+// Implementations should return promptly when ctx is canceled.
+type RequestAttemptAdmissionFunc func(ctx context.Context, storeID uint64) (release func(), err error)
+
 // Request wraps all kv/coprocessor requests.
 type Request struct {
 	Type CmdType
@@ -272,6 +280,9 @@ type Request struct {
 	// controller, which decides whether the request type is eligible for
 	// paging pre-charge; non-cop hints may be ignored.
 	PredictedReadBytes uint64
+	// RequestAttemptAdmission, when non-nil, is called after client-go selects
+	// the actual target store and before every RPC attempt, including retries.
+	RequestAttemptAdmission RequestAttemptAdmissionFunc
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32
 }
