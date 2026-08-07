@@ -16,8 +16,10 @@ package transaction
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math/rand"
 	"net"
@@ -979,9 +981,15 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	regionCache.SetPDClient(pd)
 	defer regionCache.Close()
 
+	memDB := unionstore.NewMemDB()
+	require.NoError(t, memDB.Set([]byte("k"), []byte("v")))
+	uploadedChunks := make(chan []byte, 1)
 	chunkWriter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		_, err := w.Write([]byte(`{"chunk_id":1}`))
+		chunk, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		uploadedChunks <- chunk
+		_, err = w.Write([]byte(`{"chunk_id":1}`))
 		assert.NoError(t, err)
 	}))
 	defer chunkWriter.Close()
@@ -1034,8 +1042,6 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 			}
 		}},
 	}
-	memDB := unionstore.NewMemDB()
-	require.NoError(t, memDB.Set([]byte("k"), []byte("v")))
 	txn := &KVTxn{
 		store:              store,
 		startTS:            1,
@@ -1056,10 +1062,21 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	err = txn.Commit(context.Background())
 
 	require.NoError(t, err)
+	expectedChunk := binary.LittleEndian.AppendUint16(nil, uint16(len("k")))
+	expectedChunk = append(expectedChunk, "k"...)
+	expectedChunk = append(expectedChunk, byte(kvrpcpb.Op_Put))
+	expectedChunk = binary.LittleEndian.AppendUint32(expectedChunk, uint32(len("v")))
+	expectedChunk = append(expectedChunk, "v"...)
+	expectedChunk = binary.LittleEndian.AppendUint32(expectedChunk, crc32.ChecksumIEEE(expectedChunk))
+	require.Equal(t, expectedChunk, <-uploadedChunks)
 	require.Equal(t, int64(1), commitRequestCount.Load())
 	require.Zero(t, rollbackRequestCount.Load())
 	require.Equal(t, 1, interceptor.responseCalls)
 	require.True(t, committer.mu.committed)
+	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
+	require.Panics(t, func() {
+		_, _ = memDB.Get(context.Background(), []byte("k"))
+	})
 }
 
 func TestChunkSliceSortAndDedup(t *testing.T) {

@@ -797,6 +797,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
+	c.txn.GetMemBuffer().GetMemDB().DiscardValues()
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{})
 	stepDone("commit")
 	if err != nil {
