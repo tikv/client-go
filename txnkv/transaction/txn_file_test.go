@@ -29,6 +29,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 func TestTxnFileCleanupContextUsesStoreContext(t *testing.T) {
@@ -845,6 +847,126 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 	require.Equal(t, context.Canceled, errors.Cause(committer.getUndeterminedErr()))
 	require.Equal(t, int64(1), commitRequestCount.Load())
 	require.Zero(t, rollbackRequestCount.Load())
+}
+
+type txnFileResponseErrorInterceptor struct {
+	responseCalls int
+}
+
+func (i *txnFileResponseErrorInterceptor) OnRequestWait(
+	context.Context, string, resourceControlClient.RequestInfo,
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	return &rmpb.Consumption{}, &rmpb.Consumption{}, 0, 0, nil
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponse(
+	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, error) {
+	i.responseCalls++
+	return nil, errors.New("post-commit accounting failed")
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponseWait(
+	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, time.Duration, error) {
+	return &rmpb.Consumption{}, 0, nil
+}
+
+func (i *txnFileResponseErrorInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
+	return false
+}
+
+func (i *txnFileResponseErrorInterceptor) GetRUVersion() resourceControlClient.RUVersion {
+	return resourceControlClient.DefaultRUVersion
+}
+
+func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T) {
+	pd := &mockPDClient{}
+	regionCache := locate.NewTestRegionCache()
+	regionCache.SetPDClient(pd)
+	defer regionCache.Close()
+
+	chunkWriter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		_, err := w.Write([]byte(`{"chunk_id":1}`))
+		assert.NoError(t, err)
+	}))
+	defer chunkWriter.Close()
+
+	origCfg := config.GetGlobalConfig()
+	newCfg := *origCfg
+	newCfg.TiKVClient.TxnChunkWriterAddr = chunkWriter.Listener.Addr().String()
+	newCfg.TiKVClient.TxnFileMinMutationSize = 1
+	config.StoreGlobalConfig(&newCfg)
+	defer func() {
+		config.StoreGlobalConfig(origCfg)
+		once = sync.Once{}
+		cli = nil
+		errCli = nil
+		scheme = ""
+	}()
+
+	once = sync.Once{}
+	cli = nil
+	errCli = nil
+	scheme = ""
+
+	interceptor := &txnFileResponseErrorInterceptor{}
+	var rcInterceptor resourceControlClient.ResourceGroupKVInterceptor = interceptor
+	client.ResourceControlSwitch.Store(true)
+	client.ResourceControlInterceptor.Store(&rcInterceptor)
+	t.Cleanup(func() {
+		client.ResourceControlSwitch.Store(false)
+		client.ResourceControlInterceptor.Store(nil)
+	})
+
+	var commitRequestCount atomic.Int64
+	var rollbackRequestCount atomic.Int64
+	store := &txnFileCommitTSStore{
+		timestamps:  []uint64{2},
+		oracle:      &txnFileCommitTSOracle{},
+		regionCache: regionCache,
+		client: &fnClient{onSend: func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPrewrite:
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+			case tikvrpc.CmdCommit:
+				commitRequestCount.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
+			case tikvrpc.CmdBatchRollback:
+				rollbackRequestCount.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
+			default:
+				return nil, errors.Errorf("unexpected request type %s", req.Type)
+			}
+		}},
+	}
+	memDB := unionstore.NewMemDB()
+	require.NoError(t, memDB.Set([]byte("k"), []byte("v")))
+	txn := &KVTxn{
+		store:              store,
+		startTS:            1,
+		startTime:          time.Now(),
+		valid:              true,
+		schemaVer:          txnFileSchemaVer(10),
+		schemaLeaseChecker: &txnFileSchemaLeaseChecker{},
+		scope:              oracle.GlobalTxnScope,
+		vars:               tikv.DefaultVars,
+		us:                 unionstore.NewUnionStore(memDB, nil),
+		resourceGroupName:  "txn-file-test",
+		RequestSource:      &util.RequestSource{},
+	}
+	committer, err := newTwoPhaseCommitter(txn, 0)
+	require.NoError(t, err)
+	txn.committer = committer
+
+	err = txn.Commit(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), commitRequestCount.Load())
+	require.Zero(t, rollbackRequestCount.Load())
+	require.Equal(t, 1, interceptor.responseCalls)
+	require.True(t, committer.mu.committed)
 }
 
 func TestChunkSliceSortAndDedup(t *testing.T) {

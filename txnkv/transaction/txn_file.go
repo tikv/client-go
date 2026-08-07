@@ -802,8 +802,13 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		return
 	}
 
-	err = c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails)
-	return
+	if accountingErr := c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails); accountingErr != nil {
+		metrics.TxnFileErrorAccounting.Inc()
+		logutil.Logger(ctx).Warn("txn file: resource control accounting failed after commit",
+			zap.Uint64("txnStartTS", c.startTS),
+			zap.Error(accountingErr))
+	}
+	return nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction) (txnChunkSlice, error) {

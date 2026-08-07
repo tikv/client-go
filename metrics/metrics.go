@@ -139,6 +139,7 @@ var (
 	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
 
 	TiKVTxnFileRequestCounter        *prometheus.CounterVec
+	TiKVTxnFileErrorCounter          *prometheus.CounterVec
 	TiKVTxnFileWriteBytes            *prometheus.CounterVec
 	TiKVTxnFileMutationSizeHistogram *prometheus.HistogramVec
 	TiKVTxnFileDuration              *prometheus.HistogramVec
@@ -1069,6 +1070,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
+	TiKVTxnFileErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_errors",
+			Help:        "Counter of file-based transaction errors.",
+			ConstLabels: constLabels,
+		}, []string{LblType})
+
 	TiKVTxnFileWriteBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -1212,6 +1222,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
 	prometheus.MustRegister(TiKVTxnFileRequestCounter)
+	prometheus.MustRegister(TiKVTxnFileErrorCounter)
 	prometheus.MustRegister(TiKVTxnFileWriteBytes)
 	prometheus.MustRegister(TiKVTxnFileMutationSizeHistogram)
 	prometheus.MustRegister(TiKVTxnFileDuration)
