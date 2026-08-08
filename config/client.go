@@ -100,6 +100,10 @@ type TiKVClient struct {
 	// If a Region has not been accessed for more than the given duration (in seconds), it
 	// will be reloaded from the PD.
 	RegionCacheTTL uint `toml:"region-cache-ttl" json:"region-cache-ttl"`
+	// RegionCacheTTLJitterSec is the jitter in seconds for region cache TTL.
+	// The actual TTL will be randomly chosen in the range [RegionCacheTTL, RegionCacheTTL + RegionCacheTTLJitterSec].
+	// This can help to avoid cache stampede when many regions expire at the same time.
+	RegionCacheTTLJitterSec uint `toml:"region-cache-ttl-jitter-sec" json:"region-cache-ttl-jitter-sec"`
 	// If a store has been up to the limit, it will return error for successive request to
 	// prevent the store occupying too much token in dispatching level.
 	StoreLimit int64 `toml:"store-limit" json:"store-limit"`
@@ -214,9 +218,10 @@ func DefaultTiKVClient() TiKVClient {
 
 		EnableChunkRPC: true,
 
-		RegionCacheTTL:       600,
-		StoreLimit:           0,
-		StoreLivenessTimeout: DefStoreLivenessTimeout,
+		RegionCacheTTL:          600,
+		RegionCacheTTLJitterSec: 60,
+		StoreLimit:              0,
+		StoreLivenessTimeout:    DefStoreLivenessTimeout,
 
 		TTLRefreshedTxnSize: 32 * 1024 * 1024,
 
