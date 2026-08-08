@@ -26,3 +26,18 @@ func ExtractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*Lock, error) {
 	}
 	return nil, tikverr.ExtractKeyErr(keyErr)
 }
+
+// ExtractLocksFromKeyErr extracts all locks represented by a KeyError.
+func ExtractLocksFromKeyErr(keyErr *kvrpcpb.KeyError) ([]*Lock, error) {
+	if locked := keyErr.GetLocked(); locked != nil {
+		if sharedLockInfos := locked.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
+			locks := make([]*Lock, 0, len(sharedLockInfos))
+			for _, sharedLockInfo := range sharedLockInfos {
+				locks = append(locks, NewLock(sharedLockInfo))
+			}
+			return locks, nil
+		}
+		return []*Lock{NewLock(locked)}, nil
+	}
+	return nil, tikverr.ExtractKeyErr(keyErr)
+}
