@@ -137,7 +137,9 @@ func TestCloseTxnFileIdleConnections(t *testing.T) {
 	client := server.Client()
 	cli.Store(client)
 
-	resp, err := client.Get(server.URL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, resp.Body)
 	require.NoError(t, err)
