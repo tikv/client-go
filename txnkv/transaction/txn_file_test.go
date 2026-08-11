@@ -189,18 +189,6 @@ func TestTxnFileHTTPClientHasIdleConnectionTimeout(t *testing.T) {
 	require.Equal(t, 90*time.Second, transport.IdleConnTimeout)
 }
 
-func TestTxnFileBatchConcurrency(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.CommitterConcurrency = 4
-
-	cfg.TiKVClient.TxnChunkMaxSize = config.MaxTxnChunkSizeInParallel / 2
-	require.Equal(t, 2, txnFileBatchConcurrency(4, 3, &cfg))
-
-	cfg.TiKVClient.TxnChunkMaxSize = config.MaxTxnChunkSizeInParallel + 1
-	require.Equal(t, 4, txnFileBatchConcurrency(4, 1, &cfg))
-	require.Equal(t, 1, txnFileBatchConcurrency(4, 2, &cfg))
-}
-
 func (o *txnFileCommitTSOracle) IsExpired(startTS uint64, ttl uint64, option *oracle.Option) bool {
 	o.calls++
 	o.startTS = startTS

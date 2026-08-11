@@ -857,8 +857,15 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	// we can commit/rollback as many regions as possible.
 	_, returnEarly := action.(txnFilePrewriteAction)
 
+	rateLim := len(batches)
 	cnf := config.GetGlobalConfig()
-	rateLim := txnFileBatchConcurrency(len(batches), chunksCount, cnf)
+	if rateLim > cnf.CommitterConcurrency {
+		rateLim = cnf.CommitterConcurrency
+	}
+	maxChunksInParallel := txnFileMaxChunksInParallel(cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	if chunksCount > maxChunksInParallel {
+		rateLim = maxChunksInParallel
+	}
 	rateLimiter := util.NewRateLimit(rateLim)
 	go func() {
 		for _, batch := range batches {
@@ -889,15 +896,6 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 	regionErrChunks.sortAndDedup()
 	return regionErrChunks, err
-}
-
-func txnFileBatchConcurrency(batchCount, chunkCount int, cfg *config.Config) int {
-	concurrency := min(batchCount, cfg.CommitterConcurrency)
-	maxChunksInParallel := txnFileMaxChunksInParallel(cfg.TiKVClient.TxnChunkMaxSize)
-	if chunkCount > maxChunksInParallel {
-		concurrency = min(concurrency, maxChunksInParallel)
-	}
-	return concurrency
 }
 
 func txnFileMaxChunksInParallel(txnChunkMaxSize uint64) int {
