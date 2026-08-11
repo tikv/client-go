@@ -137,7 +137,9 @@ func TestCloseTxnFileIdleConnections(t *testing.T) {
 	client := server.Client()
 	cli.Store(client)
 
-	resp, err := client.Get(server.URL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, resp.Body)
 	require.NoError(t, err)
@@ -191,10 +193,10 @@ func TestTxnFileBatchConcurrency(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.CommitterConcurrency = 4
 
-	cfg.TiKVClient.TxnChunkMaxSize = MaxTxnChunkSizeInParallel / 2
+	cfg.TiKVClient.TxnChunkMaxSize = config.MaxTxnChunkSizeInParallel / 2
 	require.Equal(t, 2, txnFileBatchConcurrency(4, 3, &cfg))
 
-	cfg.TiKVClient.TxnChunkMaxSize = MaxTxnChunkSizeInParallel + 1
+	cfg.TiKVClient.TxnChunkMaxSize = config.MaxTxnChunkSizeInParallel + 1
 	require.Equal(t, 4, txnFileBatchConcurrency(4, 1, &cfg))
 	require.Equal(t, 1, txnFileBatchConcurrency(4, 2, &cfg))
 }
