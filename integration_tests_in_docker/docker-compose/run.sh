@@ -134,6 +134,7 @@ diagnostics() {
     print_file_log tikv-2 /var/log/tikv/tikv.log
     print_file_log tikv-3 /var/log/tikv/tikv.log
     print_file_log tikv-worker /var/log/tikv-worker/tikv-worker.log
+    print_file_log test /workspace/integration_tests_in_docker/txn_file/txn-file.log
 }
 
 cleanup() {
@@ -176,4 +177,4 @@ compose up -d --no-deps tikv-worker
 wait_healthy tikv-worker
 
 compose build test
-compose run --rm --no-deps test
+compose run --no-deps test
