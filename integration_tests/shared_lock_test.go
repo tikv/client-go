@@ -458,6 +458,61 @@ func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLock() {
 	s.Nil(txn1.Rollback())
 }
 
+func (s *testSharedLockSuite) TestPrewriteResolveExpiredSharedLockWithActiveHolder() {
+	originManagedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 500)
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedLockTTL)
+
+	expiredTxn := s.begin()
+	activeTxn := s.begin()
+	sharedKey := s.key("TestPrewriteResolveExpiredSharedLockWithActiveHolder_key")
+	primaryKeys := [][]byte{
+		s.key("TestPrewriteResolveExpiredSharedLockWithActiveHolder_expired_pk"),
+		s.key("TestPrewriteResolveExpiredSharedLockWithActiveHolder_active_pk"),
+	}
+	for i, txn := range []transaction.TxnProbe{expiredTxn, activeTxn} {
+		s.Nil(txn.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), primaryKeys[i]))
+		lockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+		lockCtx.InShareMode = true
+		s.Nil(txn.LockKeys(context.Background(), lockCtx, sharedKey))
+	}
+	s.waitLocks(sharedKey, s.getTS(), 2, "expect two shared lock holders")
+	expiredTxn.GetCommitter().CloseTTLManager()
+	time.Sleep(time.Duration(atomic.LoadUint64(&transaction.ManagedLockTTL))*time.Millisecond + 200*time.Millisecond)
+	s.True(activeTxn.GetCommitter().IsTTLRunning())
+
+	contender, err := s.store.Begin()
+	s.Nil(err)
+	value := []byte("contender-value")
+	s.Nil(contender.Set(sharedKey, value))
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- contender.Commit(context.Background())
+	}()
+
+	locks := s.waitLocks(sharedKey, s.getTS(), 1, "expired holder should be removed while active holder remains")
+	s.Equal(activeTxn.StartTS(), locks[0].TxnID)
+	select {
+	case err := <-commitDone:
+		s.FailNow("prewrite returned while the active shared lock remained", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	s.Nil(activeTxn.Rollback())
+	select {
+	case err := <-commitDone:
+		s.Nil(err)
+	case <-time.After(5 * time.Second):
+		s.FailNow("prewrite did not finish after the active holder released")
+	}
+
+	snapshot := s.store.GetSnapshot(contender.CommitTS())
+	got, err := snapshot.Get(context.Background(), sharedKey)
+	s.Nil(err)
+	s.Equal(value, got.Value)
+	s.Nil(expiredTxn.Rollback())
+}
+
 func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
 	if config.NextGen {
 		s.T().Skip("NextGen does not support allow_lock_with_conflict / ForceLock yet")

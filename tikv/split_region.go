@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
 	"github.com/tikv/pd/client/opt"
@@ -61,11 +62,18 @@ import (
 
 const splitBatchRegionLimit = 2048
 
+type splitRegionMode uint8
+
+const (
+	splitRegionLegacy splitRegionMode = iota
+	splitRegionResolveLocks
+)
+
 func equalRegionStartKey(key, regionStartKey []byte) bool {
 	return bytes.Equal(key, regionStartKey)
 }
 
-func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter bool, tableID *int64) (*tikvrpc.Response, error) {
+func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter bool, tableID *int64, mode splitRegionMode) (*tikvrpc.Response, error) {
 	// equalRegionStartKey is used to filter split keys.
 	// If the split key is equal to the start key of the region, then the key has been split, we need to skip the split key.
 	groups, _, err := s.regionCache.GroupKeysByRegion(bo, keys, equalRegionStartKey)
@@ -90,7 +98,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 			zap.String("first split key", redact.Key(batches[0].Keys[0])))
 	}
 	if len(batches) == 1 {
-		resp := s.batchSendSingleRegion(bo, batches[0], scatter, tableID)
+		resp := s.batchSendSingleRegion(bo, batches[0], scatter, tableID, mode)
 		return resp.Response, resp.Error
 	}
 	ch := make(chan kvrpc.BatchResult, len(batches))
@@ -101,7 +109,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 			defer cancel()
 
 			util.WithRecovery(func() {
-				batchResult := s.batchSendSingleRegion(backoffer, b, scatter, tableID)
+				batchResult := s.batchSendSingleRegion(backoffer, b, scatter, tableID, mode)
 				lastForkedBo.Store(backoffer)
 				select {
 				case ch <- batchResult:
@@ -137,7 +145,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	return &tikvrpc.Response{Resp: srResp}, err
 }
 
-func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatter bool, tableID *int64) kvrpc.BatchResult {
+func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatter bool, tableID *int64, mode splitRegionMode) kvrpc.BatchResult {
 	if val, err := util.EvalFailpoint("mockSplitRegionTimeout"); err == nil {
 		if val.(bool) {
 			if _, ok := bo.GetCtx().Deadline(); ok {
@@ -172,13 +180,29 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 			batchResp.Error = err
 			return batchResp
 		}
-		resp, err = s.splitBatchRegionsReq(bo, batch.Keys, scatter, tableID)
+		resp, err = s.splitBatchRegionsReq(bo, batch.Keys, scatter, tableID, mode)
 		batchResp.Response = resp
 		batchResp.Error = err
 		return batchResp
 	}
 
 	spResp := resp.Resp.(*kvrpcpb.SplitRegionResponse)
+
+	if mode == splitRegionResolveLocks {
+		keyErrs := spResp.GetErrors()
+		if len(keyErrs) > 0 {
+			err := s.handleSplitRegionKeyErrors(bo, keyErrs)
+			if err != nil {
+				batchResp.Error = err
+				return batchResp
+			}
+			resp, err = s.splitBatchRegionsReq(bo, batch.Keys, scatter, tableID, mode)
+			batchResp.Response = resp
+			batchResp.Error = err
+			return batchResp
+		}
+	}
+
 	regions := spResp.GetRegions()
 	if len(regions) > 0 {
 		// Divide a region into n, one of them may not need to be scattered,
@@ -223,6 +247,49 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	return batchResp
 }
 
+func (s *KVStore) handleSplitRegionKeyErrors(bo *Backoffer, keyErrs []*kvrpcpb.KeyError) error {
+	var (
+		locks   []*txnlock.Lock
+		startTS uint64 = math.MaxUint64 // Set as MaxUint64 and check txn status will not push the minCommiTS.
+	)
+	for _, keyErr := range keyErrs {
+		locksFromKeyErr, err1 := txnlock.ExtractLocksFromKeyErr(keyErr)
+		if err1 != nil {
+			// Split region should return key error of locked only.
+			return err1
+		}
+		for _, lock := range locksFromKeyErr {
+			logutil.Logger(bo.GetCtx()).Info("split region encounters lock", zap.Stringer("lock", lock))
+			locks = append(locks, lock)
+		}
+	}
+
+	token := s.GetLockResolver().RecordResolvingLocks(locks, startTS)
+	defer s.GetLockResolver().ResolveLocksDone(startTS, token)
+
+	resolveLockOpts := txnlock.ResolveLocksOptions{
+		CallerStartTS:            startTS,
+		Locks:                    locks,
+		PessimisticRegionResolve: true,
+	}
+	resolveLockRes, err := s.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	msBeforeExpired := resolveLockRes.TTL
+	if msBeforeExpired > 0 {
+		err = bo.BackoffWithCfgAndMaxSleep(
+			retry.BoTxnLock,
+			int(msBeforeExpired),
+			errors.Errorf("split region lockedKeys: %d", len(locks)),
+		)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
+}
+
 const (
 	splitRegionBackoff     = 20000
 	maxSplitRegionsBackoff = 120000
@@ -231,7 +298,7 @@ const (
 // SplitRegions splits regions by splitKeys.
 func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter bool, tableID *int64) (regionIDs []uint64, err error) {
 	bo := retry.NewBackofferWithVars(ctx, int(math.Min(float64(len(splitKeys))*splitRegionBackoff, maxSplitRegionsBackoff)), nil)
-	resp, err := s.splitBatchRegionsReq(bo, splitKeys, scatter, tableID)
+	resp, err := s.splitBatchRegionsReq(bo, splitKeys, scatter, tableID, splitRegionLegacy)
 	regionIDs = make([]uint64, 0, len(splitKeys))
 	if resp != nil && resp.Resp != nil {
 		spResp := resp.Resp.(*kvrpcpb.SplitRegionResponse)
@@ -241,6 +308,13 @@ func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter 
 		logutil.BgLogger().Info("split regions complete", zap.Int("region count", len(regionIDs)), zap.Uint64s("region IDs", regionIDs))
 	}
 	return regionIDs, err
+}
+
+// SplitTxnFileRegions splits regions for file-based transactions without scattering and resolves locks encountered by TiKV.
+func (s *KVStore) SplitTxnFileRegions(ctx context.Context, splitKeys [][]byte) error {
+	bo := retry.NewBackofferWithVars(ctx, int(math.Min(float64(len(splitKeys))*splitRegionBackoff, maxSplitRegionsBackoff)), nil)
+	_, err := s.splitBatchRegionsReq(bo, splitKeys, false, nil, splitRegionResolveLocks)
+	return err
 }
 
 func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) error {
