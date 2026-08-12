@@ -508,54 +508,104 @@ func TestSharedLockUpgrade(t *testing.T) {
 			keysAsStrings(TxnProbe{KVTxn: txn.KVTxn}.CollectLockedKeys()))
 	})
 
-	t.Run("LockUpgradeConflictReturnsTypedErrorWithoutRetrySemantics", func(t *testing.T) {
-		primaryKey := []byte("primary-key")
-		upgradeKey := []byte("upgrade-key")
-		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
-			if len(req.Mutations) == 1 &&
-				req.Mutations[0].Op == kvrpcpb.Op_PessimisticLock &&
-				string(req.Mutations[0].Key) == string(upgradeKey) {
-				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
-					Errors: []*kvrpcpb.KeyError{{
-						LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
-							Key:          upgradeKey,
-							StartTs:      1,
-							OwnerStartTs: 2,
-							Reason:       kvrpcpb.LockUpgradeConflict_SecondUpgrader,
-						},
-					}},
-				}}, nil
-			}
-			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
-		})
-		lockSharedKey(t, txn, primaryKey, upgradeKey)
-		*requests = (*requests)[:0]
+	t.Run("LockUpgradeConflict", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			reason kvrpcpb.LockUpgradeConflict_Reason
+		}{
+			{
+				name:   "SecondUpgrader",
+				reason: kvrpcpb.LockUpgradeConflict_SecondUpgrader,
+			},
+			{
+				name:   "DuplicateInFlight",
+				reason: kvrpcpb.LockUpgradeConflict_DuplicateInFlight,
+			},
+			{
+				name:   "Unknown",
+				reason: kvrpcpb.LockUpgradeConflict_Unknown,
+			},
+		}
 
-		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
-		lockCtx.AllowSharedLockUpgrade = true
-		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
-		require.Error(t, err)
-		require.Len(t, *requests, 1)
-		require.Equal(t, []string{string(upgradeKey)}, keysAsStrings((*requests)[0].keys))
-		require.False(t, tikverr.IsErrWriteConflict(err))
-		require.False(t, tikverr.IsErrorUndetermined(err))
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				primaryKey := []byte("primary-key")
+				upgradeKey := []byte("upgrade-key")
+				txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+					if len(req.Mutations) == 1 &&
+						req.Mutations[0].Op == kvrpcpb.Op_PessimisticLock &&
+						string(req.Mutations[0].Key) == string(upgradeKey) {
+						return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
+							Errors: []*kvrpcpb.KeyError{{
+								LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+									Key:          upgradeKey,
+									StartTs:      1,
+									OwnerStartTs: 2,
+									Reason:       tt.reason,
+								},
+							}},
+						}}, nil
+					}
+					return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+				})
+				lockSharedKey(t, txn, primaryKey, upgradeKey)
+				*requests = (*requests)[:0]
 
-		var retryable *tikverr.ErrRetryable
-		require.False(t, stderrs.As(err, &retryable))
-		var deadlock *tikverr.ErrDeadlock
-		require.False(t, stderrs.As(err, &deadlock))
+				lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+				lockCtx.AllowSharedLockUpgrade = true
+				firstErr := txn.lockKeys(context.Background(), lockCtx, nil, upgradeKey)
+				require.Error(t, firstErr)
+				require.Len(t, *requests, 1)
+				require.Equal(t, []string{string(upgradeKey)}, keysAsStrings((*requests)[0].keys))
+				require.False(t, tikverr.IsErrWriteConflict(firstErr))
+				require.False(t, tikverr.IsErrorUndetermined(firstErr))
 
-		var conflict *tikverr.ErrLockUpgradeConflict
-		require.ErrorAs(t, err, &conflict)
-		require.Equal(t, []byte("upgrade-key"), conflict.Key)
-		require.Equal(t, uint64(1), conflict.StartTs)
-		require.Equal(t, uint64(2), conflict.OwnerStartTs)
-		require.Equal(t, kvrpcpb.LockUpgradeConflict_SecondUpgrader, conflict.Reason)
+				var retryable *tikverr.ErrRetryable
+				require.False(t, stderrs.As(firstErr, &retryable))
+				var deadlock *tikverr.ErrDeadlock
+				require.False(t, stderrs.As(firstErr, &deadlock))
 
-		flags, getErr := txn.GetMemBuffer().GetFlags(upgradeKey)
-		require.NoError(t, getErr)
-		require.True(t, flags.HasLocked())
-		require.True(t, flags.HasLockedInShareMode())
+				var firstConflict *tikverr.ErrLockUpgradeConflict
+				require.ErrorAs(t, firstErr, &firstConflict)
+				require.Equal(t, upgradeKey, firstConflict.Key)
+				require.Equal(t, uint64(1), firstConflict.StartTs)
+				require.Equal(t, uint64(2), firstConflict.OwnerStartTs)
+				require.Equal(t, tt.reason, firstConflict.Reason)
+
+				flags, err := txn.GetMemBuffer().GetFlags(upgradeKey)
+				require.NoError(t, err)
+				require.True(t, flags.HasLocked())
+				require.True(t, flags.HasLockedInShareMode())
+
+				requestCount := len(*requests)
+				laterErr := txn.LockKeys(
+					context.Background(),
+					kv.NewLockCtx(3, kv.LockNoWait, time.Now()),
+					[]byte("later-key"),
+				)
+				var laterConflict *tikverr.ErrLockUpgradeConflict
+				require.ErrorAs(t, laterErr, &laterConflict)
+				require.Same(t, firstConflict, laterConflict)
+				require.Len(t, *requests, requestCount)
+
+				commitErr := txn.Commit(context.Background())
+				var commitConflict *tikverr.ErrLockUpgradeConflict
+				require.ErrorAs(t, commitErr, &commitConflict)
+				require.Same(t, firstConflict, commitConflict)
+				require.Len(t, *requests, requestCount)
+				require.True(t, txn.Valid(), "fatal commit rejection must leave rollback available")
+
+				require.NoError(t, txn.Rollback())
+				require.False(t, txn.Valid())
+				rolledBack := make([][]byte, 0, 2)
+				for _, request := range *requests {
+					if request.cmd == tikvrpc.CmdPessimisticRollback {
+						rolledBack = append(rolledBack, request.keys...)
+					}
+				}
+				require.ElementsMatch(t, [][]byte{primaryKey, upgradeKey}, rolledBack)
+			})
+		}
 	})
 
 	t.Run("SharedLockLostPoisonsTransactionButKeepsRollbackAvailable", func(t *testing.T) {

@@ -1496,6 +1496,11 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 				txn.committer.setFatalTxnErr(err)
 				return 0, err
 			}
+			var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
+			if errors.As(err, &lockUpgradeConflict) {
+				txn.committer.setFatalTxnErr(err)
+				return 0, err
+			}
 			if isLockUpgradeResultUndetermined(err) {
 				txn.committer.setUndeterminedErr(err)
 				return 0, errors.WithStack(tikverr.ErrResultUndetermined)
