@@ -447,9 +447,6 @@ func (b *Backoffer) CheckKilled() error {
 	if b.vars == nil {
 		return nil
 	}
-	if handler := b.vars.KillSignalHandler; handler != nil {
-		return handler.HandleSignal()
-	}
 	if b.vars.Killed != nil {
 		killed := atomic.LoadUint32(b.vars.Killed)
 		if killed != 0 {
@@ -459,6 +456,9 @@ func (b *Backoffer) CheckKilled() error {
 			)
 			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
 		}
+	}
+	if b.vars.KillSignalHandler != nil {
+		return b.vars.KillSignalHandler.HandleSignal()
 	}
 	return nil
 }

@@ -65,11 +65,18 @@ func TestCheckKilled(t *testing.T) {
 		return handlerErr
 	})
 	bo := NewBackofferWithVars(context.Background(), 1, vars)
+	err := bo.CheckKilled()
+	var interrupted tikverr.ErrQueryInterruptedWithSignal
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+	assert.Equal(t, 0, called)
+
+	killed = 0
 	assert.ErrorIs(t, bo.CheckKilled(), handlerErr)
 	assert.Equal(t, 1, called)
 	vars.KillSignalHandler = nil
-	err := bo.CheckKilled()
-	var interrupted tikverr.ErrQueryInterruptedWithSignal
+	killed = 7
+	err = bo.CheckKilled()
 	assert.ErrorAs(t, err, &interrupted)
 	assert.Equal(t, killed, interrupted.Signal)
 
