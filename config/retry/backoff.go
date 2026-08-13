@@ -447,7 +447,7 @@ func (b *Backoffer) CheckKilled() error {
 	if b.vars == nil {
 		return nil
 	}
-	if handler := b.vars.LoadKillSignalHandler(); handler != nil {
+	if handler := b.vars.KillSignalHandler; handler != nil {
 		return handler.HandleSignal()
 	}
 	if b.vars.Killed != nil {

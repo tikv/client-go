@@ -64,20 +64,9 @@ type Variables struct {
 	// When its value is 0, use the config of "txn-file-min-mutation-size".
 	TxnFileMinMutationSize uint64
 
-	// killSignalHandler takes precedence over Killed when it is set.
+	// KillSignalHandler takes precedence over Killed when it is set.
 	// It must be configured before Variables is used by concurrent requests.
-	killSignalHandler KillSignalHandler
-}
-
-// SetKillSignalHandler sets the handler used at interruptible KV request checkpoints.
-// It must not be called concurrently with requests using v. Passing nil clears the handler.
-func (v *Variables) SetKillSignalHandler(handler KillSignalHandler) {
-	v.killSignalHandler = handler
-}
-
-// LoadKillSignalHandler returns the handler used at interruptible KV request checkpoints.
-func (v *Variables) LoadKillSignalHandler() KillSignalHandler {
-	return v.killSignalHandler
+	KillSignalHandler KillSignalHandler
 }
 
 // NewVariables create a new Variables instance with default values.

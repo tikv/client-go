@@ -60,14 +60,14 @@ func TestCheckKilled(t *testing.T) {
 	called := 0
 	killed := uint32(7)
 	vars := kv.NewVariables(&killed)
-	vars.SetKillSignalHandler(killSignalHandlerFunc(func() error {
+	vars.KillSignalHandler = killSignalHandlerFunc(func() error {
 		called++
 		return handlerErr
-	}))
+	})
 	bo := NewBackofferWithVars(context.Background(), 1, vars)
 	assert.ErrorIs(t, bo.CheckKilled(), handlerErr)
 	assert.Equal(t, 1, called)
-	vars.SetKillSignalHandler(nil)
+	vars.KillSignalHandler = nil
 	err := bo.CheckKilled()
 	var interrupted tikverr.ErrQueryInterruptedWithSignal
 	assert.ErrorAs(t, err, &interrupted)
