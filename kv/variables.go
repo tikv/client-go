@@ -34,8 +34,6 @@
 
 package kv
 
-import "reflect"
-
 // KillSignalHandler handles kill signals at interruptible KV request checkpoints.
 // Implementations must be safe for concurrent use.
 type KillSignalHandler interface {
@@ -72,33 +70,14 @@ type Variables struct {
 }
 
 // SetKillSignalHandler sets the handler used at interruptible KV request checkpoints.
-// It must not be called concurrently with requests using v. Passing nil or a typed
-// nil clears the handler.
+// It must not be called concurrently with requests using v. Passing nil clears the handler.
 func (v *Variables) SetKillSignalHandler(handler interface{ HandleSignal() error }) {
-	if isNilKillSignalHandler(handler) {
-		v.killSignalHandler = nil
-		return
-	}
 	v.killSignalHandler = handler
 }
 
 // LoadKillSignalHandler returns the handler used at interruptible KV request checkpoints.
 func (v *Variables) LoadKillSignalHandler() KillSignalHandler {
 	return v.killSignalHandler
-}
-
-func isNilKillSignalHandler(handler KillSignalHandler) bool {
-	if handler == nil {
-		return true
-	}
-	value := reflect.ValueOf(handler)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 // NewVariables create a new Variables instance with default values.

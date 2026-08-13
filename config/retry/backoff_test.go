@@ -55,12 +55,6 @@ func (f killSignalHandlerFunc) HandleSignal() error {
 	return f()
 }
 
-type pointerKillSignalHandler struct{}
-
-func (*pointerKillSignalHandler) HandleSignal() error {
-	return errors.New("unexpected call to a typed nil handler")
-}
-
 func TestCheckKilled(t *testing.T) {
 	handlerErr := errors.New("killed by handler")
 	called := 0
@@ -76,13 +70,6 @@ func TestCheckKilled(t *testing.T) {
 	vars.SetKillSignalHandler(nil)
 	err := bo.CheckKilled()
 	var interrupted tikverr.ErrQueryInterruptedWithSignal
-	assert.ErrorAs(t, err, &interrupted)
-	assert.Equal(t, killed, interrupted.Signal)
-
-	var nilHandler *pointerKillSignalHandler
-	vars.SetKillSignalHandler(nilHandler)
-	assert.Nil(t, vars.LoadKillSignalHandler())
-	err = bo.CheckKilled()
 	assert.ErrorAs(t, err, &interrupted)
 	assert.Equal(t, killed, interrupted.Signal)
 
