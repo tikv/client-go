@@ -389,6 +389,48 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.True(t, flags.HasLockedInShareMode())
 	})
 
+	t.Run("UpgradeWithoutPrimaryRejectsBeforeRPC", func(t *testing.T) {
+		upgradeKey := []byte("upgrade-key")
+		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		txn.GetMemBuffer().UpdateFlags(upgradeKey, kv.SetKeyLocked, kv.SetKeyLockedInShareMode)
+
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lockCtx.AllowSharedLockUpgrade = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
+		require.ErrorContains(t, err, "pessimistic lock in share mode requires primary key to be selected")
+		require.Empty(t, *requests)
+		require.NotNil(t, txn.committer)
+		require.Nil(t, txn.committer.primaryKey)
+
+		flags, err := txn.GetMemBuffer().GetFlags(upgradeKey)
+		require.NoError(t, err)
+		require.True(t, flags.HasLocked())
+		require.True(t, flags.HasLockedInShareMode())
+	})
+
+	t.Run("UpgradeWithZeroForUpdateTSRejectsBeforeRPC", func(t *testing.T) {
+		primaryKey := []byte("primary-key")
+		upgradeKey := []byte("upgrade-key")
+		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		lockSharedKey(t, txn, primaryKey, upgradeKey)
+
+		requestCount := len(*requests)
+		lockCtx := kv.NewLockCtx(0, kv.LockNoWait, time.Now())
+		lockCtx.AllowSharedLockUpgrade = true
+		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
+		require.ErrorContains(t, err, "shared lock upgrade requires ForUpdateTS to be greater than zero")
+		require.Len(t, *requests, requestCount)
+
+		flags, err := txn.GetMemBuffer().GetFlags(upgradeKey)
+		require.NoError(t, err)
+		require.True(t, flags.HasLocked())
+		require.True(t, flags.HasLockedInShareMode())
+	})
+
 	t.Run("GateOnSendsUpgradeSeparatelyAndPromotesLocalFlags", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")

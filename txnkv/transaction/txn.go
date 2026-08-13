@@ -1592,15 +1592,11 @@ func (txn *KVTxn) lockKeysWithSharedLockUpgrade(
 	assignedPrimaryKey := false
 	totalKeys := len(normalExclusiveKeys) + len(upgradeKeys)
 	if txn.committer.primaryKey == nil {
-		// Prefer selecting the primary from freshly requested exclusive locks
-		// when possible, so the primary is not just a shared-locked key that
-		// still depends on upgrade success.
-		assignedPrimaryKey = true
-		keysForPrimary := normalExclusiveKeys
-		if len(keysForPrimary) == 0 {
-			keysForPrimary = upgradeKeys
+		if len(normalExclusiveKeys) == 0 {
+			return errors.New("pessimistic lock in share mode requires primary key to be selected")
 		}
-		txn.selectPrimaryForPessimisticLock(keysForPrimary)
+		assignedPrimaryKey = true
+		txn.selectPrimaryForPessimisticLock(normalExclusiveKeys)
 	}
 
 	txn.committer.forUpdateTS = lockCtx.ForUpdateTS
@@ -1778,6 +1774,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 	if len(keys) == 0 && len(upgradeKeys) == 0 {
 		return nil
+	}
+	if len(upgradeKeys) > 0 && lockCtx.ForUpdateTS == 0 {
+		return errors.New("shared lock upgrade requires ForUpdateTS to be greater than zero")
 	}
 	if lockCtx.LockOnlyIfExists {
 		var lockKey []byte
