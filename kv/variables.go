@@ -34,7 +34,7 @@
 
 package kv
 
-import "sync/atomic"
+import "reflect"
 
 // KillSignalHandler handles kill signals at interruptible KV request checkpoints.
 // Implementations must be safe for concurrent use.
@@ -66,29 +66,39 @@ type Variables struct {
 	// When its value is 0, use the config of "txn-file-min-mutation-size".
 	TxnFileMinMutationSize uint64
 
-	// killSignalHandler takes precedence over Killed when it is set. It is stored
-	// atomically because Variables can be shared by concurrent backoffers.
-	killSignalHandler atomic.Pointer[KillSignalHandler]
+	// killSignalHandler takes precedence over Killed when it is set.
+	// It must be configured before Variables is used by concurrent requests.
+	killSignalHandler KillSignalHandler
 }
 
-// SetKillSignalHandler atomically sets the handler used at interruptible KV request
-// checkpoints. Passing nil clears the handler.
+// SetKillSignalHandler sets the handler used at interruptible KV request checkpoints.
+// It must not be called concurrently with requests using v. Passing nil or a typed
+// nil clears the handler.
 func (v *Variables) SetKillSignalHandler(handler interface{ HandleSignal() error }) {
-	if handler == nil {
-		v.killSignalHandler.Store(nil)
+	if isNilKillSignalHandler(handler) {
+		v.killSignalHandler = nil
 		return
 	}
-	typedHandler := KillSignalHandler(handler)
-	v.killSignalHandler.Store(&typedHandler)
+	v.killSignalHandler = handler
 }
 
-// LoadKillSignalHandler atomically loads the handler used at interruptible KV request checkpoints.
+// LoadKillSignalHandler returns the handler used at interruptible KV request checkpoints.
 func (v *Variables) LoadKillSignalHandler() KillSignalHandler {
-	handler := v.killSignalHandler.Load()
+	return v.killSignalHandler
+}
+
+func isNilKillSignalHandler(handler KillSignalHandler) bool {
 	if handler == nil {
-		return nil
+		return true
 	}
-	return *handler
+	value := reflect.ValueOf(handler)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // NewVariables create a new Variables instance with default values.

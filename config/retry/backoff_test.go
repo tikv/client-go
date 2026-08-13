@@ -39,7 +39,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +53,12 @@ type killSignalHandlerFunc func() error
 
 func (f killSignalHandlerFunc) HandleSignal() error {
 	return f()
+}
+
+type pointerKillSignalHandler struct{}
+
+func (*pointerKillSignalHandler) HandleSignal() error {
+	return errors.New("unexpected call to a typed nil handler")
 }
 
 func TestCheckKilled(t *testing.T) {
@@ -74,57 +79,19 @@ func TestCheckKilled(t *testing.T) {
 	assert.ErrorAs(t, err, &interrupted)
 	assert.Equal(t, killed, interrupted.Signal)
 
+	var nilHandler *pointerKillSignalHandler
+	vars.SetKillSignalHandler(nilHandler)
+	assert.Nil(t, vars.LoadKillSignalHandler())
+	err = bo.CheckKilled()
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+
 	bo = NewBackofferWithVars(context.Background(), 1, kv.NewVariables(&killed))
 	err = bo.CheckKilled()
 	assert.ErrorAs(t, err, &interrupted)
 	assert.Equal(t, killed, interrupted.Signal)
 
 	assert.NoError(t, NewBackofferWithVars(context.Background(), 1, nil).CheckKilled())
-}
-
-func TestCheckKilledConcurrentHandlerUpdate(t *testing.T) {
-	firstErr := errors.New("killed by first handler")
-	secondErr := errors.New("killed by second handler")
-	firstHandler := killSignalHandlerFunc(func() error { return firstErr })
-	secondHandler := killSignalHandlerFunc(func() error { return secondErr })
-
-	vars := kv.NewVariables(nil)
-	vars.SetKillSignalHandler(firstHandler)
-	bo := NewBackofferWithVars(context.Background(), 1, vars)
-
-	const iterations = 10000
-	var wg sync.WaitGroup
-	wg.Add(2)
-	start := make(chan struct{})
-	unexpectedErr := make(chan error, 1)
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < iterations; i++ {
-			vars.SetKillSignalHandler(firstHandler)
-			vars.SetKillSignalHandler(secondHandler)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < iterations; i++ {
-			err := bo.CheckKilled()
-			if !errors.Is(err, firstErr) && !errors.Is(err, secondErr) {
-				select {
-				case unexpectedErr <- err:
-				default:
-				}
-				return
-			}
-		}
-	}()
-	close(start)
-	wg.Wait()
-	close(unexpectedErr)
-	for err := range unexpectedErr {
-		assert.NoError(t, err)
-	}
 }
 
 func TestBackoffWithMax(t *testing.T) {
