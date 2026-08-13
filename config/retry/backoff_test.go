@@ -40,7 +40,48 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 )
+
+type killSignalHandlerFunc func() error
+
+func (f killSignalHandlerFunc) HandleSignal() error {
+	return f()
+}
+
+func TestCheckKilled(t *testing.T) {
+	handlerErr := errors.New("killed by handler")
+	called := 0
+	killed := uint32(7)
+	vars := kv.NewVariables(&killed)
+	vars.KillSignalHandler = killSignalHandlerFunc(func() error {
+		called++
+		return handlerErr
+	})
+	bo := NewBackofferWithVars(context.Background(), 1, vars)
+	err := bo.CheckKilled()
+	var interrupted tikverr.ErrQueryInterruptedWithSignal
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+	assert.Equal(t, 0, called)
+
+	killed = 0
+	assert.ErrorIs(t, bo.CheckKilled(), handlerErr)
+	assert.Equal(t, 1, called)
+	vars.KillSignalHandler = nil
+	killed = 7
+	err = bo.CheckKilled()
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+
+	bo = NewBackofferWithVars(context.Background(), 1, kv.NewVariables(&killed))
+	err = bo.CheckKilled()
+	assert.ErrorAs(t, err, &interrupted)
+	assert.Equal(t, killed, interrupted.Signal)
+
+	assert.NoError(t, NewBackofferWithVars(context.Background(), 1, nil).CheckKilled())
+}
 
 func TestBackoffWithMax(t *testing.T) {
 	b := NewBackofferWithVars(context.TODO(), 2000, nil)
