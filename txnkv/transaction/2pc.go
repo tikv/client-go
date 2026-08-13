@@ -40,6 +40,7 @@ import (
 	errors2 "errors"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,8 @@ type kvstore interface {
 	GetRegionCache() *locate.RegionCache
 	// SplitRegions splits regions by splitKeys.
 	SplitRegions(ctx context.Context, splitKeys [][]byte, scatter bool, tableID *int64) (regionIDs []uint64, err error)
+	// SplitTxnFileRegions splits regions for file-based transactions and resolves locks encountered by TiKV.
+	SplitTxnFileRegions(ctx context.Context, splitKeys [][]byte) error
 	// WaitScatterRegionFinish implements SplittableStore interface.
 	// backOff is the back off time of the wait scatter region.(Milliseconds)
 	// if backOff <= 0, the default wait scatter back off time will be used.
@@ -203,6 +206,8 @@ type twoPhaseCommitter struct {
 		primaryOp                    kvrpcpb.Op
 		pipelinedStart, pipelinedEnd []byte
 	}
+
+	txnFileCtx txnFileCtx
 }
 
 type memBufferMutations struct {
@@ -335,6 +340,36 @@ type CommitterMutations interface {
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
 	NeedConstraintCheckInPrewrite(i int) bool
+}
+
+// MutationsHasDataInRange returns the first mutation key and first write key in [start, end).
+// The first write key can be nil when the range only contains non-write operations.
+func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) (firstKey, firstDataKey []byte, ok bool) {
+	isInRange := func(pos int) bool {
+		return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
+	}
+	isOpForWrite := func(op kvrpcpb.Op) bool {
+		return op != kvrpcpb.Op_CheckNotExists &&
+			op != kvrpcpb.Op_Lock &&
+			op != kvrpcpb.Op_PessimisticLock
+	}
+
+	pos := sort.Search(mutations.Len(), func(i int) bool {
+		return bytes.Compare(mutations.GetKey(i), start) >= 0
+	})
+	if !isInRange(pos) {
+		return nil, nil, false
+	}
+
+	firstKey = mutations.GetKey(pos)
+	for isInRange(pos) {
+		if isOpForWrite(mutations.GetOp(pos)) {
+			firstDataKey = mutations.GetKey(pos)
+			break
+		}
+		pos++
+	}
+	return firstKey, firstDataKey, true
 }
 
 // PlainMutations contains transaction operations.
@@ -780,6 +815,9 @@ func (c *twoPhaseCommitter) primary() []byte {
 	if len(c.primaryKey) == 0 {
 		if c.mutations != nil {
 			return c.mutations.GetKey(0)
+		}
+		if c.txnFileCtx.slice.Len() > 0 {
+			return c.txnFileCtx.slice.chunkRanges[0].smallest
 		}
 		return nil
 	}
@@ -1370,7 +1408,7 @@ func keepAlive(
 			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(
-				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTSMgr.get(),
+				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTSMgr.get(), c.txnFileCtx.slice.Len() > 0,
 			)
 			if err != nil {
 				keepFail++
@@ -1509,12 +1547,14 @@ func sendTxnHeartBeat(
 	primary []byte,
 	startTS, ttl uint64,
 	minCommitTS uint64,
+	isTxnFile bool,
 ) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
 		AdviseLockTtl: ttl,
 		MinCommitTs:   minCommitTS,
+		IsTxnFile:     isTxnFile,
 	})
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)

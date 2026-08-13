@@ -112,8 +112,9 @@ func TestAppendChainedInterceptor(t *testing.T) {
 // benign zero values so the interceptor wiring can be exercised end-to-end
 // without touching real PD state.
 type recordingInterceptor struct {
-	waitCalls int
-	respCalls int
+	waitCalls  int
+	respCalls  int
+	background bool
 }
 
 var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
@@ -139,7 +140,7 @@ func (r *recordingInterceptor) OnResponseWait(
 }
 
 func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
-	return false
+	return r.background
 }
 
 func (r *recordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
@@ -179,6 +180,50 @@ func newRGRequest() *tikvrpc.Request {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
 	req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "test-rg"}
 	return req
+}
+
+func TestGetResourceControlInfoHonorsSelectionPolicy(t *testing.T) {
+	tests := []struct {
+		name          string
+		enabled       bool
+		resourceGroup string
+		background    bool
+		requestSource string
+		wantSelected  bool
+	}{
+		{name: "enabled request", enabled: true, resourceGroup: "test-rg", wantSelected: true},
+		{name: "disabled switch", enabled: false, resourceGroup: "test-rg"},
+		{name: "empty group", enabled: true},
+		{name: "background request", enabled: true, resourceGroup: "test-rg", background: true},
+		{name: "bypassed request", enabled: true, resourceGroup: "test-rg", requestSource: util.InternalRequestPrefix + util.InternalTxnOthers},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rec := &recordingInterceptor{background: test.background}
+			var iface resourceControlClient.ResourceGroupKVInterceptor = rec
+			ResourceControlSwitch.Store(test.enabled)
+			ResourceControlInterceptor.Store(&iface)
+			t.Cleanup(func() {
+				ResourceControlSwitch.Store(false)
+				ResourceControlInterceptor.Store(nil)
+			})
+
+			req := newRGRequest()
+			req.ResourceControlContext.ResourceGroupName = test.resourceGroup
+			req.RequestSource = test.requestSource
+			group, interceptor, reqInfo := GetResourceControlInfo(context.Background(), req)
+			if test.wantSelected {
+				assert.Equal(t, test.resourceGroup, group)
+				assert.NotNil(t, interceptor)
+				assert.NotNil(t, reqInfo)
+				return
+			}
+			assert.Empty(t, group)
+			assert.Nil(t, interceptor)
+			assert.Nil(t, reqInfo)
+		})
+	}
 }
 
 func TestSendRequestDoesNotSettleAndKeepsRUDetailsOnTransportFailure(t *testing.T) {

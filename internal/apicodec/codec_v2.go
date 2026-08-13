@@ -59,12 +59,24 @@ type codecV2 struct {
 	endKey       []byte
 	memCodec     memCodec
 	keyspaceMeta *keyspacepb.KeyspaceMeta
+	// keyspaceID is the cached keyspace oneof wrapper shared by all encoded requests.
+	keyspaceID *kvrpcpb.Context_KeyspaceId
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
-	keyspaceID := keyspaceMeta.Id
+	if keyspaceMeta == nil {
+		return nil, errors.New("keyspaceMeta is nil")
+	}
+	if keyspaceMeta.GetKeyspaceIdentity() != nil {
+		// API V3 identifies keyspaces by the complete namespace/keyspace
+		// identity, and a zero numeric ID is invalid there. The V2 codec only
+		// supports the numeric keyspace ID arm, so reject the identity form
+		// instead of silently treating it as the default keyspace (ID 0).
+		return nil, errors.Errorf("unsupported keyspace identity: codec V2 only supports the numeric keyspace ID")
+	}
+	keyspaceID := keyspaceMeta.GetId()
 	if keyspaceID > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
 	}
@@ -76,6 +88,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 		// Region keys in CodecV2 are always encoded in memory comparable form.
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
+		keyspaceID:   &kvrpcpb.Context_KeyspaceId{KeyspaceId: keyspaceID},
 	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
@@ -114,7 +127,11 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return KeyspaceID(c.keyspaceMeta.Id)
+	return KeyspaceID(c.keyspaceMeta.GetId())
+}
+
+func (c *codecV2) getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
+	return c.keyspaceID
 }
 
 func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
