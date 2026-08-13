@@ -71,7 +71,7 @@ type Variables struct {
 
 // SetKillSignalHandler sets the handler used at interruptible KV request checkpoints.
 // It must not be called concurrently with requests using v. Passing nil clears the handler.
-func (v *Variables) SetKillSignalHandler(handler interface{ HandleSignal() error }) {
+func (v *Variables) SetKillSignalHandler(handler KillSignalHandler) {
 	v.killSignalHandler = handler
 }
 
