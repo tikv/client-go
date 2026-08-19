@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
@@ -43,11 +44,15 @@ func NewInterceptedClient(client Client) Client {
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
-	var ruDetails *util.RUDetails
-
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	var ruDetails *util.RUDetails
+	if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
+		ruDetails = val.(*util.RUDetails)
+	}
 	if resourceControlInterceptor != nil {
-		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+		consumption, penalty, calculation, hasCalculation, waitDuration, priority, err := WaitForResourceControlRequest(
+			ctx, resourceControlInterceptor, resourceGroupName, reqInfo, ruDetails != nil,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -59,9 +64,8 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 			req.GetResourceControlContext().OverridePriority = uint64(priority)
 		}
 
-		if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
-			ruDetails = val.(*util.RUDetails)
-			ruDetails.Update(consumption, waitDuration)
+		if ruDetails != nil {
+			UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
 		}
 	}
 
@@ -75,12 +79,14 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 
 	if resourceControlInterceptor != nil && resp != nil {
 		respInfo := resourcecontrol.MakeResponseInfo(resp)
-		consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+		consumption, calculation, hasCalculation, waitDuration, err := WaitForResourceControlResponse(
+			ctx, resourceControlInterceptor, resourceGroupName, reqInfo, respInfo, ruDetails != nil,
+		)
 		if err != nil {
 			return nil, err
 		}
 		if ruDetails != nil {
-			ruDetails.Update(consumption, waitDuration)
+			UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
 		}
 	}
 
@@ -91,8 +97,14 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	// since all async requests processed by one runloop share the same resource group, if the quota is exceeded, all
 	// requests/responses shall wait for the tokens, thus it's ok to call OnRequestWait/OnResponseWait synchronously.
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	var ruDetails *util.RUDetails
+	if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
+		ruDetails = val.(*util.RUDetails)
+	}
 	if resourceControlInterceptor != nil {
-		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+		consumption, penalty, calculation, hasCalculation, waitDuration, priority, err := WaitForResourceControlRequest(
+			ctx, resourceControlInterceptor, resourceGroupName, reqInfo, ruDetails != nil,
+		)
 		if err != nil {
 			cb.Invoke(nil, err)
 			return
@@ -105,11 +117,8 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			req.GetResourceControlContext().OverridePriority = uint64(priority)
 		}
 
-		var ruDetails *util.RUDetails
-
-		if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
-			ruDetails = val.(*util.RUDetails)
-			ruDetails.Update(consumption, waitDuration)
+		if ruDetails != nil {
+			UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
 		}
 
 		cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
@@ -123,12 +132,14 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			}
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+				consumption, calculation, hasCalculation, waitDuration, err := WaitForResourceControlResponse(
+					ctx, resourceControlInterceptor, resourceGroupName, reqInfo, respInfo, ruDetails != nil,
+				)
 				if err != nil {
 					return nil, err
 				}
 				if ruDetails != nil {
-					ruDetails.Update(consumption, waitDuration)
+					UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
 				}
 			}
 			return resp, err
@@ -136,6 +147,77 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	}
 
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
+}
+
+// WaitForResourceControlRequest invokes the detailed optional interface only
+// when the caller needs calculation details.
+func WaitForResourceControlRequest(
+	ctx context.Context,
+	interceptor resourceControlClient.ResourceGroupKVInterceptor,
+	resourceGroupName string,
+	reqInfo resourceControlClient.RequestInfo,
+	withDetails bool,
+) (*rmpb.Consumption, *rmpb.Consumption, resourceControlClient.RUCalculation, bool, time.Duration, uint32, error) {
+	if detailed, ok := interceptor.(resourceControlClient.ResourceGroupKVInterceptorWithRUDetails); ok &&
+		withDetails && interceptor.GetRUVersion() == resourceControlClient.RUVersionV1 {
+		delta, penalty, calculation, waitDuration, priority, err := detailed.OnRequestWaitWithRUDetails(ctx, resourceGroupName, reqInfo)
+		return delta, penalty, calculation, true, waitDuration, priority, err
+	}
+	delta, penalty, waitDuration, priority, err := interceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+	return delta, penalty, resourceControlClient.RUCalculation{}, false, waitDuration, priority, err
+}
+
+// WaitForResourceControlResponse invokes the detailed optional interface only
+// when the caller needs calculation details.
+func WaitForResourceControlResponse(
+	ctx context.Context,
+	interceptor resourceControlClient.ResourceGroupKVInterceptor,
+	resourceGroupName string,
+	reqInfo resourceControlClient.RequestInfo,
+	respInfo resourceControlClient.ResponseInfo,
+	withDetails bool,
+) (*rmpb.Consumption, resourceControlClient.RUCalculation, bool, time.Duration, error) {
+	if detailed, ok := interceptor.(resourceControlClient.ResourceGroupKVInterceptorWithRUDetails); ok &&
+		withDetails && interceptor.GetRUVersion() == resourceControlClient.RUVersionV1 {
+		delta, calculation, waitDuration, err := detailed.OnResponseWaitWithRUDetails(ctx, resourceGroupName, reqInfo, respInfo)
+		return delta, calculation, true, waitDuration, err
+	}
+	delta, waitDuration, err := interceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+	return delta, resourceControlClient.RUCalculation{}, false, waitDuration, err
+}
+
+// ConsumeResourceControlResponse accounts for a response without token wait,
+// using the detailed optional interface only when requested.
+func ConsumeResourceControlResponse(
+	interceptor resourceControlClient.ResourceGroupKVInterceptor,
+	resourceGroupName string,
+	reqInfo resourceControlClient.RequestInfo,
+	respInfo resourceControlClient.ResponseInfo,
+	withDetails bool,
+) (*rmpb.Consumption, resourceControlClient.RUCalculation, bool, error) {
+	if detailed, ok := interceptor.(resourceControlClient.ResourceGroupKVInterceptorWithRUDetails); ok &&
+		withDetails && interceptor.GetRUVersion() == resourceControlClient.RUVersionV1 {
+		delta, calculation, err := detailed.OnResponseWithRUDetails(resourceGroupName, reqInfo, respInfo)
+		return delta, calculation, true, err
+	}
+	delta, err := interceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+	return delta, resourceControlClient.RUCalculation{}, false, err
+}
+
+// UpdateRUDetails records a resource-control delta, preserving calculation
+// details when the optional detailed interface supplied them.
+func UpdateRUDetails(
+	details *util.RUDetails,
+	consumption *rmpb.Consumption,
+	waitDuration time.Duration,
+	calculation resourceControlClient.RUCalculation,
+	hasCalculation bool,
+) {
+	if hasCalculation {
+		details.UpdateWithRUCalculation(consumption, waitDuration, calculation)
+		return
+	}
+	details.Update(consumption, waitDuration)
 }
 
 var (

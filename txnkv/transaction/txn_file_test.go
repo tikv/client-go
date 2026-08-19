@@ -947,7 +947,9 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 }
 
 type txnFileResponseErrorInterceptor struct {
-	responseCalls int
+	responseCalls         int
+	detailedRequestCalls  int
+	detailedResponseCalls int
 }
 
 func (i *txnFileResponseErrorInterceptor) OnRequestWait(
@@ -975,6 +977,29 @@ func (i *txnFileResponseErrorInterceptor) IsBackgroundRequest(context.Context, s
 
 func (i *txnFileResponseErrorInterceptor) GetRUVersion() resourceControlClient.RUVersion {
 	return resourceControlClient.DefaultRUVersion
+}
+
+func (i *txnFileResponseErrorInterceptor) OnRequestWaitWithRUDetails(
+	context.Context, string, resourceControlClient.RequestInfo,
+) (*rmpb.Consumption, *rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, uint32, error) {
+	i.detailedRequestCalls++
+	return &rmpb.Consumption{WRU: 2}, &rmpb.Consumption{}, resourceControlClient.RUCalculation{
+		Factors: resourceControlClient.RUFactorSnapshot{WriteBaseCost: 2},
+		Inputs:  resourceControlClient.RUCalculationInputs{ReplicaWeightedWriteRPCCount: 1},
+	}, 0, 0, nil
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponseWithRUDetails(
+	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, resourceControlClient.RUCalculation, error) {
+	i.detailedResponseCalls++
+	return nil, resourceControlClient.RUCalculation{}, errors.New("post-commit accounting failed")
+}
+
+func (i *txnFileResponseErrorInterceptor) OnResponseWaitWithRUDetails(
+	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+) (*rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, error) {
+	return &rmpb.Consumption{}, resourceControlClient.RUCalculation{}, 0, nil
 }
 
 func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T) {
@@ -1061,7 +1086,9 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	require.NoError(t, err)
 	txn.committer = committer
 
-	err = txn.Commit(context.Background())
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+	err = txn.Commit(ctx)
 
 	require.NoError(t, err)
 	expectedChunk := binary.LittleEndian.AppendUint16(nil, uint16(len("k")))
@@ -1073,7 +1100,13 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	require.Equal(t, expectedChunk, <-uploadedChunks)
 	require.Equal(t, int64(1), commitRequestCount.Load())
 	require.Zero(t, rollbackRequestCount.Load())
-	require.Equal(t, 1, interceptor.responseCalls)
+	require.Zero(t, interceptor.responseCalls)
+	require.Equal(t, 1, interceptor.detailedRequestCalls)
+	require.Equal(t, 1, interceptor.detailedResponseCalls)
+	calculations := ruDetails.RUCalculations()
+	require.Len(t, calculations, 1)
+	require.Equal(t, float64(2), calculations[0].Factors.WriteBaseCost)
+	require.Equal(t, float64(1), calculations[0].Inputs.ReplicaWeightedWriteRPCCount)
 	require.True(t, committer.mu.committed)
 	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
 	require.Panics(t, func() {

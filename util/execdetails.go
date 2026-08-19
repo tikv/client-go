@@ -47,6 +47,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	uatomic "go.uber.org/atomic"
 )
 
@@ -1217,6 +1218,9 @@ type RUDetails struct {
 	rawRUV2Mu sync.Mutex
 	// rawRUV2 stores pending raw TiKV RU v2 counters since the last DrainRUV2 call.
 	rawRUV2 *kvrpcpb.RUV2
+	// calculationMu protects statement-level RU v1 formula inputs.
+	calculationMu sync.Mutex
+	calculations  map[resourceControlClient.RUFactorSnapshot]resourceControlClient.RUCalculation
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -1254,6 +1258,9 @@ func (rd *RUDetails) Clone() *RUDetails {
 	rd.rawRUV2Mu.Lock()
 	cloned.rawRUV2 = cloneRUV2(rd.rawRUV2)
 	rd.rawRUV2Mu.Unlock()
+	for _, calculation := range rd.RUCalculations() {
+		cloned.addRUCalculation(calculation)
+	}
 	return cloned
 }
 
@@ -1265,6 +1272,9 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
 	rd.AddRUV2(other.getRawRUV2())
+	for _, calculation := range other.RUCalculations() {
+		rd.addRUCalculation(calculation)
+	}
 }
 
 // String implements fmt.Stringer interface.
@@ -1347,12 +1357,54 @@ func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
 
 // Update updates the RU runtime stats with the given consumption info.
 func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
-	if rd == nil || consumption == nil {
+	rd.update(consumption, waitDuration)
+}
+
+// UpdateWithRUCalculation updates RU runtime stats and retains the calculation
+// delta produced from the same request.
+func (rd *RUDetails) UpdateWithRUCalculation(consumption *rmpb.Consumption, waitDuration time.Duration, calculation resourceControlClient.RUCalculation) {
+	if !rd.update(consumption, waitDuration) {
 		return
+	}
+	rd.addRUCalculation(calculation)
+}
+
+func (rd *RUDetails) update(consumption *rmpb.Consumption, waitDuration time.Duration) bool {
+	if rd == nil || consumption == nil {
+		return false
 	}
 	rd.readRU.Add(consumption.RRU)
 	rd.writeRU.Add(consumption.WRU)
 	rd.ruWaitDuration.Add(waitDuration)
+	return true
+}
+
+func (rd *RUDetails) addRUCalculation(delta resourceControlClient.RUCalculation) {
+	if rd == nil {
+		return
+	}
+	rd.calculationMu.Lock()
+	defer rd.calculationMu.Unlock()
+	if rd.calculations == nil {
+		rd.calculations = make(map[resourceControlClient.RUFactorSnapshot]resourceControlClient.RUCalculation)
+	}
+	calculation := rd.calculations[delta.Factors]
+	calculation.Add(delta)
+	rd.calculations[delta.Factors] = calculation
+}
+
+// RUCalculations returns an immutable snapshot of RU v1 calculation buckets.
+func (rd *RUDetails) RUCalculations() []resourceControlClient.RUCalculation {
+	if rd == nil {
+		return nil
+	}
+	rd.calculationMu.Lock()
+	defer rd.calculationMu.Unlock()
+	calculations := make([]resourceControlClient.RUCalculation, 0, len(rd.calculations))
+	for _, calculation := range rd.calculations {
+		calculations = append(calculations, calculation)
+	}
+	return calculations
 }
 
 // UpdateTiFlash updates the Tiflash RU (RRU+WRU) with the given consumption info.

@@ -1299,13 +1299,15 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		false,
 	)
 
-	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(ctx, c.resourceGroupName, reqInfo)
+	consumption, _ /* penalty */, calculation, hasCalculation, waitDuration, _ /* priority */, err := client.WaitForResourceControlRequest(
+		ctx, rcInterceptor, c.resourceGroupName, reqInfo, ruDetails != nil,
+	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	if ruDetails != nil {
-		ruDetails.Update(consumption, waitDuration)
+		client.UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
 	}
 
 	return reqInfo, nil
@@ -1317,12 +1319,14 @@ func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlCli
 	}
 
 	respInfo := &resourcecontrol.ResponseInfo{}
-	consumption, err := rcInterceptor.OnResponse(c.resourceGroupName, reqInfo, respInfo)
+	consumption, calculation, hasCalculation, err := client.ConsumeResourceControlResponse(
+		rcInterceptor, c.resourceGroupName, reqInfo, respInfo, ruDetails != nil,
+	)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	if ruDetails != nil {
-		ruDetails.Update(consumption, time.Duration(0))
+		client.UpdateRUDetails(ruDetails, consumption, 0, calculation, hasCalculation)
 	}
 
 	return nil
