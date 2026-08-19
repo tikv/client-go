@@ -1062,10 +1062,10 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 	runCase := func(name string, forRead bool) {
 		s.Run(name, func() {
 			key := func(suffix string) []byte {
-				return []byte(fmt.Sprintf("batch_lite_%s_%s", name, suffix))
+				return s.key(fmt.Sprintf("batch_lite_%s_%s", name, suffix))
 			}
 			scanStartKey := key("")
-			scanEndKey := []byte(fmt.Sprintf("batch_lite_%s_\xff", name))
+			scanEndKey := key("\xff")
 
 			// Split the keyspace so the multi-key lite transaction is resolved
 			// by one ResolveLock request per region.
@@ -1302,8 +1302,8 @@ func (s *testLockSuite) TestBatchLiteResolveLocksForReadIgnoresInlineCleanupErro
 	// confirmed the transaction status, the read can already proceed, so a later
 	// physical cleanup error should be swallowed instead of being returned to
 	// ResolveLocksForRead.
-	key := []byte("batch_lite_for_read_fallback_key")
-	primaryKey := []byte("batch_lite_for_read_fallback_primary")
+	key := s.key("batch_lite_for_read_fallback_key")
+	primaryKey := s.key("batch_lite_for_read_fallback_primary")
 	startTS, _ := s.lockKey(key, []byte("value"), primaryKey, []byte("primary_value"), 3000, true, false)
 	lock := s.mustGetLock(key)
 	lock.TxnSize = 1
@@ -2182,7 +2182,7 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 
 			keys, values := make([][]byte, 0, 20), make([][]byte, 0, 20)
 			for i := 0; i < cap(keys); i++ {
-				keys = append(keys, []byte(fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
+				keys = append(keys, encodeKey("~lock_tikv", fmt.Sprintf("resolve_lock_%s_%03d", name, i)))
 				values = append(values, []byte(fmt.Sprintf("value_%s_%03d", name, i)))
 			}
 			require.Greater(t, uint64(len(keys)), resolveLiteThreshold)
@@ -2232,7 +2232,7 @@ func TestResolveLockWithTiKVSideAsync(t *testing.T) {
 			}
 
 			// check all the locks except the primary lock are kept.
-			keysEnd := []byte(fmt.Sprintf("resolve_lock_%s_\xff", name))
+			keysEnd := encodeKey("~lock_tikv", fmt.Sprintf("resolve_lock_%s_\xff", name))
 			locks, err := store.ScanLocks(ctx, keys[0], keysEnd, fetchTSO(store))
 			require.NoError(t, err)
 			require.Len(t, locks, len(keys)-1, "only the primary lock should be resolved")
