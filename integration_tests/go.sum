@@ -872,10 +872,10 @@ github.com/HdrHistogram/hdrhistogram-go v1.1.2 h1:5IcZpTvzydCQeHzK4Ef/D5rrSqwxob
 github.com/HdrHistogram/hdrhistogram-go v1.1.2/go.mod h1:yDgFjdqOqDEKOvasDdhWNXYg9BVp4O+o5f6V/ehm6Oo=
 github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040 h1:EuFoHRiT1oEjqmJaSyBMlwHAIY7cBOXkATLZjrE2j1k=
 github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040/go.mod h1:3q0AbdoMvJqvAkoli4QBKueNiyfK5bF8w19d1g22jgk=
-github.com/JmPotato/tidb v1.1.0-beta.0.20260819072905-77012ac8c99e h1:U6zYaoAMliFsslg2g7rFfIIBJyB/5mlPnT4rhzRrD5k=
-github.com/JmPotato/tidb v1.1.0-beta.0.20260819072905-77012ac8c99e/go.mod h1:ZPXKXdGKfn9p9SL9R4GnIM7rPszruWkJ+J0+sNTnn6s=
-github.com/JmPotato/tidb/pkg/parser v0.0.0-20260819072905-77012ac8c99e h1:ArXFN6FgRZEC0DYqXsBFspetJxnhztdFLA6IShpgQhk=
-github.com/JmPotato/tidb/pkg/parser v0.0.0-20260819072905-77012ac8c99e/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
+github.com/JmPotato/tidb v1.1.0-beta.0.20260820110718-9d16405182b2 h1:ZbqqzlS1Yhvn3qy1zGMYWUB8Y7pod2F6wOW5rhb49FA=
+github.com/JmPotato/tidb v1.1.0-beta.0.20260820110718-9d16405182b2/go.mod h1:2UwzEg3X+FMQInucKeM8nI995HEhfhCpsIBicSyRhZM=
+github.com/JmPotato/tidb/pkg/parser v0.0.0-20260820110718-9d16405182b2 h1:uT3JGC5BQqOWX5mzMfOJ2BPjYw3Qd57xIYziZoyaJdk=
+github.com/JmPotato/tidb/pkg/parser v0.0.0-20260820110718-9d16405182b2/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
 github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c/go.mod h1:X0CRv0ky0k6m906ixxpzmDRLvX58TFUKS2eePweuyxk=
 github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=
 github.com/Masterminds/semver v1.5.0/go.mod h1:MB6lktGJrhw8PrUyiEoblNEGEQ+RzHPF078ddwwvV3Y=

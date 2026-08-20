@@ -195,8 +195,8 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260819072905-77012ac8c99e
-	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260819072905-77012ac8c99e
+	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260820110718-9d16405182b2
+	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260820110718-9d16405182b2
 	github.com/tikv/client-go/v2 => ../
 	github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040
 )
