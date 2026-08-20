@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
@@ -112,16 +113,11 @@ func TestAppendChainedInterceptor(t *testing.T) {
 // benign zero values so the interceptor wiring can be exercised end-to-end
 // without touching real PD state.
 type recordingInterceptor struct {
-	waitCalls  int
-	respCalls  int
-	background bool
-}
-
-type detailedRecordingInterceptor struct {
-	recordingInterceptor
-	detailedWaitCalls int
-	detailedRespCalls int
-	ruVersion         resourceControlClient.RUVersion
+	waitCalls        int
+	respCalls        int
+	calculationCalls int
+	background       bool
+	ruVersion        resourceControlClient.RUVersion
 }
 
 var (
@@ -145,9 +141,13 @@ var (
 var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
 
 func (r *recordingInterceptor) OnRequestWait(
-	context.Context, string, resourceControlClient.RequestInfo,
+	_ context.Context, _ string, info resourceControlClient.RequestInfo,
 ) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
 	r.waitCalls++
+	if collector, ok := info.(resourceControlClient.RUCalculationCollector); ok {
+		r.calculationCalls++
+		collector.CollectRUCalculation(recordingRequestCalculation)
+	}
 	return recordingRequestConsumption, &rmpb.Consumption{}, 0, 0, nil
 }
 
@@ -158,10 +158,14 @@ func (r *recordingInterceptor) OnResponse(
 }
 
 func (r *recordingInterceptor) OnResponseWait(
-	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+	_ context.Context, _ string, info resourceControlClient.RequestInfo, _ resourceControlClient.ResponseInfo,
 ) (*rmpb.Consumption, time.Duration, error) {
 	r.respCalls++
-	return &rmpb.Consumption{}, 0, nil
+	if collector, ok := info.(resourceControlClient.RUCalculationCollector); ok {
+		r.calculationCalls++
+		collector.CollectRUCalculation(recordingResponseCalculation)
+	}
+	return recordingResponseConsumption, 0, nil
 }
 
 func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, string) bool {
@@ -169,30 +173,6 @@ func (r *recordingInterceptor) IsBackgroundRequest(context.Context, string, stri
 }
 
 func (r *recordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
-	return resourceControlClient.DefaultRUVersion
-}
-
-func (r *detailedRecordingInterceptor) OnRequestWaitWithRUDetails(
-	context.Context, string, resourceControlClient.RequestInfo,
-) (*rmpb.Consumption, *rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, uint32, error) {
-	r.detailedWaitCalls++
-	return recordingRequestConsumption, &rmpb.Consumption{}, recordingRequestCalculation, 0, 0, nil
-}
-
-func (r *detailedRecordingInterceptor) OnResponseWithRUDetails(
-	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
-) (*rmpb.Consumption, resourceControlClient.RUCalculation, error) {
-	return recordingResponseConsumption, recordingResponseCalculation, nil
-}
-
-func (r *detailedRecordingInterceptor) OnResponseWaitWithRUDetails(
-	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
-) (*rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, error) {
-	r.detailedRespCalls++
-	return recordingResponseConsumption, recordingResponseCalculation, 0, nil
-}
-
-func (r *detailedRecordingInterceptor) GetRUVersion() resourceControlClient.RUVersion {
 	return r.ruVersion
 }
 
@@ -214,20 +194,7 @@ func (c failingClient) SendRequestAsync(
 
 func withRecordingInterceptor(t *testing.T) *recordingInterceptor {
 	t.Helper()
-	rec := &recordingInterceptor{}
-	var iface resourceControlClient.ResourceGroupKVInterceptor = rec
-	ResourceControlSwitch.Store(true)
-	ResourceControlInterceptor.Store(&iface)
-	t.Cleanup(func() {
-		ResourceControlSwitch.Store(false)
-		ResourceControlInterceptor.Store(nil)
-	})
-	return rec
-}
-
-func withDetailedRecordingInterceptor(t *testing.T) *detailedRecordingInterceptor {
-	t.Helper()
-	rec := &detailedRecordingInterceptor{ruVersion: resourceControlClient.RUVersionV1}
+	rec := &recordingInterceptor{ruVersion: resourceControlClient.RUVersionV1}
 	var iface resourceControlClient.ResourceGroupKVInterceptor = rec
 	ResourceControlSwitch.Store(true)
 	ResourceControlInterceptor.Store(&iface)
@@ -242,6 +209,31 @@ func newRGRequest() *tikvrpc.Request {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
 	req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "test-rg"}
 	return req
+}
+
+func TestWrapRequestInfoWithRUDetailsPreservesOptionalRequestInfo(t *testing.T) {
+	interceptor := &recordingInterceptor{ruVersion: resourceControlClient.RUVersionV1}
+	req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{})
+	req.PredictedReadBytes = 4096
+	base := resourcecontrol.MakeRequestInfo(req)
+	details := util.NewRUDetails()
+
+	wrapped := WrapRequestInfoWithRUDetails(interceptor, base, details)
+	_, ok := wrapped.(resourceControlClient.RUCalculationCollector)
+	assert.True(t, ok)
+	predicted, ok := wrapped.(interface{ PredictedReadBytes() uint64 })
+	if assert.True(t, ok) {
+		assert.Equal(t, uint64(4096), predicted.PredictedReadBytes())
+	}
+	cop, ok := wrapped.(interface{ IsCop() bool })
+	if assert.True(t, ok) {
+		assert.True(t, cop.IsCop())
+	}
+
+	interceptor.ruVersion = resourceControlClient.RUVersionV2
+	assert.Same(t, base, WrapRequestInfoWithRUDetails(interceptor, base, details))
+	interceptor.ruVersion = resourceControlClient.RUVersionV1
+	assert.Same(t, base, WrapRequestInfoWithRUDetails(interceptor, base, nil))
 }
 
 func TestGetResourceControlInfoHonorsSelectionPolicy(t *testing.T) {
@@ -306,7 +298,7 @@ func TestSendRequestDoesNotSettleAndKeepsRUDetailsOnTransportFailure(t *testing.
 }
 
 func TestSendRequestSettlesOnSuccess(t *testing.T) {
-	rec := withDetailedRecordingInterceptor(t)
+	rec := withRecordingInterceptor(t)
 	// Inner client returns a non-nil response (default emptyClient yields
 	// nil but its purpose here is to NOT yield nil — wrap it).
 	client := NewInterceptedClient(respondingClient{})
@@ -316,21 +308,23 @@ func TestSendRequestSettlesOnSuccess(t *testing.T) {
 	resp, err := client.SendRequest(ctx, "", newRGRequest(), 0)
 	assert.NotNil(t, resp)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, rec.detailedWaitCalls)
-	assert.Equal(t, 1, rec.detailedRespCalls, "settlement path must run when resp is non-nil")
+	assert.Equal(t, 1, rec.waitCalls)
+	assert.Equal(t, 1, rec.respCalls, "settlement path must run when resp is non-nil")
+	assert.Equal(t, 2, rec.calculationCalls)
 	assert.Equal(t, 16.0, ruDetails.RRU())
 	assert.Equal(t, 3.0, ruDetails.WRU())
-	calculations := ruDetails.RUCalculations()
-	if assert.Len(t, calculations, 1) {
-		assert.Equal(t, recordingRequestCalculation.Factors, calculations[0].Factors)
-		assert.Equal(t, float64(1), calculations[0].Inputs.ReadRPCCount)
-		assert.Equal(t, float64(5), calculations[0].Inputs.ReadBytes)
-		assert.Equal(t, float64(1), calculations[0].Inputs.ReplicaWeightedWriteRPCCount)
+	calculation, ok, consistent := ruDetails.RUCalculation()
+	assert.True(t, consistent)
+	if assert.True(t, ok) {
+		assert.Equal(t, recordingRequestCalculation.Factors, calculation.Factors)
+		assert.Equal(t, float64(1), calculation.Inputs.ReadRPCCount)
+		assert.Equal(t, float64(5), calculation.Inputs.ReadBytes)
+		assert.Equal(t, float64(1), calculation.Inputs.ReplicaWeightedWriteRPCCount)
 	}
 }
 
-func TestSendRequestUsesDetailedInterfaceOnlyForV1Collector(t *testing.T) {
-	rec := withDetailedRecordingInterceptor(t)
+func TestSendRequestCollectsRUCalculationOnlyForV1(t *testing.T) {
+	rec := withRecordingInterceptor(t)
 	client := NewInterceptedClient(respondingClient{})
 
 	resp, err := client.SendRequest(context.Background(), "", newRGRequest(), 0)
@@ -338,8 +332,7 @@ func TestSendRequestUsesDetailedInterfaceOnlyForV1Collector(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, rec.waitCalls)
 	assert.Equal(t, 1, rec.respCalls)
-	assert.Zero(t, rec.detailedWaitCalls)
-	assert.Zero(t, rec.detailedRespCalls)
+	assert.Zero(t, rec.calculationCalls)
 
 	rec.ruVersion = resourceControlClient.RUVersionV2
 	ruDetails := util.NewRUDetails()
@@ -349,9 +342,10 @@ func TestSendRequestUsesDetailedInterfaceOnlyForV1Collector(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, rec.waitCalls)
 	assert.Equal(t, 2, rec.respCalls)
-	assert.Zero(t, rec.detailedWaitCalls)
-	assert.Zero(t, rec.detailedRespCalls)
-	assert.Empty(t, ruDetails.RUCalculations())
+	assert.Zero(t, rec.calculationCalls)
+	_, ok, consistent := ruDetails.RUCalculation()
+	assert.False(t, ok)
+	assert.True(t, consistent)
 }
 
 func TestSendRequestAsyncDoesNotSettleAndKeepsRUDetailsOnTransportFailure(t *testing.T) {
@@ -398,7 +392,7 @@ func (c respondingClient) SendRequestAsync(
 }
 
 func TestSendRequestAsyncKeepsRUCalculationDetails(t *testing.T) {
-	rec := withDetailedRecordingInterceptor(t)
+	rec := withRecordingInterceptor(t)
 	client := NewInterceptedClient(respondingClient{})
 	ruDetails := util.NewRUDetails()
 	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
@@ -412,16 +406,18 @@ func TestSendRequestAsyncKeepsRUCalculationDetails(t *testing.T) {
 	client.SendRequestAsync(ctx, "", newRGRequest(), cb)
 	<-done
 
-	assert.Equal(t, 1, rec.detailedWaitCalls)
-	assert.Equal(t, 1, rec.detailedRespCalls)
+	assert.Equal(t, 1, rec.waitCalls)
+	assert.Equal(t, 1, rec.respCalls)
+	assert.Equal(t, 2, rec.calculationCalls)
 	assert.Equal(t, 16.0, ruDetails.RRU())
 	assert.Equal(t, 3.0, ruDetails.WRU())
-	calculations := ruDetails.RUCalculations()
-	if assert.Len(t, calculations, 1) {
-		assert.Equal(t, recordingRequestCalculation.Factors, calculations[0].Factors)
-		assert.Equal(t, float64(1), calculations[0].Inputs.ReadRPCCount)
-		assert.Equal(t, float64(5), calculations[0].Inputs.ReadBytes)
-		assert.Equal(t, float64(1), calculations[0].Inputs.ReplicaWeightedWriteRPCCount)
+	calculation, ok, consistent := ruDetails.RUCalculation()
+	assert.True(t, consistent)
+	if assert.True(t, ok) {
+		assert.Equal(t, recordingRequestCalculation.Factors, calculation.Factors)
+		assert.Equal(t, float64(1), calculation.Inputs.ReadRPCCount)
+		assert.Equal(t, float64(5), calculation.Inputs.ReadBytes)
+		assert.Equal(t, float64(1), calculation.Inputs.ReplicaWeightedWriteRPCCount)
 	}
 }
 

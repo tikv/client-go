@@ -1250,7 +1250,7 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	bo *retry.Backoffer,
 	rcInterceptor resourceControlClient.ResourceGroupKVInterceptor,
 	ruDetails *util.RUDetails,
-) (*resourcecontrol.RequestInfo, error) {
+) (resourceControlClient.RequestInfo, error) {
 	if rcInterceptor == nil {
 		return nil, nil
 	}
@@ -1292,41 +1292,40 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		writeBytes = int64(float64(writeBytes) * discountRatio)
 	}
 
-	reqInfo := resourcecontrol.NewRequestInfo(
+	baseReqInfo := resourcecontrol.NewRequestInfo(
 		writeBytes,
 		region.GetLeaderStoreID(),
 		replicaNumber,
 		false,
 	)
+	reqInfo := client.WrapRequestInfoWithRUDetails(rcInterceptor, baseReqInfo, ruDetails)
 
-	consumption, _ /* penalty */, calculation, hasCalculation, waitDuration, _ /* priority */, err := client.WaitForResourceControlRequest(
-		ctx, rcInterceptor, c.resourceGroupName, reqInfo, ruDetails != nil,
+	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(
+		ctx, c.resourceGroupName, reqInfo,
 	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	if ruDetails != nil {
-		client.UpdateRUDetails(ruDetails, consumption, waitDuration, calculation, hasCalculation)
+		ruDetails.Update(consumption, waitDuration)
 	}
 
 	return reqInfo, nil
 }
 
-func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
+func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo resourceControlClient.RequestInfo, ruDetails *util.RUDetails) error {
 	if rcInterceptor == nil {
 		return nil
 	}
 
 	respInfo := &resourcecontrol.ResponseInfo{}
-	consumption, calculation, hasCalculation, err := client.ConsumeResourceControlResponse(
-		rcInterceptor, c.resourceGroupName, reqInfo, respInfo, ruDetails != nil,
-	)
+	consumption, err := rcInterceptor.OnResponse(c.resourceGroupName, reqInfo, respInfo)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	if ruDetails != nil {
-		client.UpdateRUDetails(ruDetails, consumption, 0, calculation, hasCalculation)
+		ruDetails.Update(consumption, 0)
 	}
 
 	return nil

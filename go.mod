@@ -60,4 +60,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260819070454-a0b720772fe5
+replace github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040

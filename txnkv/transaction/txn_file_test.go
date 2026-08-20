@@ -947,21 +947,31 @@ func TestTxnFileCommitPrimaryRPCErrorIsNormalized(t *testing.T) {
 }
 
 type txnFileResponseErrorInterceptor struct {
+	requestCalls          int
 	responseCalls         int
-	detailedRequestCalls  int
-	detailedResponseCalls int
+	calculationCalls      int
+	responseCollectorSeen bool
 }
 
 func (i *txnFileResponseErrorInterceptor) OnRequestWait(
-	context.Context, string, resourceControlClient.RequestInfo,
+	_ context.Context, _ string, info resourceControlClient.RequestInfo,
 ) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
-	return &rmpb.Consumption{}, &rmpb.Consumption{}, 0, 0, nil
+	i.requestCalls++
+	if collector, ok := info.(resourceControlClient.RUCalculationCollector); ok {
+		i.calculationCalls++
+		collector.CollectRUCalculation(resourceControlClient.RUCalculation{
+			Factors: resourceControlClient.RUFactorSnapshot{WriteBaseCost: 2},
+			Inputs:  resourceControlClient.RUCalculationInputs{ReplicaWeightedWriteRPCCount: 1},
+		})
+	}
+	return &rmpb.Consumption{WRU: 2}, &rmpb.Consumption{}, 0, 0, nil
 }
 
 func (i *txnFileResponseErrorInterceptor) OnResponse(
-	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
+	_ string, info resourceControlClient.RequestInfo, _ resourceControlClient.ResponseInfo,
 ) (*rmpb.Consumption, error) {
 	i.responseCalls++
+	_, i.responseCollectorSeen = info.(resourceControlClient.RUCalculationCollector)
 	return nil, errors.New("post-commit accounting failed")
 }
 
@@ -977,29 +987,6 @@ func (i *txnFileResponseErrorInterceptor) IsBackgroundRequest(context.Context, s
 
 func (i *txnFileResponseErrorInterceptor) GetRUVersion() resourceControlClient.RUVersion {
 	return resourceControlClient.DefaultRUVersion
-}
-
-func (i *txnFileResponseErrorInterceptor) OnRequestWaitWithRUDetails(
-	context.Context, string, resourceControlClient.RequestInfo,
-) (*rmpb.Consumption, *rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, uint32, error) {
-	i.detailedRequestCalls++
-	return &rmpb.Consumption{WRU: 2}, &rmpb.Consumption{}, resourceControlClient.RUCalculation{
-		Factors: resourceControlClient.RUFactorSnapshot{WriteBaseCost: 2},
-		Inputs:  resourceControlClient.RUCalculationInputs{ReplicaWeightedWriteRPCCount: 1},
-	}, 0, 0, nil
-}
-
-func (i *txnFileResponseErrorInterceptor) OnResponseWithRUDetails(
-	string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
-) (*rmpb.Consumption, resourceControlClient.RUCalculation, error) {
-	i.detailedResponseCalls++
-	return nil, resourceControlClient.RUCalculation{}, errors.New("post-commit accounting failed")
-}
-
-func (i *txnFileResponseErrorInterceptor) OnResponseWaitWithRUDetails(
-	context.Context, string, resourceControlClient.RequestInfo, resourceControlClient.ResponseInfo,
-) (*rmpb.Consumption, resourceControlClient.RUCalculation, time.Duration, error) {
-	return &rmpb.Consumption{}, resourceControlClient.RUCalculation{}, 0, nil
 }
 
 func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T) {
@@ -1100,13 +1087,15 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	require.Equal(t, expectedChunk, <-uploadedChunks)
 	require.Equal(t, int64(1), commitRequestCount.Load())
 	require.Zero(t, rollbackRequestCount.Load())
-	require.Zero(t, interceptor.responseCalls)
-	require.Equal(t, 1, interceptor.detailedRequestCalls)
-	require.Equal(t, 1, interceptor.detailedResponseCalls)
-	calculations := ruDetails.RUCalculations()
-	require.Len(t, calculations, 1)
-	require.Equal(t, float64(2), calculations[0].Factors.WriteBaseCost)
-	require.Equal(t, float64(1), calculations[0].Inputs.ReplicaWeightedWriteRPCCount)
+	require.Equal(t, 1, interceptor.requestCalls)
+	require.Equal(t, 1, interceptor.responseCalls)
+	require.Equal(t, 1, interceptor.calculationCalls)
+	require.True(t, interceptor.responseCollectorSeen)
+	calculation, ok, consistent := ruDetails.RUCalculation()
+	require.True(t, ok)
+	require.True(t, consistent)
+	require.Equal(t, float64(2), calculation.Factors.WriteBaseCost)
+	require.Equal(t, float64(1), calculation.Inputs.ReplicaWeightedWriteRPCCount)
 	require.True(t, committer.mu.committed)
 	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
 	require.Panics(t, func() {

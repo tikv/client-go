@@ -1219,8 +1219,9 @@ type RUDetails struct {
 	// rawRUV2 stores pending raw TiKV RU v2 counters since the last DrainRUV2 call.
 	rawRUV2 *kvrpcpb.RUV2
 	// calculationMu protects statement-level RU v1 formula inputs.
-	calculationMu sync.Mutex
-	calculations  map[resourceControlClient.RUFactorSnapshot]resourceControlClient.RUCalculation
+	calculationMu      sync.Mutex
+	calculation        *resourceControlClient.RUCalculation
+	calculationInvalid bool
 }
 
 // NewRUDetails creates a new RUDetails.
@@ -1258,8 +1259,10 @@ func (rd *RUDetails) Clone() *RUDetails {
 	rd.rawRUV2Mu.Lock()
 	cloned.rawRUV2 = cloneRUV2(rd.rawRUV2)
 	rd.rawRUV2Mu.Unlock()
-	for _, calculation := range rd.RUCalculations() {
-		cloned.addRUCalculation(calculation)
+	calculation, exists, invalid := rd.ruCalculationState()
+	cloned.calculationInvalid = invalid
+	if exists {
+		cloned.calculation = &calculation
 	}
 	return cloned
 }
@@ -1272,8 +1275,11 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.tikvRUV2.Add(other.tikvRUV2.Load())
 	rd.AddRUV2(other.getRawRUV2())
-	for _, calculation := range other.RUCalculations() {
-		rd.addRUCalculation(calculation)
+	calculation, exists, invalid := other.ruCalculationState()
+	if invalid {
+		rd.invalidateRUCalculation()
+	} else if exists {
+		rd.AddRUCalculation(calculation)
 	}
 }
 
@@ -1357,54 +1363,71 @@ func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
 
 // Update updates the RU runtime stats with the given consumption info.
 func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
-	rd.update(consumption, waitDuration)
-}
-
-// UpdateWithRUCalculation updates RU runtime stats and retains the calculation
-// delta produced from the same request.
-func (rd *RUDetails) UpdateWithRUCalculation(consumption *rmpb.Consumption, waitDuration time.Duration, calculation resourceControlClient.RUCalculation) {
-	if !rd.update(consumption, waitDuration) {
-		return
-	}
-	rd.addRUCalculation(calculation)
-}
-
-func (rd *RUDetails) update(consumption *rmpb.Consumption, waitDuration time.Duration) bool {
 	if rd == nil || consumption == nil {
-		return false
+		return
 	}
 	rd.readRU.Add(consumption.RRU)
 	rd.writeRU.Add(consumption.WRU)
 	rd.ruWaitDuration.Add(waitDuration)
-	return true
 }
 
-func (rd *RUDetails) addRUCalculation(delta resourceControlClient.RUCalculation) {
+// AddRUCalculation adds RU v1 formula inputs collected from PD. Calculations
+// with different factor snapshots cannot be represented by one formula, so
+// the detail is discarded in that case.
+func (rd *RUDetails) AddRUCalculation(delta resourceControlClient.RUCalculation) {
 	if rd == nil {
 		return
 	}
 	rd.calculationMu.Lock()
 	defer rd.calculationMu.Unlock()
-	if rd.calculations == nil {
-		rd.calculations = make(map[resourceControlClient.RUFactorSnapshot]resourceControlClient.RUCalculation)
+	if rd.calculationInvalid {
+		return
 	}
-	calculation := rd.calculations[delta.Factors]
-	calculation.Add(delta)
-	rd.calculations[delta.Factors] = calculation
+	if rd.calculation == nil {
+		calculation := delta
+		rd.calculation = &calculation
+		return
+	}
+	if rd.calculation.Factors != delta.Factors {
+		rd.calculation = nil
+		rd.calculationInvalid = true
+		return
+	}
+	rd.calculation.Add(delta)
 }
 
-// RUCalculations returns an immutable snapshot of RU v1 calculation buckets.
-func (rd *RUDetails) RUCalculations() []resourceControlClient.RUCalculation {
+// RUCalculation returns the statement's RU v1 calculation, whether one was
+// collected, and whether all collected inputs used the same factor snapshot.
+func (rd *RUDetails) RUCalculation() (resourceControlClient.RUCalculation, bool, bool) {
+	calculation, exists, invalid := rd.ruCalculationState()
+	return calculation, exists, !invalid
+}
+
+func (rd *RUDetails) ruCalculationState() (
+	resourceControlClient.RUCalculation, bool, bool,
+) {
 	if rd == nil {
-		return nil
+		return resourceControlClient.RUCalculation{}, false, false
 	}
 	rd.calculationMu.Lock()
 	defer rd.calculationMu.Unlock()
-	calculations := make([]resourceControlClient.RUCalculation, 0, len(rd.calculations))
-	for _, calculation := range rd.calculations {
-		calculations = append(calculations, calculation)
+	if rd.calculationInvalid {
+		return resourceControlClient.RUCalculation{}, false, true
 	}
-	return calculations
+	if rd.calculation == nil {
+		return resourceControlClient.RUCalculation{}, false, false
+	}
+	return *rd.calculation, true, false
+}
+
+func (rd *RUDetails) invalidateRUCalculation() {
+	if rd == nil {
+		return
+	}
+	rd.calculationMu.Lock()
+	rd.calculation = nil
+	rd.calculationInvalid = true
+	rd.calculationMu.Unlock()
 }
 
 // UpdateTiFlash updates the Tiflash RU (RRU+WRU) with the given consumption info.

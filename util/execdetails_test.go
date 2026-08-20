@@ -106,45 +106,70 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			details.UpdateWithRUCalculation(&rmpb.Consumption{RRU: 1}, 0, delta)
+			details.Update(&rmpb.Consumption{RRU: 1}, 0)
+			details.AddRUCalculation(delta)
 		}()
 	}
 	wg.Wait()
 
-	snapshot := details.RUCalculations()
-	assert.Len(t, snapshot, 1)
-	assert.Equal(t, factors, snapshot[0].Factors)
-	assert.Equal(t, float64(10), snapshot[0].Inputs.ReadRPCCount)
+	calculation, ok, consistent := details.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, factors, calculation.Factors)
+	assert.Equal(t, float64(10), calculation.Inputs.ReadRPCCount)
 	assert.Equal(t, float64(10), details.RRU())
 
 	cloned := details.Clone()
+	clonedCalculation, ok, consistent := cloned.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(10), clonedCalculation.Inputs.ReadRPCCount)
+
+	sameFactors := NewRUDetails()
+	sameFactors.AddRUCalculation(delta)
+	cloned.Merge(sameFactors)
+	clonedCalculation, ok, consistent = cloned.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(11), clonedCalculation.Inputs.ReadRPCCount)
+
 	otherFactors := factors
 	otherFactors.ReadBaseCost = 2
 	otherDelta := delta
 	otherDelta.Factors = otherFactors
 	other := NewRUDetails()
-	other.UpdateWithRUCalculation(&rmpb.Consumption{RRU: 2}, 0, otherDelta)
+	other.Update(&rmpb.Consumption{RRU: 2}, 0)
+	other.AddRUCalculation(otherDelta)
 	other.UpdateTiFlash(&rmpb.Consumption{RRU: 3, WRU: 4})
 	cloned.Merge(other)
 
-	snapshot = cloned.RUCalculations()
-	assert.Len(t, snapshot, 2)
-	byFactors := make(map[resourceControlClient.RUFactorSnapshot]resourceControlClient.RUCalculation, len(snapshot))
-	for _, calculation := range snapshot {
-		byFactors[calculation.Factors] = calculation
-	}
-	assert.Equal(t, float64(10), byFactors[factors].Inputs.ReadRPCCount)
-	assert.Equal(t, float64(1), byFactors[otherFactors].Inputs.ReadRPCCount)
+	_, ok, consistent = cloned.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
 	assert.Equal(t, float64(7), cloned.TiflashRU())
-	assert.Len(t, details.RUCalculations(), 1)
+	_, ok, consistent = details.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
 
 	zeroDetails := NewRUDetails()
 	zeroDelta := resourceControlClient.RUCalculation{
 		Factors: resourceControlClient.RUFactorSnapshot{},
 		Inputs:  resourceControlClient.RUCalculationInputs{ReadRPCCount: 1},
 	}
-	zeroDetails.UpdateWithRUCalculation(&rmpb.Consumption{}, 0, zeroDelta)
-	assert.Len(t, zeroDetails.RUCalculations(), 1)
+	zeroDetails.AddRUCalculation(zeroDelta)
+	zeroCalculation, ok, consistent := zeroDetails.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(1), zeroCalculation.Inputs.ReadRPCCount)
+
+	invalidClone := cloned.Clone()
+	_, ok, consistent = invalidClone.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
+	invalidClone.AddRUCalculation(delta)
+	_, ok, consistent = invalidClone.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
 }
 
 func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
