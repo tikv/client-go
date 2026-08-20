@@ -156,7 +156,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeader() {
 	s.Nil(resp.GetRegionError())
 }
 
-func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRetryStore() {
+func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptLimiterUsesRetryStore() {
 	var firstAddr string
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		if firstAddr == "" {
@@ -176,7 +176,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	})
 	var storeIDs []uint64
 	var releaseCount int
-	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
+	req.RequestAttemptLimiter = func(ctx context.Context, storeID uint64) (func(), error) {
 		storeIDs = append(storeIDs, storeID)
 		return func() { releaseCount++ }, nil
 	}
@@ -192,7 +192,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	s.Equal(len(storeIDs), releaseCount)
 }
 
-func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRetryStoreAsync() {
+func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptLimiterUsesRetryStoreAsync() {
 	var firstAddr string
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		if firstAddr == "" {
@@ -214,12 +214,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	var storeIDs []uint64
 	var releaseCount int
 	var activeAttempt int
-	var overlappingAdmission bool
+	var overlappingAttempts bool
 	var invalidRelease bool
-	req.RequestAttemptAdmission = func(ctx context.Context, storeID uint64) (func(), error) {
+	req.RequestAttemptLimiter = func(ctx context.Context, storeID uint64) (func(), error) {
 		mu.Lock()
 		if activeAttempt != 0 {
-			overlappingAdmission = true
+			overlappingAttempts = true
 		}
 		storeIDs = append(storeIDs, storeID)
 		attempt := len(storeIDs)
@@ -265,7 +265,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRequestAttemptAdmissionUsesRet
 	defer mu.Unlock()
 	s.Require().Len(storeIDs, 2)
 	s.NotEqual(storeIDs[0], storeIDs[1])
-	s.False(overlappingAdmission, "the first attempt must release admission before the retry acquires it")
+	s.False(overlappingAttempts, "the first attempt must release its token before the retry acquires one")
 	s.False(invalidRelease)
 	s.Zero(activeAttempt)
 	s.Equal(len(storeIDs), releaseCount)

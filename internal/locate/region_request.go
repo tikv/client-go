@@ -547,7 +547,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	acquireAdmissionAsync := req.RequestAttemptAdmission != nil
+	runLimiterAsync := req.RequestAttemptLimiter != nil
 	sendFirstAttempt := func() {
 		var (
 			cancels = make([]context.CancelFunc, 0, 4)
@@ -555,7 +555,7 @@ func (s *RegionRequestSender) SendReqAsync(
 			hookCtx = ctx
 		)
 		finishBeforeSend := cb.Invoke
-		if acquireAdmissionAsync {
+		if runLimiterAsync {
 			finishBeforeSend = cb.Schedule
 		}
 		cancelAll := func() {
@@ -564,14 +564,14 @@ func (s *RegionRequestSender) SendReqAsync(
 			}
 		}
 
-		releaseAdmission, err := state.acquireRequestAttemptAdmission()
+		releaseAttempt, err := state.acquireRequestAttemptToken()
 		if err != nil {
 			state.vars.err = err
 			finishBeforeSend(state.toResponseExt())
 			return
 		}
-		if releaseAdmission != nil {
-			cancels = append(cancels, releaseAdmission)
+		if releaseAttempt != nil {
+			cancels = append(cancels, releaseAttempt)
 		}
 		if limit := kv.StoreLimit.Load(); limit > 0 {
 			if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
@@ -624,7 +624,7 @@ func (s *RegionRequestSender) SendReqAsync(
 			})
 		}))
 	}
-	if acquireAdmissionAsync {
+	if runLimiterAsync {
 		cb.Executor().Go(sendFirstAttempt)
 	} else {
 		sendFirstAttempt()
@@ -936,13 +936,16 @@ type sendReqState struct {
 	invariants reqInvariants
 }
 
-func (s *sendReqState) acquireRequestAttemptAdmission() (release func(), err error) {
+// acquireRequestAttemptToken invokes the limiter for the store selected for the
+// current RPC attempt. If the limiter returns both a release function and an
+// error, it releases the acquired token immediately because no RPC will be sent.
+func (s *sendReqState) acquireRequestAttemptToken() (release func(), err error) {
 	req := s.args.req
-	if req.RequestAttemptAdmission == nil || s.vars.rpcCtx == nil || s.vars.rpcCtx.Store == nil {
+	if req.RequestAttemptLimiter == nil || s.vars.rpcCtx == nil || s.vars.rpcCtx.Store == nil {
 		return nil, nil
 	}
 
-	release, err = req.RequestAttemptAdmission(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
+	release, err = req.RequestAttemptLimiter(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
 	if err != nil && release != nil {
 		// Be defensive about callbacks that return both a release function and an
 		// error. No RPC attempt will be made, so release any acquired capacity.
@@ -1072,13 +1075,13 @@ func (s *sendReqState) next() (done bool) {
 		}
 	}
 
-	releaseAdmission, err := s.acquireRequestAttemptAdmission()
+	releaseAttempt, err := s.acquireRequestAttemptToken()
 	if err != nil {
 		s.vars.err = err
 		return true
 	}
-	if releaseAdmission != nil {
-		defer releaseAdmission()
+	if releaseAttempt != nil {
+		defer releaseAttempt()
 	}
 
 	// judge the store limit switch.
