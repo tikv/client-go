@@ -1098,6 +1098,7 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	require.Equal(t, float64(2), calculation.Factors.WriteBaseCost)
 	require.Equal(t, float64(1), calculation.Inputs.ReplicaWeightedWriteRPCCount)
 	require.Equal(t, float64(2), calculation.WRU)
+	require.Equal(t, float64(2), ruDetails.WRU())
 	require.True(t, committer.mu.committed)
 	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
 	require.Panics(t, func() {
