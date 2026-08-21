@@ -7,7 +7,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260810080205-543bb79c8a8a
+	github.com/pingcap/kvproto v0.0.0-20260820070758-623e58e60fa9
 	github.com/pingcap/tidb v1.1.0-beta.0.20260724063146-0a6cfba9f749
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
@@ -147,6 +147,7 @@ require (
 	github.com/shoenig/go-m1cpu v0.2.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.142 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -195,8 +196,8 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260820110718-9d16405182b2
-	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260820110718-9d16405182b2
+	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260821052121-72041e4b4b36
+	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260821052121-72041e4b4b36
 	github.com/tikv/client-go/v2 => ../
 	github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260821050134-d9b686cee60b
 )
