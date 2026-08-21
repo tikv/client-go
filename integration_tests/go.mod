@@ -198,5 +198,5 @@ replace (
 	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20260820110718-9d16405182b2
 	github.com/pingcap/tidb/pkg/parser => github.com/JmPotato/tidb/pkg/parser v0.0.0-20260820110718-9d16405182b2
 	github.com/tikv/client-go/v2 => ../
-	github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040
+	github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20260821050134-d9b686cee60b
 )

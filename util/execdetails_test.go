@@ -99,6 +99,7 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 		Inputs: resourceControlClient.RUCalculationInputs{
 			ReadRPCCount: 1,
 		},
+		RRU: 1,
 	}
 
 	var wg sync.WaitGroup
@@ -117,6 +118,7 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 	assert.True(t, consistent)
 	assert.Equal(t, factors, calculation.Factors)
 	assert.Equal(t, float64(10), calculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(10), calculation.RRU)
 	assert.Equal(t, float64(10), details.RRU())
 
 	cloned := details.Clone()
@@ -124,6 +126,7 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, consistent)
 	assert.Equal(t, float64(10), clonedCalculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(10), clonedCalculation.RRU)
 
 	sameFactors := NewRUDetails()
 	sameFactors.AddRUCalculation(delta)
@@ -132,11 +135,13 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, consistent)
 	assert.Equal(t, float64(11), clonedCalculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(11), clonedCalculation.RRU)
 
 	otherFactors := factors
 	otherFactors.ReadBaseCost = 2
 	otherDelta := delta
 	otherDelta.Factors = otherFactors
+	otherDelta.RRU = 2
 	other := NewRUDetails()
 	other.Update(&rmpb.Consumption{RRU: 2}, 0)
 	other.AddRUCalculation(otherDelta)

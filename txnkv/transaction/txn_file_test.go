@@ -962,6 +962,7 @@ func (i *txnFileResponseErrorInterceptor) OnRequestWait(
 		collector.CollectRUCalculation(resourceControlClient.RUCalculation{
 			Factors: resourceControlClient.RUFactorSnapshot{WriteBaseCost: 2},
 			Inputs:  resourceControlClient.RUCalculationInputs{ReplicaWeightedWriteRPCCount: 1},
+			WRU:     2,
 		})
 	}
 	return &rmpb.Consumption{WRU: 2}, &rmpb.Consumption{}, 0, 0, nil
@@ -1096,6 +1097,7 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	require.True(t, consistent)
 	require.Equal(t, float64(2), calculation.Factors.WriteBaseCost)
 	require.Equal(t, float64(1), calculation.Inputs.ReplicaWeightedWriteRPCCount)
+	require.Equal(t, float64(2), calculation.WRU)
 	require.True(t, committer.mu.committed)
 	// DiscardValues invalidates the MemDB value log, so reading a value after commit panics by contract.
 	require.Panics(t, func() {

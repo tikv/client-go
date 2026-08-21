@@ -130,11 +130,14 @@ var (
 			ReadRPCCount:                 1,
 			ReplicaWeightedWriteRPCCount: 1,
 		},
+		RRU: 11,
+		WRU: 3,
 	}
 	recordingResponseConsumption = &rmpb.Consumption{RRU: 5}
 	recordingResponseCalculation = resourceControlClient.RUCalculation{
 		Factors: recordingRequestCalculation.Factors,
 		Inputs:  resourceControlClient.RUCalculationInputs{ReadBytes: 5},
+		RRU:     5,
 	}
 )
 

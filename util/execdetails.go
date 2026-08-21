@@ -1398,7 +1398,7 @@ func (rd *RUDetails) AddRUCalculation(delta resourceControlClient.RUCalculation)
 
 // RUCalculation returns the statement's RU v1 calculation, whether one was
 // collected, and whether all collected inputs used the same factor snapshot.
-func (rd *RUDetails) RUCalculation() (resourceControlClient.RUCalculation, bool, bool) {
+func (rd *RUDetails) RUCalculation() (calculation resourceControlClient.RUCalculation, exists, consistent bool) {
 	calculation, exists, invalid := rd.ruCalculationState()
 	return calculation, exists, !invalid
 }

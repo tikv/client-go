@@ -1,8 +1,8 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040 h1:EuFoHRiT1oEjqmJaSyBMlwHAIY7cBOXkATLZjrE2j1k=
-github.com/JmPotato/pd/client v0.0.0-20260820105723-5d6648e4b040/go.mod h1:3q0AbdoMvJqvAkoli4QBKueNiyfK5bF8w19d1g22jgk=
+github.com/JmPotato/pd/client v0.0.0-20260821050134-d9b686cee60b h1:0/9o+chqwsjhjvN/JR7KeJYGur+3sXvfWRIYa+bOCkQ=
+github.com/JmPotato/pd/client v0.0.0-20260821050134-d9b686cee60b/go.mod h1:3q0AbdoMvJqvAkoli4QBKueNiyfK5bF8w19d1g22jgk=
 github.com/VividCortex/ewma v1.2.0 h1:f58SaIzcDXrSy3kWaHNvuJgJ3Nmz59Zji6XoJR/q1ow=
 github.com/VividCortex/ewma v1.2.0/go.mod h1:nz4BbCtbLyFDeC9SUHbtcT5644juEuWfUAUnGx7j5l4=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
