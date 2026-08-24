@@ -327,6 +327,50 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 	s.Len(storageValues, 0)
 }
 
+func (s *testPipelinedMemDBSuite) TestBufferBatchGetPointResponseStats() {
+	ctx := context.Background()
+	key := s.key("point_response_stats_buffer")
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+	s.Require().NoError(err)
+	defer func() { s.Require().NoError(txn.Rollback()) }()
+	s.Require().NoError(txn.Set(key, []byte("value")))
+	flushed, err := txn.GetMemBuffer().Flush(true)
+	s.Require().NoError(err)
+	s.Require().True(flushed)
+	s.Require().NoError(txn.GetMemBuffer().FlushWait())
+
+	originalClient := s.store.GetTiKVClient()
+	statsClient := &pointResponseBatchGetClient{Client: originalClient}
+	s.store.SetTiKVClient(statsClient)
+	defer s.store.SetTiKVClient(originalClient)
+
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot := txn.GetSnapshot()
+	snapshot.SetRuntimeStats(runtimeStats)
+	entries, err := snapshot.BatchGetWithTier(
+		ctx,
+		[][]byte{key},
+		txnsnapshot.BatchGetBufferTier,
+		kv.BatchGetOptions{},
+	)
+	s.Require().NoError(err)
+	s.Require().Equal([]byte("value"), entries[string(key)].Value)
+
+	responses := statsClient.getCompletedResponses()
+	s.Require().Positive(responses)
+	pointStats := runtimeStats.GetPointResponseStats()
+	s.True(pointStats.IsValid())
+	s.True(pointStats.ScanDetailComplete())
+	s.True(pointStats.PayloadComplete())
+	s.Equal(int64(responses*5), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(responses*3), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(responses*30), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(uint64(len(key)+len("value")), pointStats.PayloadBytes)
+	s.Equal(responses, pointStats.ScanDetailRecords)
+	s.Equal(responses, pointStats.PayloadRecords)
+	s.Equal(responses, pointStats.CompletedResponses)
+}
+
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	failpoint.Enable("tikvclient/beforeSendReqToRegion", "return")
 	defer failpoint.Disable("tikvclient/beforeSendReqToRegion")

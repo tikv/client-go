@@ -27,6 +27,12 @@ type KVSnapshot = txnsnapshot.KVSnapshot
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
 
+// PointReadScanDetail is the storage work reported by point-read responses.
+type PointReadScanDetail = txnsnapshot.PointReadScanDetail
+
+// PointResponseStats is one atomic snapshot of point-read response statistics.
+type PointResponseStats = txnsnapshot.PointResponseStats
+
 // IsoLevel is the transaction's isolation level.
 type IsoLevel = txnsnapshot.IsoLevel
 

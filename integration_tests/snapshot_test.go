@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -59,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -70,6 +72,78 @@ type testSnapshotSuite struct {
 	store   tikv.StoreProbe
 	prefix  string
 	rowNums []int
+}
+
+type pointResponseBatchGetClient struct {
+	tikv.Client
+	mu                 sync.Mutex
+	completedResponses uint64
+	asyncRequests      uint64
+}
+
+func (c *pointResponseBatchGetClient) decorateResponse(
+	resp *tikvrpc.Response,
+	err error,
+) (*tikvrpc.Response, error) {
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	regionErr, regionErrErr := resp.GetRegionError()
+	if regionErrErr != nil || regionErr != nil {
+		return resp, err
+	}
+
+	details := &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+		TotalVersions:         5,
+		ProcessedVersions:     3,
+		ProcessedVersionsSize: 30,
+	}}
+	switch body := resp.Resp.(type) {
+	case *kvrpcpb.BatchGetResponse:
+		body.ExecDetailsV2 = details
+	case *kvrpcpb.BufferBatchGetResponse:
+		body.ExecDetailsV2 = details
+	default:
+		return resp, err
+	}
+	c.mu.Lock()
+	c.completedResponses++
+	c.mu.Unlock()
+	return resp, err
+}
+
+func (c *pointResponseBatchGetClient) SendRequest(
+	ctx context.Context,
+	addr string,
+	req *tikvrpc.Request,
+	timeout time.Duration,
+) (*tikvrpc.Response, error) {
+	return c.decorateResponse(c.Client.SendRequest(ctx, addr, req, timeout))
+}
+
+func (c *pointResponseBatchGetClient) SendRequestAsync(
+	ctx context.Context,
+	addr string,
+	req *tikvrpc.Request,
+	cb async.Callback[*tikvrpc.Response],
+) {
+	cb.Inject(c.decorateResponse)
+	c.mu.Lock()
+	c.asyncRequests++
+	c.mu.Unlock()
+	c.Client.SendRequestAsync(ctx, addr, req, cb)
+}
+
+func (c *pointResponseBatchGetClient) getCompletedResponses() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.completedResponses
+}
+
+func (c *pointResponseBatchGetClient) getAsyncRequests() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.asyncRequests
 }
 
 func (s *testSnapshotSuite) SetupTest() {
@@ -439,6 +513,260 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"dispatch_count:{total:1, max:1, min:1}, " +
 		"fair_queue:{enabled:false, waited_task_slices:{total:0, max:0, min:0}}}"
 	s.Equal(expect, snapshot.FormatStats())
+}
+
+func (s *testSnapshotSuite) TestSnapshotRuntimeStatsGetAndBatchGetCoverage() {
+	restoreConfig := config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableAsyncBatchGet = false
+	})
+	defer restoreConfig()
+
+	missingKey := s.key("runtime_stats_missing")
+	getKey := s.key("runtime_stats_get")
+	batchGetKey := s.key("runtime_stats_batch_get")
+	txn := s.beginTxn()
+	s.Nil(txn.Set(getKey, []byte("get")))
+	s.Nil(txn.Set(batchGetKey, []byte("batch-get")))
+	s.Nil(txn.Commit(context.Background()))
+
+	snapshot := s.store.GetSnapshot(math.MaxUint64)
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot.SetRuntimeStats(runtimeStats)
+
+	var responseMu sync.Mutex
+	getResponses := 0
+	fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if err != nil || resp == nil {
+				return resp, err
+			}
+			regionErr, regionErrErr := resp.GetRegionError()
+			if regionErrErr != nil || regionErr != nil {
+				return resp, err
+			}
+
+			responseMu.Lock()
+			defer responseMu.Unlock()
+			switch body := resp.Resp.(type) {
+			case *kvrpcpb.GetResponse:
+				getResponses++
+				if getResponses == 1 {
+					body.ExecDetailsV2 = nil
+				} else {
+					body.ExecDetailsV2 = &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+						TotalVersions:         5,
+						ProcessedVersions:     3,
+						ProcessedVersionsSize: 30,
+					}}
+				}
+			case *kvrpcpb.BatchGetResponse:
+				body.ExecDetailsV2 = &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					TotalVersions:         7,
+					ProcessedVersions:     4,
+					ProcessedVersionsSize: 40,
+				}}
+			}
+			return resp, err
+		}
+	}
+	snapshot.SetRPCInterceptor(interceptor.NewRPCInterceptor("scan-detail-coverage", fn))
+
+	_, err := snapshot.Get(context.Background(), missingKey)
+	s.True(tikverr.IsErrNotFound(err))
+	entry, err := snapshot.Get(context.Background(), getKey)
+	s.Nil(err)
+	s.Equal([]byte("get"), entry.Value)
+	entries, err := snapshot.BatchGet(context.Background(), [][]byte{batchGetKey})
+	s.Nil(err)
+	s.Equal([]byte("batch-get"), entries[string(batchGetKey)].Value)
+
+	pointStats := runtimeStats.GetPointResponseStats()
+	s.True(pointStats.IsValid())
+	s.False(pointStats.ScanDetailComplete())
+	s.True(pointStats.PayloadComplete())
+	s.Equal(int64(12), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(7), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(70), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(uint64(len("get")+len(batchGetKey)+len("batch-get")), pointStats.PayloadBytes)
+	s.Equal(uint64(2), pointStats.ScanDetailRecords)
+	s.Equal(uint64(3), pointStats.PayloadRecords)
+	s.Equal(uint64(3), pointStats.CompletedResponses)
+}
+
+func (s *testSnapshotSuite) TestSnapshotRuntimeStatsExcludesEpochNotMatch() {
+	ctx := context.Background()
+	key := encodeKey(s.prefix, "runtime_stats_epoch_not_match")
+	txn := s.beginTxn()
+	s.Nil(txn.Set(key, []byte("value")))
+	s.Nil(txn.Commit(ctx))
+
+	snapshot := s.store.GetSnapshot(math.MaxUint64)
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot.SetRuntimeStats(runtimeStats)
+
+	getAttempts := 0
+	fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdGet {
+				getAttempts++
+				if getAttempts == 1 {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+						EpochNotMatch: &errorpb.EpochNotMatch{},
+					}}}, nil
+				}
+			}
+			resp, err := next(target, req)
+			if err == nil && resp != nil && req.Type == tikvrpc.CmdGet {
+				body := resp.Resp.(*kvrpcpb.GetResponse)
+				body.ExecDetailsV2 = &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					TotalVersions: 1, ProcessedVersions: 1, ProcessedVersionsSize: 10,
+				}}
+			}
+			return resp, err
+		}
+	}
+	snapshot.SetRPCInterceptor(interceptor.NewRPCInterceptor("scan-detail-epoch-not-match", fn))
+
+	entry, err := snapshot.Get(ctx, key)
+	s.Nil(err)
+	s.Equal([]byte("value"), entry.Value)
+	s.Equal(2, getAttempts)
+	pointStats := runtimeStats.GetPointResponseStats()
+	s.True(pointStats.IsValid())
+	s.True(pointStats.ScanDetailComplete())
+	s.True(pointStats.PayloadComplete())
+	s.Equal(int64(1), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(1), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(10), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(uint64(len("value")), pointStats.PayloadBytes)
+	s.Equal(uint64(1), pointStats.ScanDetailRecords)
+	s.Equal(uint64(1), pointStats.PayloadRecords)
+	s.Equal(uint64(1), pointStats.CompletedResponses)
+}
+
+func (s *testSnapshotSuite) TestSnapshotRuntimeStatsPointGetLockRetryCoverage() {
+	ctx := context.Background()
+	key := encodeKey(s.prefix, "runtime_stats_point_lock_retry")
+	txn := s.beginTxn()
+	s.Nil(txn.Set(key, []byte("old-value")))
+	s.Nil(txn.Commit(ctx))
+
+	lockingTxn := s.beginTxn()
+	s.Nil(lockingTxn.Set(key, []byte("locked-value")))
+	committer, err := lockingTxn.NewCommitter(1)
+	s.Nil(err)
+	s.Nil(committer.PrewriteAllMutations(ctx))
+	defer committer.Cleanup(ctx)
+
+	readTxn := s.beginTxn()
+	snapshot := readTxn.GetSnapshot()
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot.SetRuntimeStats(runtimeStats)
+	lockedResponseSeen := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	go func() {
+		<-lockedResponseSeen
+		committer.Cleanup(ctx)
+		close(cleanupDone)
+	}()
+
+	getResponses := 0
+	var signalLockResponse sync.Once
+	fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if err != nil || resp == nil || req.Type != tikvrpc.CmdGet {
+				return resp, err
+			}
+			body := resp.Resp.(*kvrpcpb.GetResponse)
+			getResponses++
+			body.ExecDetailsV2 = &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+				TotalVersions: 2, ProcessedVersions: 1, ProcessedVersionsSize: 10,
+			}}
+			if body.GetError() != nil && body.GetError().GetLocked() != nil {
+				signalLockResponse.Do(func() { close(lockedResponseSeen) })
+				<-cleanupDone
+			}
+			return resp, err
+		}
+	}
+	snapshot.SetRPCInterceptor(interceptor.NewRPCInterceptor("scan-detail-point-lock-retry", fn))
+
+	entry, err := snapshot.Get(ctx, key)
+	s.Nil(err)
+	s.Equal([]byte("old-value"), entry.Value)
+	s.Equal(2, getResponses)
+	pointStats := runtimeStats.GetPointResponseStats()
+	s.True(pointStats.IsValid())
+	s.True(pointStats.ScanDetailComplete())
+	s.True(pointStats.PayloadComplete())
+	s.Equal(int64(4), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(2), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(20), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(uint64(len("old-value")), pointStats.PayloadBytes)
+	s.Equal(uint64(2), pointStats.ScanDetailRecords)
+	s.Equal(uint64(2), pointStats.PayloadRecords)
+	s.Equal(uint64(2), pointStats.CompletedResponses)
+}
+
+func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegionsCoverage() {
+	restoreConfig := config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableAsyncBatchGet = true
+	})
+	defer restoreConfig()
+
+	ctx := context.Background()
+	leftKey := s.key("runtime_stats_async_a")
+	splitKey := s.key("runtime_stats_async_m")
+	rightKey := s.key("runtime_stats_async_z")
+	txn := s.beginTxn()
+	s.Nil(txn.Set(leftKey, []byte("left")))
+	s.Nil(txn.Set(rightKey, []byte("right")))
+	s.Nil(txn.Commit(ctx))
+
+	preSplitLoc, err := s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), splitKey)
+	s.Nil(err)
+	_, err = s.store.SplitRegions(ctx, [][]byte{splitKey}, false, nil)
+	s.Nil(err)
+	s.store.GetRegionCache().InvalidateCachedRegion(preSplitLoc.Region)
+	var leftLoc, rightLoc *tikv.KeyLocation
+	s.Eventually(func() bool {
+		leftLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), leftKey)
+		if err != nil {
+			return false
+		}
+		rightLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), rightKey)
+		return err == nil && leftLoc.Region.GetID() != rightLoc.Region.GetID()
+	}, 5*time.Second, time.Millisecond)
+
+	originalClient := s.store.GetTiKVClient()
+	detailClient := &pointResponseBatchGetClient{Client: originalClient}
+	s.store.SetTiKVClient(detailClient)
+	defer s.store.SetTiKVClient(originalClient)
+
+	snapshot := s.store.GetSnapshot(math.MaxUint64)
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot.SetRuntimeStats(runtimeStats)
+	entries, err := snapshot.BatchGet(ctx, [][]byte{leftKey, rightKey})
+	s.Nil(err)
+	s.Equal([]byte("left"), entries[string(leftKey)].Value)
+	s.Equal([]byte("right"), entries[string(rightKey)].Value)
+
+	pointStats := runtimeStats.GetPointResponseStats()
+	injectedResponses := detailClient.getCompletedResponses()
+	s.GreaterOrEqual(detailClient.getAsyncRequests(), uint64(2))
+	s.GreaterOrEqual(injectedResponses, uint64(2))
+	s.True(pointStats.IsValid())
+	s.True(pointStats.ScanDetailComplete())
+	s.True(pointStats.PayloadComplete())
+	s.Equal(injectedResponses, pointStats.CompletedResponses)
+	s.Equal(pointStats.CompletedResponses, pointStats.ScanDetailRecords)
+	s.Equal(pointStats.CompletedResponses, pointStats.PayloadRecords)
+	s.Equal(int64(pointStats.CompletedResponses*5), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(pointStats.CompletedResponses*3), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(pointStats.CompletedResponses*30), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(uint64(len(leftKey)+len("left")+len(rightKey)+len("right")), pointStats.PayloadBytes)
 }
 
 func (s *testSnapshotSuite) TestRCRead() {
