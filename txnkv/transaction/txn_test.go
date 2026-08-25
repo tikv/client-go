@@ -15,8 +15,10 @@
 package transaction
 
 import (
+	"bytes"
 	"context"
 	stderrs "errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,10 +95,15 @@ func (m *mockStore) GetTiKVClient() client.Client {
 
 type recorderStore struct {
 	*mockStore
+	getTimestampWithRetry func(*retry.Backoffer, string) (uint64, error)
 }
 
 func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
 	return m.client.SendRequest(bo.GetCtx(), "mock-store", req, timeout)
+}
+
+func (m *recorderStore) GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error) {
+	return m.getTimestampWithRetry(bo, scope)
 }
 
 func (m *mockStore) GetOracle() oracle.Oracle {
@@ -370,6 +377,133 @@ func TestSharedLockUpgrade(t *testing.T) {
 		return ret
 	}
 
+	t.Run("LockKeysWithWaitTimeReturnsAbortBeforeTSO", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			err  error
+		}{
+			{
+				name: "SharedLockLost",
+				err: errors.WithStack(&tikverr.ErrSharedLockLost{SharedLockLost: &kvrpcpb.SharedLockLost{
+					Key: []byte("upgrade-key"), StartTs: 1,
+				}}),
+			},
+			{
+				name: "LockUpgradeConflict",
+				err: errors.WithStack(&tikverr.ErrLockUpgradeConflict{LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+					Key: []byte("upgrade-key"), StartTs: 1, OwnerStartTs: 2,
+					Reason: kvrpcpb.LockUpgradeConflict_SecondUpgrader,
+				}}),
+			},
+		}
+
+		for _, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				txn, requests := newRecorderTxn(t, func(int, *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+					return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+				})
+				store := txn.KVTxn.store.(*recorderStore)
+				tsoCalls := 0
+				store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) {
+					tsoCalls++
+					return 0, errors.New("timestamp acquisition must not run")
+				}
+
+				txn.recordSharedLockAbort(testCase.err)
+				err := txn.LockKeysWithWaitTime(context.Background(), kv.LockNoWait, []byte("later-key"))
+				require.Same(t, errors.Cause(testCase.err), errors.Cause(err))
+				require.Zero(t, tsoCalls)
+				require.Empty(t, *requests)
+			})
+		}
+	})
+
+	t.Run("LockKeysWithWaitTimeRechecksAbortAfterTSO", func(t *testing.T) {
+		primaryKey := []byte("primary-key")
+		upgradeKey := []byte("upgrade-key")
+		laterKey := []byte("later-key")
+		var txn *testTxn
+		txn, requests := newRecorderTxn(t, func(_ int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			if len(req.Mutations) == 1 && req.Mutations[0].Op == kvrpcpb.Op_PessimisticLock && bytes.Equal(req.Mutations[0].Key, upgradeKey) {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{Errors: []*kvrpcpb.KeyError{{
+					SharedLockLost: &kvrpcpb.SharedLockLost{Key: bytes.Clone(upgradeKey), StartTs: txn.StartTS()},
+				}}}}, nil
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		lockSharedKey(t, txn, primaryKey, upgradeKey)
+		*requests = (*requests)[:0]
+
+		tsoStarted := make(chan struct{})
+		resumeTSO := make(chan struct{})
+		store := txn.KVTxn.store.(*recorderStore)
+		store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) {
+			close(tsoStarted)
+			<-resumeTSO
+			return 3, nil
+		}
+
+		laterDone := make(chan error, 1)
+		go func() {
+			laterDone <- txn.LockKeysWithWaitTime(context.Background(), kv.LockNoWait, laterKey)
+		}()
+		<-tsoStarted
+
+		abortDone := make(chan error, 1)
+		go func() {
+			lockCtx := kv.NewLockCtx(4, kv.LockNoWait, time.Now())
+			lockCtx.AllowSharedLockUpgrade = true
+			abortDone <- txn.LockKeys(context.Background(), lockCtx, upgradeKey)
+		}()
+
+		var firstErr error
+		select {
+		case firstErr = <-abortDone:
+		case <-time.After(time.Second):
+			close(resumeTSO)
+			require.FailNow(t, "LockKeysWithWaitTime held KVTxn.mu across timestamp acquisition")
+		}
+		var firstLost *tikverr.ErrSharedLockLost
+		require.ErrorAs(t, firstErr, &firstLost)
+		close(resumeTSO)
+
+		laterErr := <-laterDone
+		var laterLost *tikverr.ErrSharedLockLost
+		require.ErrorAs(t, laterErr, &laterLost)
+		require.Same(t, firstLost, laterLost)
+		require.Len(t, *requests, 1)
+	})
+
+	t.Run("SharedLockAbortStateIsRaceSafeAndFirstErrorWins", func(t *testing.T) {
+		txn := newTestTxn(t, 1)
+		abortErrors := []error{
+			errors.WithStack(&tikverr.ErrSharedLockLost{SharedLockLost: &kvrpcpb.SharedLockLost{Key: []byte("lost"), StartTs: 1}}),
+			errors.WithStack(&tikverr.ErrLockUpgradeConflict{LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+				Key: []byte("conflict"), StartTs: 1, OwnerStartTs: 2,
+				Reason: kvrpcpb.LockUpgradeConflict_SecondUpgrader,
+			}}),
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < 64; i++ {
+			wg.Add(2)
+			go func(err error) {
+				defer wg.Done()
+				<-start
+				txn.recordSharedLockAbort(err)
+			}(abortErrors[i%len(abortErrors)])
+			go func() {
+				defer wg.Done()
+				<-start
+				_ = txn.getSharedLockAbortErr()
+			}()
+		}
+		close(start)
+		wg.Wait()
+		stored := txn.getSharedLockAbortErr()
+		require.True(t, stored == abortErrors[0] || stored == abortErrors[1])
+	})
+
 	t.Run("GateOffRejectsLocally", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
@@ -619,6 +753,14 @@ func TestSharedLockUpgrade(t *testing.T) {
 				require.True(t, flags.HasLocked())
 				require.True(t, flags.HasLockedInShareMode())
 
+				secondAbortErr := errors.WithStack(&tikverr.ErrSharedLockLost{
+					SharedLockLost: &kvrpcpb.SharedLockLost{
+						Key:     []byte("second-upgrade-key"),
+						StartTs: txn.StartTS(),
+					},
+				})
+				txn.recordSharedLockAbort(secondAbortErr)
+
 				requestCount := len(*requests)
 				laterErr := txn.LockKeys(
 					context.Background(),
@@ -635,7 +777,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 				require.ErrorAs(t, commitErr, &commitConflict)
 				require.Same(t, firstConflict, commitConflict)
 				require.Len(t, *requests, requestCount)
-				require.True(t, txn.Valid(), "fatal commit rejection must leave rollback available")
+				require.True(t, txn.Valid(), "abort commit rejection must leave rollback available")
 
 				require.NoError(t, txn.Rollback())
 				require.False(t, txn.Valid())
@@ -650,7 +792,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		}
 	})
 
-	t.Run("SharedLockLostPoisonsTransactionButKeepsRollbackAvailable", func(t *testing.T) {
+	t.Run("SharedLockLostAbortsTransactionButKeepsRollbackAvailable", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
 		var txn *testTxn
@@ -691,13 +833,15 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.True(t, flags.HasLocked())
 		require.True(t, flags.HasLockedInShareMode())
 
-		secondFatalErr := errors.WithStack(&tikverr.ErrSharedLockLost{
-			SharedLockLost: &kvrpcpb.SharedLockLost{
-				Key:     []byte("second-upgrade-key"),
-				StartTs: txn.StartTS(),
+		secondAbortErr := errors.WithStack(&tikverr.ErrLockUpgradeConflict{
+			LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+				Key:          []byte("second-upgrade-key"),
+				StartTs:      txn.StartTS(),
+				OwnerStartTs: 2,
+				Reason:       kvrpcpb.LockUpgradeConflict_SecondUpgrader,
 			},
 		})
-		txn.committer.setFatalTxnErr(secondFatalErr)
+		txn.recordSharedLockAbort(secondAbortErr)
 
 		requestCount := len(*requests)
 		laterErr := txn.LockKeys(
@@ -710,12 +854,25 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.Same(t, firstLost, laterLost)
 		require.Len(t, *requests, requestCount)
 
+		callbackCalled := false
+		lockFuncErr := txn.LockKeysFunc(
+			context.Background(),
+			kv.NewLockCtx(3, kv.LockNoWait, time.Now()),
+			func() { callbackCalled = true },
+			[]byte("later-func-key"),
+		)
+		var lockFuncLost *tikverr.ErrSharedLockLost
+		require.ErrorAs(t, lockFuncErr, &lockFuncLost)
+		require.Same(t, firstLost, lockFuncLost)
+		require.False(t, callbackCalled)
+		require.Len(t, *requests, requestCount)
+
 		commitErr := txn.Commit(context.Background())
 		var commitLost *tikverr.ErrSharedLockLost
 		require.ErrorAs(t, commitErr, &commitLost)
 		require.Same(t, firstLost, commitLost)
 		require.Len(t, *requests, requestCount)
-		require.True(t, txn.Valid(), "fatal commit rejection must leave rollback available")
+		require.True(t, txn.Valid(), "abort commit rejection must leave rollback available")
 
 		require.NoError(t, txn.Rollback())
 		require.False(t, txn.Valid())
@@ -798,7 +955,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.NoError(t, txn.Rollback())
 	})
 
-	t.Run("UndeterminedTakesPrecedenceOverFatalState", func(t *testing.T) {
+	t.Run("UndeterminedTakesPrecedenceOverSharedLockAbortState", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
 		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
@@ -807,13 +964,13 @@ func TestSharedLockUpgrade(t *testing.T) {
 		lockSharedKey(t, txn, primaryKey, upgradeKey)
 		*requests = (*requests)[:0]
 
-		fatalErr := errors.WithStack(&tikverr.ErrSharedLockLost{
+		abortErr := errors.WithStack(&tikverr.ErrSharedLockLost{
 			SharedLockLost: &kvrpcpb.SharedLockLost{
 				Key:     []byte("upgrade-key"),
 				StartTs: txn.StartTS(),
 			},
 		})
-		txn.committer.setFatalTxnErr(fatalErr)
+		txn.recordSharedLockAbort(abortErr)
 		txn.committer.setUndeterminedErr(errors.New("unknown upgrade outcome"))
 
 		laterErr := txn.LockKeys(

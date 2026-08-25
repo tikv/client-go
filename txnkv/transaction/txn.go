@@ -230,6 +230,13 @@ type KVTxn struct {
 
 	// disableTxnFile indicates this transaction should NOT use file-based txn.
 	disableTxnFile bool
+
+	// sharedLockAbortMu protects sharedLockAbortErr and must remain independent from mu:
+	// writers may already hold KVTxn.mu, while Commit reads without holding KVTxn.mu.
+	sharedLockAbortMu sync.Mutex
+	// sharedLockAbortErr stores the first shared-lock-specific abort error. It blocks
+	// subsequent lock and commit operations while still allowing rollback.
+	sharedLockAbortErr error
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -807,10 +814,9 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	if !txn.valid {
 		return tikverr.ErrInvalidTxn
 	}
-	if txn.committer != nil {
-		undeterminedErr, fatalTxnErr := txn.committer.getTxnStateErrs()
-		if undeterminedErr == nil && fatalTxnErr != nil {
-			return fatalTxnErr
+	if txn.committer == nil || txn.committer.getUndeterminedErr() == nil {
+		if abortErr := txn.getSharedLockAbortErr(); abortErr != nil {
+			return abortErr
 		}
 	}
 	defer txn.close()
@@ -1131,6 +1137,13 @@ func (txn *KVTxn) onCommitted(err error) {
 // LockKeysWithWaitTime tries to lock the entries with the keys in KV store.
 // lockWaitTime in ms, 0 means nowait lock.
 func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, keysInput ...[]byte) (err error) {
+	txn.mu.Lock()
+	err = txn.getTxnStateErr()
+	txn.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
 	forUpdateTs := txn.startTS
 	if txn.IsPessimistic() {
 		bo := retry.NewBackofferWithVars(context.Background(), TsoMaxBackoff, nil)
@@ -1139,9 +1152,7 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 			return err
 		}
 	}
-	lockCtx := tikv.NewLockCtx(forUpdateTs, lockWaitTime, time.Now())
-
-	return txn.LockKeys(ctx, lockCtx, keysInput...)
+	return txn.LockKeys(ctx, tikv.NewLockCtx(forUpdateTs, lockWaitTime, time.Now()), keysInput...)
 }
 
 // StartAggressiveLocking makes the transaction enters aggressive locking state.
@@ -1418,15 +1429,33 @@ func (txn *KVTxn) LockKeysFunc(ctx context.Context, lockCtx *tikv.LockCtx, fn fu
 	return txn.lockKeys(ctx, lockCtx, fn, keysInput...)
 }
 
-func (txn *KVTxn) getTxnStateErr() error {
-	if txn.committer == nil {
-		return nil
+func (txn *KVTxn) recordSharedLockAbort(err error) {
+	if err == nil {
+		return
 	}
-	undeterminedErr, fatalTxnErr := txn.committer.getTxnStateErrs()
-	if undeterminedErr != nil {
+	var sharedLockLost *tikverr.ErrSharedLockLost
+	var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
+	if !errors.As(err, &sharedLockLost) && !errors.As(err, &lockUpgradeConflict) {
+		return
+	}
+	txn.sharedLockAbortMu.Lock()
+	defer txn.sharedLockAbortMu.Unlock()
+	if txn.sharedLockAbortErr == nil {
+		txn.sharedLockAbortErr = err
+	}
+}
+
+func (txn *KVTxn) getSharedLockAbortErr() error {
+	txn.sharedLockAbortMu.Lock()
+	defer txn.sharedLockAbortMu.Unlock()
+	return txn.sharedLockAbortErr
+}
+
+func (txn *KVTxn) getTxnStateErr() error {
+	if txn.committer != nil && txn.committer.getUndeterminedErr() != nil {
 		return errors.WithStack(tikverr.ErrResultUndetermined)
 	}
-	return fatalTxnErr
+	return txn.getSharedLockAbortErr()
 }
 
 func (txn *KVTxn) lockPessimisticKeyGroup(
@@ -1459,16 +1488,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		}
 
 		if isUpgrade {
-			var sharedLockLost *tikverr.ErrSharedLockLost
-			if errors.As(err, &sharedLockLost) {
-				txn.committer.setFatalTxnErr(err)
-				return 0, err
-			}
-			var lockUpgradeConflict *tikverr.ErrLockUpgradeConflict
-			if errors.As(err, &lockUpgradeConflict) {
-				txn.committer.setFatalTxnErr(err)
-				return 0, err
-			}
+			txn.recordSharedLockAbort(err)
 			return 0, err
 		}
 
@@ -1617,11 +1637,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
 
-	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
-	if err != nil {
+	if err := txn.getTxnStateErr(); err != nil {
 		return err
 	}
-	if err := txn.getTxnStateErr(); err != nil {
+	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
+	if err != nil {
 		return err
 	}
 
