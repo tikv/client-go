@@ -728,7 +728,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.ElementsMatch(t, [][]byte{primaryKey, upgradeKey}, rolledBack)
 	})
 
-	t.Run("LegacyAbortUpgradeFailureRemainsUndetermined", func(t *testing.T) {
+	t.Run("LegacyAbortUpgradeFailureLeavesTransactionUsable", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
 		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
@@ -750,26 +750,21 @@ func TestSharedLockUpgrade(t *testing.T) {
 		lockCtx.AllowSharedLockUpgrade = true
 		firstErr := txn.lockKeys(context.Background(), lockCtx, nil, upgradeKey)
 		require.Error(t, firstErr)
-		require.True(t, tikverr.IsErrorUndetermined(firstErr))
+		require.ErrorContains(t, firstErr, "tikv aborts txn: PessimisticLockNotFound during shared lock upgrade")
+		require.False(t, tikverr.IsErrorUndetermined(firstErr))
 		require.Len(t, *requests, 1)
 
-		requestCount := len(*requests)
 		laterErr := txn.LockKeys(
 			context.Background(),
 			kv.NewLockCtx(3, kv.LockNoWait, time.Now()),
 			[]byte("later-key"),
 		)
-		require.Error(t, laterErr)
-		require.True(t, tikverr.IsErrorUndetermined(laterErr))
-		require.Len(t, *requests, requestCount)
-
-		commitErr := txn.Commit(context.Background())
-		require.Error(t, commitErr)
-		require.True(t, tikverr.IsErrorUndetermined(commitErr))
-		require.Len(t, *requests, requestCount)
+		require.NoError(t, laterErr)
+		require.Len(t, *requests, 2)
+		require.NoError(t, txn.Rollback())
 	})
 
-	t.Run("EmptyKeyErrorUpgradeFailureRemainsUndetermined", func(t *testing.T) {
+	t.Run("EmptyKeyErrorUpgradeFailureLeavesTransactionUsable", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
 		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
@@ -789,23 +784,18 @@ func TestSharedLockUpgrade(t *testing.T) {
 		lockCtx.AllowSharedLockUpgrade = true
 		firstErr := txn.lockKeys(context.Background(), lockCtx, nil, upgradeKey)
 		require.Error(t, firstErr)
-		require.True(t, tikverr.IsErrorUndetermined(firstErr))
+		require.ErrorContains(t, firstErr, "unexpected KeyError")
+		require.False(t, tikverr.IsErrorUndetermined(firstErr))
 		require.Len(t, *requests, 1)
 
-		requestCount := len(*requests)
 		laterErr := txn.LockKeys(
 			context.Background(),
 			kv.NewLockCtx(3, kv.LockNoWait, time.Now()),
 			[]byte("later-key"),
 		)
-		require.Error(t, laterErr)
-		require.True(t, tikverr.IsErrorUndetermined(laterErr))
-		require.Len(t, *requests, requestCount)
-
-		commitErr := txn.Commit(context.Background())
-		require.Error(t, commitErr)
-		require.True(t, tikverr.IsErrorUndetermined(commitErr))
-		require.Len(t, *requests, requestCount)
+		require.NoError(t, laterErr)
+		require.Len(t, *requests, 2)
+		require.NoError(t, txn.Rollback())
 	})
 
 	t.Run("UndeterminedTakesPrecedenceOverFatalState", func(t *testing.T) {
@@ -844,7 +834,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.ErrorIs(t, txn.Rollback(), tikverr.ErrInvalidTxn)
 	})
 
-	t.Run("OutcomeUnknownUpgradeFailureIsTransactionFatal", func(t *testing.T) {
+	t.Run("MissingResponseBodyUpgradeFailureLeavesTransactionUsable", func(t *testing.T) {
 		primaryKey := []byte("primary-key")
 		upgradeKey := []byte("upgrade-key")
 		txn, requests := newRecorderTxn(t, func(callIndex int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
@@ -861,8 +851,8 @@ func TestSharedLockUpgrade(t *testing.T) {
 		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
 		lockCtx.AllowSharedLockUpgrade = true
 		err := txn.lockKeys(context.TODO(), lockCtx, nil, upgradeKey)
-		require.Error(t, err)
-		require.True(t, tikverr.IsErrorUndetermined(err))
+		require.ErrorIs(t, err, tikverr.ErrBodyMissing)
+		require.False(t, tikverr.IsErrorUndetermined(err))
 		require.Len(t, *requests, 1)
 		require.Equal(t, []string{string(upgradeKey)}, keysAsStrings((*requests)[0].keys))
 
@@ -872,12 +862,9 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.True(t, flags.HasLockedInShareMode())
 
 		err = txn.LockKeys(context.TODO(), kv.NewLockCtx(2, kv.LockNoWait, time.Now()), []byte("later-key"))
-		require.Error(t, err)
-		require.True(t, tikverr.IsErrorUndetermined(err))
-
-		err = txn.Commit(context.TODO())
-		require.Error(t, err)
-		require.True(t, tikverr.IsErrorUndetermined(err))
+		require.NoError(t, err)
+		require.Len(t, *requests, 2)
+		require.NoError(t, txn.Rollback())
 	})
 }
 

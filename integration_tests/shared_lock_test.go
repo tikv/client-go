@@ -15,6 +15,7 @@
 package tikv_test
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"testing"
@@ -24,9 +25,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
@@ -42,6 +45,38 @@ func TestSharedLock(t *testing.T) {
 type testSharedLockSuite struct {
 	suite.Suite
 	store tikv.StoreProbe
+}
+
+type dropSuccessfulUpgradeResponseClient struct {
+	tikv.Client
+	startTS uint64
+	key     []byte
+	dropped atomic.Bool
+}
+
+func (c *dropSuccessfulUpgradeResponseClient) SendRequest(
+	ctx context.Context,
+	addr string,
+	req *tikvrpc.Request,
+	timeout time.Duration,
+) (*tikvrpc.Response, error) {
+	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err != nil || resp == nil || req.Type != tikvrpc.CmdPessimisticLock {
+		return resp, err
+	}
+	lockReq := req.PessimisticLock()
+	if lockReq.GetStartVersion() != c.startTS || len(lockReq.Mutations) != 1 {
+		return resp, nil
+	}
+	mutation := lockReq.Mutations[0]
+	if mutation.Op != kvrpcpb.Op_PessimisticLock || !bytes.Equal(mutation.Key, c.key) {
+		return resp, nil
+	}
+	lockResp, ok := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
+	if !ok || lockResp.GetRegionError() != nil || len(lockResp.Errors) > 0 || !c.dropped.CompareAndSwap(false, true) {
+		return resp, nil
+	}
+	return &tikvrpc.Response{}, nil
 }
 
 func (s *testSharedLockSuite) SetupSuite() {
@@ -149,6 +184,56 @@ func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
 		s.True(afterRelease.After(beforeRelease), "txn3(exclusive lock) should block until txn1(shared lock) and txn2(shared lock) commit")
 		s.Nil(txn3.Rollback())
 	}
+}
+
+func (s *testSharedLockSuite) TestUpgradeAppliedWithMissingResponseCanCommit() {
+	txn := s.begin()
+	primaryKey := s.key("TestUpgradeAppliedWithMissingResponseCanCommit_primary")
+	upgradeKey := s.key("TestUpgradeAppliedWithMissingResponseCanCommit_upgrade")
+	blockerPrimaryKey := s.key("TestUpgradeAppliedWithMissingResponseCanCommit_blocker_primary")
+
+	s.NoError(txn.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), primaryKey))
+	sharedLockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+	sharedLockCtx.InShareMode = true
+	s.NoError(txn.LockKeys(context.Background(), sharedLockCtx, upgradeKey))
+
+	originalClient := s.store.GetTiKVClient()
+	droppingClient := &dropSuccessfulUpgradeResponseClient{
+		Client:  originalClient,
+		startTS: txn.StartTS(),
+		key:     upgradeKey,
+	}
+	s.store.SetTiKVClient(droppingClient)
+	upgradeLockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+	upgradeLockCtx.AllowSharedLockUpgrade = true
+	err := txn.LockKeys(context.Background(), upgradeLockCtx, upgradeKey)
+	s.store.SetTiKVClient(originalClient)
+	s.ErrorIs(err, tikverr.ErrBodyMissing)
+	s.False(tikverr.IsErrorUndetermined(err))
+	s.True(droppingClient.dropped.Load())
+
+	flags, err := txn.GetMemBuffer().GetFlags(upgradeKey)
+	s.NoError(err)
+	s.True(flags.HasLocked())
+	s.True(flags.HasLockedInShareMode())
+
+	blocker := s.begin()
+	s.NoError(blocker.LockKeys(context.Background(), kv.NewLockCtx(s.getTS(), 1000, time.Now()), blockerPrimaryKey))
+	blockedSharedLockCtx := kv.NewLockCtx(s.getTS(), kv.LockNoWait, time.Now())
+	blockedSharedLockCtx.InShareMode = true
+	err = blocker.LockKeys(context.Background(), blockedSharedLockCtx, upgradeKey)
+	s.ErrorIs(err, tikverr.ErrLockAcquireFailAndNoWaitSet)
+	s.NoError(blocker.Rollback())
+
+	value := []byte("committed-after-missing-upgrade-response")
+	s.NoError(txn.Set(upgradeKey, value))
+	s.NoError(txn.Commit(context.Background()))
+
+	reader := s.begin()
+	got, err := reader.Get(context.Background(), upgradeKey)
+	s.NoError(err)
+	s.Equal(value, got.Value)
+	s.NoError(reader.Rollback())
 }
 
 func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
