@@ -187,6 +187,10 @@ func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
 }
 
 func (s *testSharedLockSuite) TestUpgradeAppliedWithMissingResponseCanCommit() {
+	if !config.NextGen {
+		s.T().Skip("shared lock upgrade is only supported on next-gen")
+	}
+
 	txn := s.begin()
 	primaryKey := s.key("TestUpgradeAppliedWithMissingResponseCanCommit_primary")
 	upgradeKey := s.key("TestUpgradeAppliedWithMissingResponseCanCommit_upgrade")
