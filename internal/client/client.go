@@ -189,9 +189,11 @@ func WithCodec(codec apicodec.Codec) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	connPools map[string]*connPool
-	vers      map[string]uint64
-	option    *option
+	connPools              map[string]*connPool
+	reusableScanConnPools  map[string]*connPool
+	reusableScanBufferPool *boundedBufferPool
+	vers                   map[string]uint64
+	option                 *option
 
 	idleNotify uint32
 
@@ -209,8 +211,13 @@ var _ Client = &RPCClient{}
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		connPools: make(map[string]*connPool),
-		vers:      make(map[string]uint64),
+		connPools:             make(map[string]*connPool),
+		reusableScanConnPools: make(map[string]*connPool),
+		reusableScanBufferPool: newBoundedBufferPool(
+			reusableScanBufferPoolMaxRetainedBytes,
+			reusableScanBufferPoolCapacities[:]...,
+		),
+		vers: make(map[string]uint64),
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
@@ -270,6 +277,7 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 			c.option.dialTimeout,
 			c.connMonitor,
 			c.eventListener,
+			nil,
 			c.option.gRPCDialOptions)
 
 		if err != nil {
@@ -281,12 +289,72 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 	return pool, nil
 }
 
+func (c *RPCClient) getReusableScanConnPool(addr string) (*connPool, error) {
+	c.RLock()
+	if c.isClosed {
+		c.RUnlock()
+		return nil, errors.Errorf("rpcClient is closed")
+	}
+	pool, ok := c.reusableScanConnPools[addr]
+	c.RUnlock()
+	if ok {
+		return pool, nil
+	}
+	return c.createReusableScanConnPool(addr)
+}
+
+func (c *RPCClient) createReusableScanConnPool(addr string) (*connPool, error) {
+	c.Lock()
+	defer c.Unlock()
+	pool, ok := c.reusableScanConnPools[addr]
+	if ok {
+		return pool, nil
+	}
+	if c.isClosed {
+		return nil, errors.Errorf("rpcClient is closed")
+	}
+
+	ver := c.vers[addr] + 1
+	pool, err := newConnPool(
+		1,
+		addr,
+		ver,
+		c.option.security,
+		&c.idleNotify,
+		false,
+		c.option.dialTimeout,
+		c.connMonitor,
+		c.eventListener,
+		c.reusableScanBufferPool,
+		c.option.gRPCDialOptions,
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.reusableScanConnPools[addr] = pool
+	c.vers[addr] = ver
+	return pool, nil
+}
+
+func (c *RPCClient) getConnPoolForRequest(addr string, req *tikvrpc.Request) (*connPool, bool, error) {
+	if req.ReusableScanResponse != nil {
+		pool, err := c.getReusableScanConnPool(addr)
+		return pool, false, err
+	}
+	poolSupportsBatch := req.StoreTp == tikvrpc.TiKV
+	pool, err := c.getConnPool(addr, poolSupportsBatch)
+	return pool, poolSupportsBatch, err
+}
+
 func (c *RPCClient) closeConns() {
 	c.Lock()
 	if !c.isClosed {
 		c.isClosed = true
 		// close all connections
 		for _, pool := range c.connPools {
+			pool.Close()
+		}
+		for _, pool := range c.reusableScanConnPools {
 			pool.Close()
 		}
 	}
@@ -330,8 +398,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
 	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
-	enableBatch := req.StoreTp == tikvrpc.TiKV
-	connPool, err := c.getConnPool(addr, enableBatch)
+	connPool, enableBatch, err := c.getConnPoolForRequest(addr, req)
 	if err != nil {
 		return nil, err
 	}
@@ -403,6 +470,9 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if req.ReusableScanResponse != nil {
+		return wrapErrConn(tikvrpc.CallReusableScanRPC(ctx1, clientConn, req))
+	}
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
@@ -564,19 +634,28 @@ func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 		c.Unlock()
 		return nil
 	}
-	pool, ok := c.connPools[addr]
-	if ok {
+	var poolsToClose []*connPool
+	if pool, ok := c.connPools[addr]; ok {
 		if pool.ver <= ver {
 			delete(c.connPools, addr)
-			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
+			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.String("connection-kind", "default"), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
+			poolsToClose = append(poolsToClose, pool)
 		} else {
-			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
-			pool = nil
+			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.String("connection-kind", "default"), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
+		}
+	}
+	if pool, ok := c.reusableScanConnPools[addr]; ok {
+		if pool.ver <= ver {
+			delete(c.reusableScanConnPools, addr)
+			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.String("connection-kind", "reusable-scan"), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
+			poolsToClose = append(poolsToClose, pool)
+		} else {
+			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.String("connection-kind", "reusable-scan"), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
 		}
 	}
 	c.Unlock()
 
-	if pool != nil {
+	for _, pool := range poolsToClose {
 		pool.Close()
 	}
 	return nil

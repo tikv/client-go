@@ -195,6 +195,61 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, conn4)
 }
 
+func TestReusableScanUsesIsolatedConnPool(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+		conf.TiKVClient.GrpcConnectionCount = 2
+	})()
+
+	client := NewRPCClient()
+	defer client.Close()
+	addr := "127.0.0.1:6379"
+
+	defaultReq := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
+	defaultPool, enableBatch, err := client.getConnPoolForRequest(addr, defaultReq)
+	require.NoError(t, err)
+	require.True(t, enableBatch)
+	require.Len(t, defaultPool.conns, 2)
+
+	scanReq := tikvrpc.NewRequest(tikvrpc.CmdScan, &kvrpcpb.ScanRequest{})
+	scanReq.ReusableScanResponse = tikvrpc.NewReusableScanResponse(16 << 20)
+	scanPool, enableBatch, err := client.getConnPoolForRequest(addr, scanReq)
+	require.NoError(t, err)
+	require.False(t, enableBatch)
+	require.NotSame(t, defaultPool, scanPool)
+	require.Len(t, scanPool.conns, 1)
+	require.Same(t, defaultPool, client.connPools[addr])
+	require.Same(t, scanPool, client.reusableScanConnPools[addr])
+	require.Nil(t, defaultPool.bufferPool)
+	require.Same(t, client.reusableScanBufferPool, scanPool.bufferPool)
+}
+
+func TestCloseAddrVerHandlesReusableScanConnPool(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+		conf.TiKVClient.GrpcConnectionCount = 2
+	})()
+
+	client := NewRPCClient()
+	defer client.Close()
+	addr := "127.0.0.1:6379"
+
+	defaultReq := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
+	defaultPool, _, err := client.getConnPoolForRequest(addr, defaultReq)
+	require.NoError(t, err)
+	scanReq := tikvrpc.NewRequest(tikvrpc.CmdScan, &kvrpcpb.ScanRequest{})
+	scanReq.ReusableScanResponse = tikvrpc.NewReusableScanResponse(16 << 20)
+	scanPool, _, err := client.getConnPoolForRequest(addr, scanReq)
+	require.NoError(t, err)
+	require.Less(t, defaultPool.ver, scanPool.ver)
+
+	require.NoError(t, client.CloseAddrVer(addr, defaultPool.ver))
+	require.NotContains(t, client.connPools, addr)
+	require.Same(t, scanPool, client.reusableScanConnPools[addr])
+	require.NoError(t, client.CloseAddrVer(addr, scanPool.ver))
+	require.NotContains(t, client.reusableScanConnPools, addr)
+}
+
 func TestGetConnAfterClose(t *testing.T) {
 	client := NewRPCClient()
 	defer client.Close()
@@ -202,10 +257,14 @@ func TestGetConnAfterClose(t *testing.T) {
 	addr := "127.0.0.1:6379"
 	connPool, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
+	scanReq := tikvrpc.NewRequest(tikvrpc.CmdScan, &kvrpcpb.ScanRequest{})
+	scanReq.ReusableScanResponse = tikvrpc.NewReusableScanResponse(16 << 20)
+	scanPool, _, err := client.getConnPoolForRequest(addr, scanReq)
+	assert.Nil(t, err)
 	assert.Nil(t, client.CloseAddr(addr))
 	conn := connPool.Get()
-	state := conn.GetState()
-	assert.True(t, state == connectivity.Shutdown)
+	assert.Equal(t, connectivity.Shutdown, conn.GetState())
+	assert.Equal(t, connectivity.Shutdown, scanPool.Get().GetState())
 }
 
 func TestCancelTimeoutRetErr(t *testing.T) {
