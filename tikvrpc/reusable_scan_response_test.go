@@ -23,23 +23,6 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
-type reusableScanStatsCollector struct {
-	stats ReusableScanStats
-}
-
-func (c *reusableScanStatsCollector) ObserveReusableScanStats(delta ReusableScanStats) {
-	c.stats.ScannerNextCalls += delta.ScannerNextCalls
-	c.stats.ResponseCount += delta.ResponseCount
-	c.stats.ResponseBytes += delta.ResponseBytes
-	c.stats.DecodeBufferAllocatedBytes += delta.DecodeBufferAllocatedBytes
-	c.stats.PairSliceAllocatedBytes += delta.PairSliceAllocatedBytes
-	c.stats.PairObjectAllocatedBytes += delta.PairObjectAllocatedBytes
-	c.stats.PairKeyValueAllocatedBytes += delta.PairKeyValueAllocatedBytes
-	c.stats.PairCount += delta.PairCount
-	c.stats.KeyBytes += delta.KeyBytes
-	c.stats.ValueBytes += delta.ValueBytes
-}
-
 func TestReusableScanResponseReusesDecodedBuffers(t *testing.T) {
 	encoded := marshalScanResponse(t, 256, 4<<10)
 	input := mem.BufferSlice{mem.SliceBuffer(encoded)}
@@ -106,37 +89,6 @@ func TestReusableScanResponseDropsOversizedRetention(t *testing.T) {
 	small := marshalScanResponse(t, 1, 32)
 	require.NoError(t, response.UnmarshalBufferSlice(mem.BufferSlice{mem.SliceBuffer(small)}))
 	require.LessOrEqual(t, response.RetainedMemory(), int64(retainedLimit))
-}
-
-func TestReusableScanResponseReportsStats(t *testing.T) {
-	collector := &reusableScanStatsCollector{}
-	encoded := marshalScanResponse(t, 4, 128)
-	input := mem.BufferSlice{mem.SliceBuffer(encoded)}
-	response := NewReusableScanResponseWithObserver(16<<20, collector)
-
-	response.ObserveScannerNext()
-	require.NoError(t, response.UnmarshalBufferSlice(input))
-	firstAllocationBytes := collector.stats.DecodeBufferAllocatedBytes +
-		collector.stats.PairSliceAllocatedBytes +
-		collector.stats.PairObjectAllocatedBytes +
-		collector.stats.PairKeyValueAllocatedBytes
-	require.Positive(t, firstAllocationBytes)
-	require.Equal(t, uint64(1), collector.stats.ScannerNextCalls)
-	require.Equal(t, uint64(1), collector.stats.ResponseCount)
-	require.Equal(t, uint64(len(encoded)), collector.stats.ResponseBytes)
-	require.Equal(t, uint64(4), collector.stats.PairCount)
-	require.Equal(t, uint64(8), collector.stats.KeyBytes)
-	require.Equal(t, uint64(4*128), collector.stats.ValueBytes)
-
-	require.NoError(t, response.UnmarshalBufferSlice(input))
-	require.Equal(t, uint64(2), collector.stats.ResponseCount)
-	require.Equal(t, uint64(2*len(encoded)), collector.stats.ResponseBytes)
-	require.Equal(t, uint64(8), collector.stats.PairCount)
-	require.Equal(t, firstAllocationBytes,
-		collector.stats.DecodeBufferAllocatedBytes+
-			collector.stats.PairSliceAllocatedBytes+
-			collector.stats.PairObjectAllocatedBytes+
-			collector.stats.PairKeyValueAllocatedBytes)
 }
 
 func marshalScanResponse(t *testing.T, pairCount, valueSize int) []byte {

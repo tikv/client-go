@@ -86,10 +86,7 @@ func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize 
 		nextEndKey:   endKey,
 	}
 	if snapshot.scanResponseRetainedSize > 0 {
-		scanner.reusableResp = tikvrpc.NewReusableScanResponseWithObserver(
-			snapshot.scanResponseRetainedSize,
-			snapshot.scanResponseStatsObserver,
-		)
+		scanner.reusableResp = tikvrpc.NewReusableScanResponse(snapshot.scanResponseRetainedSize)
 	}
 	err := scanner.Next()
 	if tikverr.IsErrNotFound(err) {
@@ -123,9 +120,6 @@ const scannerNextMaxBackoff = 20000
 
 // Next return next element.
 func (s *Scanner) Next() error {
-	if s.reusableResp != nil {
-		s.reusableResp.ObserveScannerNext()
-	}
 	bo := retry.NewBackofferWithVars(context.WithValue(context.Background(), retry.TxnStartKey, s.snapshot.version), scannerNextMaxBackoff, s.snapshot.vars)
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")

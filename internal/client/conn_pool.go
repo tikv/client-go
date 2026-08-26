@@ -53,9 +53,6 @@ type connPool struct {
 	done chan struct{}
 
 	monitor *connMonitor
-	// bufferPool is non-nil only for connection pools with an explicitly
-	// isolated gRPC transport buffer pool.
-	bufferPool mem.BufferPool
 
 	metrics atomic.Pointer[storeMetrics]
 }
@@ -70,7 +67,6 @@ func newConnPool(maxSize uint, addr string, ver uint64, security config.Security
 		done:          make(chan struct{}),
 		dialTimeout:   dialTimeout,
 		monitor:       m,
-		bufferPool:    bufferPool,
 	}
 	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, bufferPool, opts...); err != nil {
 		return nil, err

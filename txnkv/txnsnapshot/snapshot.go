@@ -130,9 +130,7 @@ type KVSnapshot struct {
 	// scanResponseRetainedSize enables reusable response decoding for sequential
 	// scans and bounds the capacity retained by one scanner.
 	scanResponseRetainedSize int64
-	// scanResponseStatsObserver receives counters from reusable sequential scans.
-	scanResponseStatsObserver tikvrpc.ReusableScanStatsObserver
-	readTimeout               time.Duration
+	readTimeout              time.Duration
 
 	// Cache the result of Get and BatchGet.
 	// The invariance is that calling Get or BatchGet multiple times using the same start ts,
@@ -994,12 +992,6 @@ func (s *KVSnapshot) SetScanBatchSize(batchSize int) {
 // response reuse.
 func (s *KVSnapshot) SetScanResponseRetainedSize(maxBytes int64) {
 	s.scanResponseRetainedSize = maxBytes
-}
-
-// SetScanResponseStatsObserver attaches an observer to reusable sequential
-// scans created by this snapshot.
-func (s *KVSnapshot) SetScanResponseStatsObserver(observer tikvrpc.ReusableScanStatsObserver) {
-	s.scanResponseStatsObserver = observer
 }
 
 // SetReplicaRead sets up the replica read type.

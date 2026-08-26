@@ -31,27 +31,6 @@ import (
 
 const scanResponsePairSize = int64(unsafe.Sizeof(kvrpcpb.KvPair{}))
 
-// ReusableScanStats contains per-scanner data-flow and allocation-request
-// counters. Allocation counters report the sizes requested by this reusable
-// decoder; they do not include Go allocator size-class rounding.
-type ReusableScanStats struct {
-	ScannerNextCalls           uint64
-	ResponseCount              uint64
-	ResponseBytes              uint64
-	DecodeBufferAllocatedBytes uint64
-	PairSliceAllocatedBytes    uint64
-	PairObjectAllocatedBytes   uint64
-	PairKeyValueAllocatedBytes uint64
-	PairCount                  uint64
-	KeyBytes                   uint64
-	ValueBytes                 uint64
-}
-
-// ReusableScanStatsObserver receives query-owned scan counter deltas.
-type ReusableScanStatsObserver interface {
-	ObserveReusableScanStats(ReusableScanStats)
-}
-
 // ReusableScanResponse owns the buffers used to decode sequential scan RPC
 // responses. The result returned by Response remains valid only until the next
 // call to UnmarshalBufferSlice.
@@ -61,29 +40,16 @@ type ReusableScanResponse struct {
 	pairs            []*kvrpcpb.KvPair
 	activePairs      int
 	maxRetainedBytes int64
-	statsObserver    ReusableScanStatsObserver
 }
 
 // NewReusableScanResponse creates a response that drops retained capacity when
 // it grows beyond maxRetainedBytes. One oversized response can transiently
 // exceed the limit, but its buffers are discarded before decoding the next one.
 func NewReusableScanResponse(maxRetainedBytes int64) *ReusableScanResponse {
-	return NewReusableScanResponseWithObserver(maxRetainedBytes, nil)
-}
-
-// NewReusableScanResponseWithObserver creates reusable response storage and
-// reports decoder counters to observer when it is non-nil.
-func NewReusableScanResponseWithObserver(
-	maxRetainedBytes int64,
-	observer ReusableScanStatsObserver,
-) *ReusableScanResponse {
 	if maxRetainedBytes < 0 {
 		maxRetainedBytes = 0
 	}
-	return &ReusableScanResponse{
-		maxRetainedBytes: maxRetainedBytes,
-		statsObserver:    observer,
-	}
+	return &ReusableScanResponse{maxRetainedBytes: maxRetainedBytes}
 }
 
 // Response returns the most recently decoded scan response.
@@ -106,22 +72,12 @@ func (r *ReusableScanResponse) RetainedMemory() int64 {
 // UnmarshalBufferSlice copies a gRPC response into reusable storage and
 // decodes its KvPair objects without allocating after capacities stabilize.
 func (r *ReusableScanResponse) UnmarshalBufferSlice(data mem.BufferSlice) error {
-	var stats *ReusableScanStats
-	if r.statsObserver != nil {
-		stats = &ReusableScanStats{
-			ResponseCount: 1,
-			ResponseBytes: uint64(data.Len()),
-		}
-		defer func() {
-			r.observeStats(*stats)
-		}()
-	}
-	r.prepareForDecode(data.Len(), stats)
+	r.prepareForDecode(data.Len())
 	data.CopyTo(r.decodeBuffer)
-	return r.unmarshal(r.decodeBuffer, stats)
+	return r.unmarshal(r.decodeBuffer)
 }
 
-func (r *ReusableScanResponse) prepareForDecode(size int, stats *ReusableScanStats) {
+func (r *ReusableScanResponse) prepareForDecode(size int) {
 	if r.RetainedMemory() > r.maxRetainedBytes {
 		clear(r.pairs)
 		r.pairs = nil
@@ -134,24 +90,14 @@ func (r *ReusableScanResponse) prepareForDecode(size int, stats *ReusableScanSta
 	r.activePairs = 0
 	if cap(r.decodeBuffer) < size {
 		r.decodeBuffer = make([]byte, size)
-		if stats != nil {
-			stats.DecodeBufferAllocatedBytes += uint64(size)
-		}
 	} else {
 		r.decodeBuffer = r.decodeBuffer[:size]
 	}
 }
 
-func (r *ReusableScanResponse) nextPair(stats *ReusableScanStats) *kvrpcpb.KvPair {
+func (r *ReusableScanResponse) nextPair() *kvrpcpb.KvPair {
 	if r.activePairs == len(r.pairs) {
-		oldCapacity := cap(r.pairs)
 		r.pairs = append(r.pairs, &kvrpcpb.KvPair{})
-		if stats != nil && cap(r.pairs) != oldCapacity {
-			stats.PairSliceAllocatedBytes += uint64(cap(r.pairs)) * uint64(unsafe.Sizeof((*kvrpcpb.KvPair)(nil)))
-		}
-		if stats != nil {
-			stats.PairObjectAllocatedBytes += uint64(scanResponsePairSize)
-		}
 	}
 	pair := r.pairs[r.activePairs]
 	r.activePairs++
@@ -162,7 +108,7 @@ func (r *ReusableScanResponse) nextPair(stats *ReusableScanStats) *kvrpcpb.KvPai
 	return pair
 }
 
-func (r *ReusableScanResponse) unmarshal(data []byte, stats *ReusableScanStats) error {
+func (r *ReusableScanResponse) unmarshal(data []byte) error {
 	for len(data) > 0 {
 		fieldNumber, wireType, tagBytes := protowire.ConsumeTag(data)
 		if tagBytes < 0 {
@@ -187,22 +133,9 @@ func (r *ReusableScanResponse) unmarshal(data []byte, stats *ReusableScanStats) 
 			if err != nil {
 				return err
 			}
-			pair := r.nextPair(stats)
-			oldKeyCapacity := cap(pair.Key)
-			oldValueCapacity := cap(pair.Value)
+			pair := r.nextPair()
 			if err := pair.Unmarshal(message); err != nil {
 				return err
-			}
-			if stats != nil {
-				if cap(pair.Key) != oldKeyCapacity {
-					stats.PairKeyValueAllocatedBytes += uint64(cap(pair.Key))
-				}
-				if cap(pair.Value) != oldValueCapacity {
-					stats.PairKeyValueAllocatedBytes += uint64(cap(pair.Value))
-				}
-				stats.PairCount++
-				stats.KeyBytes += uint64(len(pair.Key))
-				stats.ValueBytes += uint64(len(pair.Value))
 			}
 			data = data[consumed:]
 		case 3:
@@ -226,21 +159,6 @@ func (r *ReusableScanResponse) unmarshal(data []byte, stats *ReusableScanStats) 
 	}
 	r.response.Pairs = r.pairs[:r.activePairs]
 	return nil
-}
-
-// ObserveScannerNext records one Scanner.Next call. This is separate from RPC
-// count because cached scan responses serve many iterator steps.
-func (r *ReusableScanResponse) ObserveScannerNext() {
-	if r.statsObserver == nil {
-		return
-	}
-	r.observeStats(ReusableScanStats{ScannerNextCalls: 1})
-}
-
-func (r *ReusableScanResponse) observeStats(stats ReusableScanStats) {
-	if r.statsObserver != nil {
-		r.statsObserver.ObserveReusableScanStats(stats)
-	}
 }
 
 func consumeScanResponseMessage(fieldNumber protowire.Number, wireType protowire.Type, data []byte) ([]byte, int, error) {

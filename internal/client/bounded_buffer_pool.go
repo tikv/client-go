@@ -82,9 +82,7 @@ func (p *boundedBufferPool) Get(length int) *[]byte {
 	p.retainedBytes -= bucket.capacity
 	p.mu.Unlock()
 
-	backing := (*buffer)[:cap(*buffer)]
-	clear(backing)
-	*buffer = backing[:length]
+	*buffer = (*buffer)[:length]
 	return buffer
 }
 

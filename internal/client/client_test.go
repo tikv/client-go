@@ -220,8 +220,6 @@ func TestReusableScanUsesIsolatedConnPool(t *testing.T) {
 	require.Len(t, scanPool.conns, 1)
 	require.Same(t, defaultPool, client.connPools[addr])
 	require.Same(t, scanPool, client.reusableScanConnPools[addr])
-	require.Nil(t, defaultPool.bufferPool)
-	require.Same(t, client.reusableScanBufferPool, scanPool.bufferPool)
 }
 
 func TestCloseAddrVerHandlesReusableScanConnPool(t *testing.T) {

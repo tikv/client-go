@@ -21,25 +21,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBoundedBufferPoolReusesAndClears(t *testing.T) {
+func TestBoundedBufferPoolReusesCapacity(t *testing.T) {
 	pool := newBoundedBufferPool(1<<20, 256, 4<<10, 16<<10)
 	first := pool.Get(8 << 10)
 	require.Len(t, *first, 8<<10)
 	require.Equal(t, 16<<10, cap(*first))
-	backing := (*first)[:cap(*first)]
-	for i := range backing {
-		backing[i] = 0xff
-	}
-	firstByte := &backing[0]
+	firstByte := &(*first)[0]
 
 	pool.Put(first)
 	require.Equal(t, 16<<10, pool.retainedMemory())
 	second := pool.Get(12 << 10)
 	require.Same(t, firstByte, &(*second)[0])
 	require.Equal(t, 16<<10, cap(*second))
-	for _, value := range (*second)[:cap(*second)] {
-		require.Zero(t, value)
-	}
 	require.Zero(t, pool.retainedMemory())
 }
 
