@@ -1014,6 +1014,18 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		errInfo.CurrentRegions = decodedRegions
 	}
 
+	if errInfo := regionError.BucketVersionNotMatch; errInfo != nil {
+		// The region cache compares bucket boundaries with decoded user keys.
+		// BucketVersionNotMatch.Keys still uses API v2's mem-comparable,
+		// keyspace-prefixed region-key format, so caching it as-is would mix key
+		// representations and produce incorrect cop task boundaries. Decoding also
+		// keeps malformed boundaries out of the cache.
+		errInfo.Keys, err = c.DecodeBucketKeys(errInfo.Keys)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return regionError, nil
 }
 

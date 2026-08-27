@@ -824,12 +824,7 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				re.Len(resp.BatchResponses, 1)
 				bucketErr := resp.BatchResponses[0].RegionError.BucketVersionNotMatch
 				re.Equal(uint64(2), bucketErr.Version)
-				// decodeRegionError does not handle BucketVersionNotMatch: its bucket
-				// keys stay keyspace-encoded.
-				re.Equal([][]byte{
-					suite.codec.EncodeRegionKey([]byte("bucket-a")),
-					suite.codec.EncodeRegionKey([]byte("bucket-b")),
-				}, bucketErr.Keys)
+				re.Equal([][]byte{[]byte("bucket-a"), []byte("bucket-b")}, bucketErr.Keys)
 			},
 		},
 		{
@@ -1016,14 +1011,9 @@ func (suite *testCodecV2Suite) TestDecodeResponseMalformedBucketKeys() {
 	}
 
 	decoded, err := suite.codec.DecodeResponse(req, resp)
-	re.NoError(err)
-	bucketErr := decoded.Resp.(*coprocessor.Response).BatchResponses[0].RegionError.BucketVersionNotMatch
-	// decodeRegionError does not handle BucketVersionNotMatch, so malformed
-	// bucket keys pass through without validation.
-	re.Equal([][]byte{
-		suite.codec.EncodeRegionKey([]byte("bucket-a")),
-		{0x01},
-	}, bucketErr.Keys)
+	re.Error(err)
+	re.True(IsDecodeError(err))
+	re.Nil(decoded)
 }
 
 func (suite *testCodecV2Suite) TestDecodeMvccInfoPreservesEmptyLockKeys() {
