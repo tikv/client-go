@@ -143,8 +143,8 @@ func (e *ErrLockUpgradeConflict) Error() string {
 	return fmt.Sprintf("lock upgrade conflict { %s }", e.String())
 }
 
-// ErrSharedLockLost wraps *kvrpcpb.SharedLockLost to report that a transaction
-// deterministically lost its shared-lock ownership during an upgrade.
+// ErrSharedLockLost wraps *kvrpcpb.SharedLockLost to report a transaction-fatal
+// indication that shared-lock ownership may have been lost during an upgrade.
 type ErrSharedLockLost struct {
 	*kvrpcpb.SharedLockLost
 }

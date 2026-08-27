@@ -1021,7 +1021,19 @@ func TestSharedLockUpgrade(t *testing.T) {
 		err = txn.LockKeys(context.TODO(), kv.NewLockCtx(2, kv.LockNoWait, time.Now()), []byte("later-key"))
 		require.NoError(t, err)
 		require.Len(t, *requests, 2)
+		require.Equal(t, tikvrpc.CmdPessimisticLock, (*requests)[1].cmd)
+		require.Equal(t, []string{"later-key"}, keysAsStrings((*requests)[1].keys))
+		require.True(t, txn.Valid())
 		require.NoError(t, txn.Rollback())
+		require.False(t, txn.Valid())
+
+		rolledBack := make([][]byte, 0, 3)
+		for _, request := range *requests {
+			if request.cmd == tikvrpc.CmdPessimisticRollback {
+				rolledBack = append(rolledBack, request.keys...)
+			}
+		}
+		require.ElementsMatch(t, [][]byte{primaryKey, upgradeKey, []byte("later-key")}, rolledBack)
 	})
 }
 

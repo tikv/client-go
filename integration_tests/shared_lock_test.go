@@ -47,33 +47,43 @@ type testSharedLockSuite struct {
 	store tikv.StoreProbe
 }
 
-type dropSuccessfulUpgradeResponseClient struct {
+type dropUpgradeResponseClient struct {
 	tikv.Client
-	startTS uint64
-	key     []byte
-	dropped atomic.Bool
+	startTS      uint64
+	key          []byte
+	requestSent  chan struct{}
+	sentSignaled atomic.Bool
+	shouldDrop   func(*kvrpcpb.PessimisticLockResponse) bool
+	dropped      atomic.Bool
 }
 
-func (c *dropSuccessfulUpgradeResponseClient) SendRequest(
+func (c *dropUpgradeResponseClient) SendRequest(
 	ctx context.Context,
 	addr string,
 	req *tikvrpc.Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
-	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
-	if err != nil || resp == nil || req.Type != tikvrpc.CmdPessimisticLock {
-		return resp, err
+	if req.Type != tikvrpc.CmdPessimisticLock {
+		return c.Client.SendRequest(ctx, addr, req, timeout)
 	}
 	lockReq := req.PessimisticLock()
 	if lockReq.GetStartVersion() != c.startTS || len(lockReq.Mutations) != 1 {
-		return resp, nil
+		return c.Client.SendRequest(ctx, addr, req, timeout)
 	}
 	mutation := lockReq.Mutations[0]
 	if mutation.Op != kvrpcpb.Op_PessimisticLock || !bytes.Equal(mutation.Key, c.key) {
-		return resp, nil
+		return c.Client.SendRequest(ctx, addr, req, timeout)
+	}
+	if c.sentSignaled.CompareAndSwap(false, true) {
+		close(c.requestSent)
+	}
+
+	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err != nil || resp == nil {
+		return resp, err
 	}
 	lockResp, ok := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
-	if !ok || lockResp.GetRegionError() != nil || len(lockResp.Errors) > 0 || !c.dropped.CompareAndSwap(false, true) {
+	if !ok || !c.shouldDrop(lockResp) || !c.dropped.CompareAndSwap(false, true) {
 		return resp, nil
 	}
 	return &tikvrpc.Response{}, nil
@@ -132,6 +142,52 @@ func (s *testSharedLockSuite) waitLocks(key []byte, maxTS uint64, expected int, 
 		return len(locks) == expected
 	}, 5*time.Second, 100*time.Millisecond, msgAndArgs...)
 	return locks
+}
+
+func (s *testSharedLockSuite) waitForLockWait(startTS uint64, key []byte) {
+	s.Eventually(func() bool {
+		for _, store := range s.store.GetRegionCache().GetStoresByType(tikvrpc.TiKV) {
+			resp, err := s.store.GetTiKVClient().SendRequest(
+				context.Background(),
+				store.GetAddr(),
+				tikvrpc.NewRequest(tikvrpc.CmdLockWaitInfo, &kvrpcpb.GetLockWaitInfoRequest{}),
+				time.Second,
+			)
+			if err != nil || resp == nil || resp.Resp == nil {
+				continue
+			}
+			waitResp, ok := resp.Resp.(*kvrpcpb.GetLockWaitInfoResponse)
+			if !ok {
+				continue
+			}
+			for _, entry := range waitResp.GetEntries() {
+				if entry.GetTxn() == startTS && bytes.Equal(entry.GetKey(), key) {
+					return true
+				}
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond, "pending shared lock upgrade did not reach the lock wait queue")
+}
+
+func (s *testSharedLockSuite) rollbackPessimisticKey(startTS, forUpdateTS uint64, key []byte) {
+	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
+	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
+		StartVersion: startTS,
+		ForUpdateTs:  forUpdateTS,
+		Keys:         [][]byte{key},
+	})
+	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
+	s.Require().NoError(err)
+	resp, err := s.store.SendReq(bo, req, loc.Region, tikv.ReadTimeoutShort)
+	s.Require().NoError(err)
+	regionErr, err := resp.GetRegionError()
+	s.Require().NoError(err)
+	s.Require().Nil(regionErr)
+	s.Require().NotNil(resp.Resp)
+	rollbackResp, ok := resp.Resp.(*kvrpcpb.PessimisticRollbackResponse)
+	s.Require().True(ok)
+	s.Empty(rollbackResp.GetErrors())
 }
 
 func (s *testSharedLockSuite) TestSharedLockBlockExclusiveLock() {
@@ -202,10 +258,14 @@ func (s *testSharedLockSuite) TestUpgradeAppliedWithMissingResponseCanCommit() {
 	s.NoError(txn.LockKeys(context.Background(), sharedLockCtx, upgradeKey))
 
 	originalClient := s.store.GetTiKVClient()
-	droppingClient := &dropSuccessfulUpgradeResponseClient{
-		Client:  originalClient,
-		startTS: txn.StartTS(),
-		key:     upgradeKey,
+	droppingClient := &dropUpgradeResponseClient{
+		Client:      originalClient,
+		startTS:     txn.StartTS(),
+		key:         upgradeKey,
+		requestSent: make(chan struct{}),
+		shouldDrop: func(resp *kvrpcpb.PessimisticLockResponse) bool {
+			return resp.GetRegionError() == nil && len(resp.Errors) == 0
+		},
 	}
 	s.store.SetTiKVClient(droppingClient)
 	upgradeLockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
@@ -238,6 +298,162 @@ func (s *testSharedLockSuite) TestUpgradeAppliedWithMissingResponseCanCommit() {
 	s.NoError(err)
 	s.Equal(value, got.Value)
 	s.NoError(reader.Rollback())
+}
+
+func (s *testSharedLockSuite) TestSharedLockLostWithMissingResponseReconcilesDurableState() {
+	if !config.NextGen {
+		s.T().Skip("shared lock upgrade is only supported on next-gen")
+	}
+
+	testCases := []struct {
+		name string
+	}{
+		{name: "DifferentSharedHolderRemains"},
+		{name: "WrapperDeleted"},
+		{name: "ExclusiveReplacement"},
+	}
+
+	for _, testCase := range testCases {
+		s.Run(testCase.name, func() {
+			keyPrefix := "TestSharedLockLostWithMissingResponseReconcilesDurableState_" + testCase.name
+			upgradeKey := s.key(keyPrefix + "_upgrade")
+			upgraderPrimaryKey := s.key(keyPrefix + "_upgrader_primary")
+			holderPrimaryKey := s.key(keyPrefix + "_holder_primary")
+
+			upgrader := s.begin()
+			holder := s.begin()
+			defer func() {
+				if upgrader.Valid() {
+					s.NoError(upgrader.Rollback())
+				}
+				if holder.Valid() {
+					s.NoError(holder.Rollback())
+				}
+			}()
+
+			s.NoError(upgrader.LockKeys(
+				context.Background(),
+				kv.NewLockCtx(s.getTS(), 1000, time.Now()),
+				upgraderPrimaryKey,
+			))
+			upgraderSharedLockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+			upgraderSharedLockCtx.InShareMode = true
+			s.NoError(upgrader.LockKeys(context.Background(), upgraderSharedLockCtx, upgradeKey))
+
+			s.NoError(holder.LockKeys(
+				context.Background(),
+				kv.NewLockCtx(s.getTS(), 1000, time.Now()),
+				holderPrimaryKey,
+			))
+			holderSharedLockCtx := kv.NewLockCtx(s.getTS(), 1000, time.Now())
+			holderSharedLockCtx.InShareMode = true
+			s.NoError(holder.LockKeys(context.Background(), holderSharedLockCtx, upgradeKey))
+
+			upgradeForUpdateTS := s.getTS()
+			primeUpgradeLockCtx := kv.NewLockCtx(upgradeForUpdateTS, kv.LockNoWait, time.Now())
+			primeUpgradeLockCtx.AllowSharedLockUpgrade = true
+			primeErr := upgrader.LockKeys(context.Background(), primeUpgradeLockCtx, upgradeKey)
+			s.Error(primeErr)
+			s.True(tikverr.IsErrWriteConflict(primeErr))
+			s.False(tikverr.IsErrorUndetermined(primeErr))
+
+			originalClient := s.store.GetTiKVClient()
+			droppingClient := &dropUpgradeResponseClient{
+				Client:      originalClient,
+				startTS:     upgrader.StartTS(),
+				key:         upgradeKey,
+				requestSent: make(chan struct{}),
+				shouldDrop: func(resp *kvrpcpb.PessimisticLockResponse) bool {
+					if resp.GetRegionError() != nil || len(resp.Errors) != 1 {
+						return false
+					}
+					sharedLockLost := resp.Errors[0].GetSharedLockLost()
+					return sharedLockLost != nil &&
+						sharedLockLost.GetStartTs() == upgrader.StartTS() &&
+						bytes.Equal(sharedLockLost.GetKey(), upgradeKey)
+				},
+			}
+			s.store.SetTiKVClient(droppingClient)
+			defer s.store.SetTiKVClient(originalClient)
+
+			upgradeResult := make(chan error, 1)
+			go func() {
+				upgradeLockCtx := kv.NewLockCtx(upgradeForUpdateTS, 30_000, time.Now())
+				upgradeLockCtx.AllowSharedLockUpgrade = true
+				upgradeResult <- upgrader.LockKeys(context.Background(), upgradeLockCtx, upgradeKey)
+			}()
+
+			select {
+			case <-droppingClient.requestSent:
+			case <-time.After(5 * time.Second):
+				s.FailNow("shared lock upgrade request was not sent")
+			}
+			s.waitForLockWait(upgrader.StartTS(), upgradeKey)
+
+			s.rollbackPessimisticKey(upgrader.StartTS(), s.getTS(), upgradeKey)
+
+			var upgradeErr error
+			select {
+			case upgradeErr = <-upgradeResult:
+			case <-time.After(5 * time.Second):
+				s.FailNow("shared lock upgrade did not finish after holder rollback")
+			}
+			s.store.SetTiKVClient(originalClient)
+			s.ErrorIs(upgradeErr, tikverr.ErrBodyMissing)
+			s.False(tikverr.IsErrorUndetermined(upgradeErr))
+			s.True(droppingClient.dropped.Load())
+
+			flags, err := upgrader.GetMemBuffer().GetFlags(upgradeKey)
+			s.NoError(err)
+			s.True(flags.HasLocked())
+			s.True(flags.HasLockedInShareMode())
+
+			retryUpgrade := func() error {
+				retryUpgradeLockCtx := kv.NewLockCtx(s.getTS(), kv.LockNoWait, time.Now())
+				retryUpgradeLockCtx.AllowSharedLockUpgrade = true
+				return upgrader.LockKeys(context.Background(), retryUpgradeLockCtx, upgradeKey)
+			}
+			assertDefiniteRetryFailure := func(err error) {
+				s.Error(err)
+				s.False(tikverr.IsErrorUndetermined(err))
+				s.NotErrorIs(err, tikverr.ErrBodyMissing)
+			}
+
+			switch testCase.name {
+			case "DifferentSharedHolderRemains":
+				assertDefiniteRetryFailure(retryUpgrade())
+			case "WrapperDeleted":
+				s.NoError(holder.Rollback())
+				s.Empty(s.waitLocks(upgradeKey, s.getTS(), 0))
+				s.Error(upgrader.Commit(context.Background()))
+			case "ExclusiveReplacement":
+				s.NoError(holder.Rollback())
+				s.Empty(s.waitLocks(upgradeKey, s.getTS(), 0))
+
+				replacement := s.begin()
+				defer func() {
+					if replacement.Valid() {
+						s.NoError(replacement.Rollback())
+					}
+				}()
+				replacementPrimaryKey := s.key(keyPrefix + "_replacement_primary")
+				s.NoError(replacement.LockKeys(
+					context.Background(),
+					kv.NewLockCtx(s.getTS(), 1000, time.Now()),
+					replacementPrimaryKey,
+				))
+				s.NoError(replacement.LockKeys(
+					context.Background(),
+					kv.NewLockCtx(s.getTS(), kv.LockNoWait, time.Now()),
+					upgradeKey,
+				))
+
+				assertDefiniteRetryFailure(retryUpgrade())
+			default:
+				s.FailNow("unknown durable-state test case", testCase.name)
+			}
+		})
+	}
 }
 
 func (s *testSharedLockSuite) TestExclusiveLockBlockSharedLock() {
