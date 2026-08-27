@@ -797,6 +797,42 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			},
 		},
 		{
+			name: "CmdCopStoreBatchBucketVersionNotMatch",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: &errorpb.Error{
+								BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+									Version: 2,
+									Keys: [][]byte{
+										suite.codec.EncodeRegionKey([]byte("bucket-a")),
+										suite.codec.EncodeRegionKey([]byte("bucket-b")),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				bucketErr := resp.BatchResponses[0].RegionError.BucketVersionNotMatch
+				re.Equal(uint64(2), bucketErr.Version)
+				// decodeRegionError does not handle BucketVersionNotMatch: its bucket
+				// keys stay keyspace-encoded.
+				re.Equal([][]byte{
+					suite.codec.EncodeRegionKey([]byte("bucket-a")),
+					suite.codec.EncodeRegionKey([]byte("bucket-b")),
+				}, bucketErr.Keys)
+			},
+		},
+		{
 			name: "CmdLockWaitInfo",
 			req: &tikvrpc.Request{
 				Type: tikvrpc.CmdLockWaitInfo,
@@ -954,6 +990,40 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			test.validate(re, decoded)
 		})
 	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseMalformedBucketKeys() {
+	re := suite.Require()
+	req := &tikvrpc.Request{
+		Type: tikvrpc.CmdCop,
+		Req:  &coprocessor.Request{},
+	}
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+				{
+					RegionError: &errorpb.Error{
+						BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+							Keys: [][]byte{
+								suite.codec.EncodeRegionKey([]byte("bucket-a")),
+								{0x01}, // Invalid mem-comparable encoding.
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	decoded, err := suite.codec.DecodeResponse(req, resp)
+	re.NoError(err)
+	bucketErr := decoded.Resp.(*coprocessor.Response).BatchResponses[0].RegionError.BucketVersionNotMatch
+	// decodeRegionError does not handle BucketVersionNotMatch, so malformed
+	// bucket keys pass through without validation.
+	re.Equal([][]byte{
+		suite.codec.EncodeRegionKey([]byte("bucket-a")),
+		{0x01},
+	}, bucketErr.Keys)
 }
 
 func (suite *testCodecV2Suite) TestDecodeMvccInfoPreservesEmptyLockKeys() {
