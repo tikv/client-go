@@ -1008,11 +1008,9 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				re.Equal([]byte("split-end"), resp.Regions[0].EndKey)
 				re.Len(resp.Errors, 1)
 				lock := resp.Errors[0].Locked
-				// SplitRegion key errors are not decoded: their lock keys stay
-				// keyspace-encoded.
-				re.Equal(append(keyspacePrefix, []byte("split-lock-key")...), lock.Key)
-				re.Equal(append(keyspacePrefix, []byte("split-primary")...), lock.PrimaryLock)
-				re.Equal([][]byte{append(keyspacePrefix, []byte("split-secondary")...)}, lock.Secondaries)
+				re.Equal([]byte("split-lock-key"), lock.Key)
+				re.Equal([]byte("split-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("split-secondary")}, lock.Secondaries)
 			},
 		},
 	}
