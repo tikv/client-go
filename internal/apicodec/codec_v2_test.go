@@ -974,6 +974,47 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				re.Equal([]byte("compacted-end"), resp.CompactedEndKey)
 			},
 		},
+		{
+			name: "CmdSplitRegionKeyError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdSplitRegion,
+				Req:  &kvrpcpb.SplitRegionRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.SplitRegionResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Regions: []*metapb.Region{
+						{
+							StartKey: suite.codec.EncodeRegionKey([]byte("split-start")),
+							EndKey:   suite.codec.EncodeRegionKey([]byte("split-end")),
+						},
+					},
+					Errors: []*kvrpcpb.KeyError{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("split-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("split-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("split-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.SplitRegionResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Len(resp.Regions, 1)
+				re.Equal([]byte("split-start"), resp.Regions[0].StartKey)
+				re.Equal([]byte("split-end"), resp.Regions[0].EndKey)
+				re.Len(resp.Errors, 1)
+				lock := resp.Errors[0].Locked
+				// SplitRegion key errors are not decoded: their lock keys stay
+				// keyspace-encoded.
+				re.Equal(append(keyspacePrefix, []byte("split-lock-key")...), lock.Key)
+				re.Equal(append(keyspacePrefix, []byte("split-primary")...), lock.PrimaryLock)
+				re.Equal([][]byte{append(keyspacePrefix, []byte("split-secondary")...)}, lock.Secondaries)
+			},
+		},
 	}
 
 	for _, test := range tests {
