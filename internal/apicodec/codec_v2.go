@@ -665,6 +665,16 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		for _, batchResp := range r.BatchResponses {
+			batchResp.RegionError, err = c.decodeRegionError(batchResp.RegionError)
+			if err != nil {
+				return nil, err
+			}
+			batchResp.Locked, err = c.decodeLockInfo(batchResp.Locked)
+			if err != nil {
+				return nil, err
+			}
+		}
 		r.Range, err = c.decodeCopRange(r.Range)
 		if err != nil {
 			return nil, err

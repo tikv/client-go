@@ -752,10 +752,20 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				resp := decoded.Resp.(*coprocessor.Response)
 				re.Len(resp.BatchResponses, 1)
 				lock := resp.BatchResponses[0].Locked
-				// StoreBatch child responses are not decoded: their keys stay keyspace-encoded.
-				re.Equal(append(keyspacePrefix, []byte("batch-lock-key")...), lock.Key)
-				re.Equal(append(keyspacePrefix, []byte("batch-primary")...), lock.PrimaryLock)
-				re.Equal([][]byte{append(keyspacePrefix, []byte("batch-secondary")...)}, lock.Secondaries)
+				re.Equal([]byte("batch-lock-key"), lock.Key)
+				re.Equal([]byte("batch-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("batch-secondary")}, lock.Secondaries)
+
+				// A decoded lock must round-trip through request encoding, e.g. when
+				// the lock's primary is fed back into a CheckTxnStatus request.
+				checkTxnStatusReq, err := suite.codec.EncodeRequest(&tikvrpc.Request{
+					Type: tikvrpc.CmdCheckTxnStatus,
+					Req: &kvrpcpb.CheckTxnStatusRequest{
+						PrimaryKey: lock.PrimaryLock,
+					},
+				})
+				re.NoError(err)
+				re.Equal(append(keyspacePrefix, []byte("batch-primary")...), checkTxnStatusReq.CheckTxnStatus().PrimaryKey)
 			},
 		},
 		{
@@ -781,11 +791,9 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				resp := decoded.Resp.(*coprocessor.Response)
 				re.Len(resp.BatchResponses, 1)
 				regionErr := resp.BatchResponses[0].RegionError.KeyNotInRegion
-				// StoreBatch child responses are not decoded: their keys stay keyspace-encoded.
-				encodedStart, encodedEnd := suite.codec.EncodeRegionRange([]byte("batch-range-start"), []byte("batch-range-end"))
-				re.Equal(append(keyspacePrefix, []byte("batch-region-key")...), regionErr.Key)
-				re.Equal(encodedStart, regionErr.StartKey)
-				re.Equal(encodedEnd, regionErr.EndKey)
+				re.Equal([]byte("batch-region-key"), regionErr.Key)
+				re.Equal([]byte("batch-range-start"), regionErr.StartKey)
+				re.Equal([]byte("batch-range-end"), regionErr.EndKey)
 			},
 		},
 		{
