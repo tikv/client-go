@@ -730,6 +730,65 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			},
 		},
 		{
+			name: "CmdCopStoreBatchLock",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("batch-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("batch-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("batch-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				lock := resp.BatchResponses[0].Locked
+				// StoreBatch child responses are not decoded: their keys stay keyspace-encoded.
+				re.Equal(append(keyspacePrefix, []byte("batch-lock-key")...), lock.Key)
+				re.Equal(append(keyspacePrefix, []byte("batch-primary")...), lock.PrimaryLock)
+				re.Equal([][]byte{append(keyspacePrefix, []byte("batch-secondary")...)}, lock.Secondaries)
+			},
+		},
+		{
+			name: "CmdCopStoreBatchRegionError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: makeRegionError(
+								[]byte("batch-region-key"),
+								[]byte("batch-range-start"),
+								[]byte("batch-range-end"),
+							),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				regionErr := resp.BatchResponses[0].RegionError.KeyNotInRegion
+				// StoreBatch child responses are not decoded: their keys stay keyspace-encoded.
+				encodedStart, encodedEnd := suite.codec.EncodeRegionRange([]byte("batch-range-start"), []byte("batch-range-end"))
+				re.Equal(append(keyspacePrefix, []byte("batch-region-key")...), regionErr.Key)
+				re.Equal(encodedStart, regionErr.StartKey)
+				re.Equal(encodedEnd, regionErr.EndKey)
+			},
+		},
+		{
 			name: "CmdLockWaitInfo",
 			req: &tikvrpc.Request{
 				Type: tikvrpc.CmdLockWaitInfo,
