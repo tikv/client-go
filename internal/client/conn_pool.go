@@ -58,7 +58,7 @@ type connPool struct {
 }
 
 func newConnPool(maxSize uint, addr string, ver uint64, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], opts []grpc.DialOption) (*connPool, error) {
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], bufferPool mem.BufferPool, opts []grpc.DialOption) (*connPool, error) {
 	a := &connPool{
 		ver:           ver,
 		index:         0,
@@ -68,7 +68,7 @@ func newConnPool(maxSize uint, addr string, ver uint64, security config.Security
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, bufferPool, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -87,7 +87,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	return conn, nil
 }
 
-func (a *connPool) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], opts ...grpc.DialOption) error {
+func (a *connPool) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], bufferPool mem.BufferPool, opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -147,7 +147,9 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if !cfg.TiKVClient.GrpcSharedBufferPool {
+		if bufferPool != nil {
+			opts = append(opts, experimental.WithBufferPool(bufferPool))
+		} else if !cfg.TiKVClient.GrpcSharedBufferPool {
 			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(

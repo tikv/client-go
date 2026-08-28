@@ -58,6 +58,7 @@ type Scanner struct {
 	snapshot     *KVSnapshot
 	batchSize    int
 	cache        []*kvrpcpb.KvPair
+	reusableResp *tikvrpc.ReusableScanResponse
 	idx          int
 	nextStartKey []byte
 	endKey       []byte
@@ -83,6 +84,9 @@ func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize 
 		endKey:       endKey,
 		reverse:      reverse,
 		nextEndKey:   endKey,
+	}
+	if snapshot.scanResponseRetainedSize > 0 {
+		scanner.reusableResp = tikvrpc.NewReusableScanResponse(snapshot.scanResponseRetainedSize)
 	}
 	err := scanner.Next()
 	if tikverr.IsErrNotFound(err) {
@@ -175,6 +179,17 @@ func (s *Scanner) Next() error {
 // Close close iterator.
 func (s *Scanner) Close() {
 	s.valid = false
+	s.cache = nil
+	s.reusableResp = nil
+}
+
+// RetainedMemory returns the reusable scan response capacity owned by the
+// scanner.
+func (s *Scanner) RetainedMemory() int64 {
+	if s.reusableResp == nil {
+		return 0
+	}
+	return s.reusableResp.RetainedMemory()
 }
 
 func (s *Scanner) startTS() uint64 {
@@ -258,6 +273,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			req.IsRetryRequest = true
 		}
 		req.InputRequestSource = s.snapshot.GetRequestSource()
+		req.ReusableScanResponse = s.reusableResp
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
 		}

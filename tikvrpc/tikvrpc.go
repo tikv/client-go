@@ -272,6 +272,10 @@ type Request struct {
 	// controller, which decides whether the request type is eligible for
 	// paging pre-charge; non-cop hints may be ignored.
 	PredictedReadBytes uint64
+	// ReusableScanResponse enables caller-owned response buffers for a
+	// sequential scan request. Such requests must bypass batch commands because
+	// the response storage is not safe for concurrent use.
+	ReusableScanResponse *ReusableScanResponse
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32
 }

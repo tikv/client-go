@@ -127,7 +127,10 @@ type KVSnapshot struct {
 	resolvedLocks   util.TSSet
 	committedLocks  util.TSSet
 	scanBatchSize   int
-	readTimeout     time.Duration
+	// scanResponseRetainedSize enables reusable response decoding for sequential
+	// scans and bounds the capacity retained by one scanner.
+	scanResponseRetainedSize int64
+	readTimeout              time.Duration
 
 	// Cache the result of Get and BatchGet.
 	// The invariance is that calling Get or BatchGet multiple times using the same start ts,
@@ -982,6 +985,13 @@ func (s *KVSnapshot) SetKeyOnly(b bool) {
 // SetScanBatchSize sets the scan batchSize used to scan data from tikv.
 func (s *KVSnapshot) SetScanBatchSize(batchSize int) {
 	s.scanBatchSize = batchSize
+}
+
+// SetScanResponseRetainedSize enables reusable scan response buffers and sets
+// the maximum capacity retained by each scanner. A non-positive value disables
+// response reuse.
+func (s *KVSnapshot) SetScanResponseRetainedSize(maxBytes int64) {
+	s.scanResponseRetainedSize = maxBytes
 }
 
 // SetReplicaRead sets up the replica read type.
