@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/codec"
+	"google.golang.org/grpc/mem"
 )
 
 var (
@@ -654,6 +655,60 @@ func (suite *testCodecV2Suite) TestDecodeResponseHotPathCommands() {
 			test.validate(re, decoded)
 		})
 	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeReusableScanResponseInPlace() {
+	re := suite.Require()
+	pairs := make([]*kvrpcpb.KvPair, 64)
+	for i := range pairs {
+		pairs[i] = &kvrpcpb.KvPair{
+			Key:   suite.codec.EncodeKey([]byte{byte(i), byte(i >> 8)}),
+			Value: []byte("value"),
+		}
+	}
+	encoded, err := (&kvrpcpb.ScanResponse{Pairs: pairs}).Marshal()
+	re.NoError(err)
+	input := mem.BufferSlice{mem.SliceBuffer(encoded)}
+	reusable := tikvrpc.NewReusableScanResponse(16 << 20)
+
+	re.NoError(reusable.UnmarshalBufferSlice(input))
+	rawPair := reusable.Response().Pairs[0]
+	rawKeyData := &rawPair.Key[0]
+	req := &tikvrpc.Request{Type: tikvrpc.CmdScan, ReusableScanResponse: reusable}
+	decoded, err := suite.codec.DecodeResponse(req, &tikvrpc.Response{Resp: reusable.Response()})
+	re.NoError(err)
+	decodedPair := decoded.Resp.(*kvrpcpb.ScanResponse).Pairs[0]
+	re.Same(rawPair, decodedPair)
+	re.Same(rawKeyData, &decodedPair.Key[0])
+	re.Equal([]byte{0, 0}, decodedPair.Key)
+
+	foreignEncodedKey := suite.codec.EncodeKey([]byte("foreign"))
+	foreignPair := &kvrpcpb.KvPair{Key: foreignEncodedKey}
+	foreignResponse := &kvrpcpb.ScanResponse{Pairs: []*kvrpcpb.KvPair{foreignPair}}
+	fallbackReq := &tikvrpc.Request{Type: tikvrpc.CmdScan, ReusableScanResponse: reusable}
+	decoded, err = suite.codec.DecodeResponse(fallbackReq, &tikvrpc.Response{Resp: foreignResponse})
+	re.NoError(err)
+	fallbackPair := decoded.Resp.(*kvrpcpb.ScanResponse).Pairs[0]
+	re.NotSame(foreignPair, fallbackPair)
+	re.Equal(foreignEncodedKey, foreignPair.Key)
+	re.Equal([]byte("foreign"), fallbackPair.Key)
+
+	decode := func() {
+		if err := reusable.UnmarshalBufferSlice(input); err != nil {
+			panic(err)
+		}
+		pooledReq := suite.codec.reqPool.Get().(*tikvrpc.Request)
+		*pooledReq = tikvrpc.Request{Type: tikvrpc.CmdScan, ReusableScanResponse: reusable}
+		response, err := suite.codec.DecodeResponse(pooledReq, &tikvrpc.Response{Resp: reusable.Response()})
+		if err != nil {
+			panic(err)
+		}
+		if response.Resp.(*kvrpcpb.ScanResponse).Pairs[0] != reusable.Response().Pairs[0] {
+			panic("API v2 cloned a reusable scan pair")
+		}
+	}
+	decode()
+	re.Zero(testing.AllocsPerRun(20, decode))
 }
 
 func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {

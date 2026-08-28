@@ -360,7 +360,11 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-		r.Pairs, err = c.decodePairs(r.Pairs)
+		if req.ReusableScanResponse != nil && r == req.ReusableScanResponse.Response() {
+			err = c.decodeReusableScanPairs(r.Pairs)
+		} else {
+			r.Pairs, err = c.decodePairs(r.Pairs)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -926,6 +930,28 @@ func (c *codecV2) decodePairs(encodedPairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair
 		pairs = append(pairs, &p)
 	}
 	return pairs, nil
+}
+
+func (c *codecV2) decodeReusableScanPairs(pairs []*kvrpcpb.KvPair) error {
+	for _, pair := range pairs {
+		var err error
+		if pair.Error != nil {
+			pair.Error, err = c.decodeKeyError(pair.Error)
+			if err != nil {
+				return err
+			}
+		}
+		if len(pair.Key) == 0 {
+			continue
+		}
+		decodedKey, err := c.DecodeKey(pair.Key)
+		if err != nil {
+			return err
+		}
+		decodedLength := copy(pair.Key, decodedKey)
+		pair.Key = pair.Key[:decodedLength]
+	}
+	return nil
 }
 
 func (c *codecV2) encodeMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
