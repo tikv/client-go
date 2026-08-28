@@ -553,6 +553,10 @@ func (s *RegionRequestSender) SendReqAsync(
 			cancels = make([]context.CancelFunc, 0, 4)
 			ctx     = bo.GetCtx()
 			hookCtx = ctx
+			// Keep the historical async timing baseline when no limiter is installed.
+			// When there is a limiter, reset it after the limiter returns so its wait
+			// time is excluded from RPC runtime statistics.
+			rpcStart = startTime
 		)
 		finishBeforeSend := cb.Invoke
 		if runLimiterAsync {
@@ -572,6 +576,9 @@ func (s *RegionRequestSender) SendReqAsync(
 		}
 		if releaseAttempt != nil {
 			cancels = append(cancels, releaseAttempt)
+		}
+		if runLimiterAsync {
+			rpcStart = time.Now()
 		}
 		if limit := kv.StoreLimit.Load(); limit > 0 {
 			if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
@@ -601,7 +608,6 @@ func (s *RegionRequestSender) SendReqAsync(
 			sendToAddr = state.vars.rpcCtx.ProxyAddr
 		}
 
-		rpcStart := time.Now()
 		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 			state.vars.sendTimes++
 			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
@@ -610,7 +616,7 @@ func (s *RegionRequestSender) SendReqAsync(
 				execDetails = val.(*util.ExecDetails)
 			}
 			if state.handleAsyncResponse(rpcStart, canceled, resp, err, execDetails, cancels...) {
-				cb.Invoke(state.toResponseExt())
+				finishBeforeSend(state.toResponseExt())
 				return
 			}
 			// retry
@@ -625,6 +631,10 @@ func (s *RegionRequestSender) SendReqAsync(
 		}))
 	}
 	if runLimiterAsync {
+		// RequestAttemptLimiter may block. If this executor is backed by a
+		// recycling pool, many blocked limiters can cause it to overflow and
+		// weaken its concurrency bound. Callers should account for that before
+		// enabling a blocking limiter on a high-fan-out async path.
 		cb.Executor().Go(sendFirstAttempt)
 	} else {
 		sendFirstAttempt()

@@ -239,7 +239,10 @@ func (t CmdType) String() string {
 	return "Unknown"
 }
 
-// RequestAttemptLimiterFunc waits until an RPC attempt to storeID is allowed.
+// RequestAttemptLimiterFunc acquires capacity for one physical RPC attempt to
+// storeID. client-go invokes it after selecting the target store for the first
+// attempt and for retries performed by RegionRequestSender.
+//
 // When this function returns a non-nil release function and a nil error,
 // client-go calls release exactly once after that attempt finishes.
 // The context follows the request lifecycle; the per-attempt RPC timeout starts
@@ -281,7 +284,14 @@ type Request struct {
 	// paging pre-charge; non-cop hints may be ignored.
 	PredictedReadBytes uint64
 	// RequestAttemptLimiter, when non-nil, is called after client-go selects
-	// the actual target store and before every RPC attempt, including retries.
+	// the actual target store and before each physical RPC attempt, including
+	// retries performed by RegionRequestSender.
+	//
+	// The caller owns the limiter's lifecycle and scope. The hook is carried
+	// only by this Request, so client-go does not propagate it to a Request
+	// rebuilt by a higher-level retry. To limit a larger operation, such as a
+	// statement, callers must attach callbacks that share the same
+	// operation-owned limiter to every Request created or rebuilt for it.
 	RequestAttemptLimiter RequestAttemptLimiterFunc
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32

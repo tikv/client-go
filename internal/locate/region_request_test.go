@@ -147,6 +147,19 @@ func (f *fnClient) SendRequestAsync(ctx context.Context, addr string, req *tikvr
 	}()
 }
 
+// immediateAsyncClient invokes the callback in SendRequestAsync's caller
+// goroutine, which some client implementations do for synchronous failures.
+type immediateAsyncClient struct {
+	*fnClient
+	finished chan<- struct{}
+}
+
+func (c *immediateAsyncClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	tikvrpc.AttachContext(req, req.Context)
+	cb.Invoke(c.fn(ctx, addr, req, 0))
+	close(c.finished)
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
@@ -447,6 +460,46 @@ func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptLimiter() {
 		}
 		s.Equal(s.store, acquiredStoreID)
 		s.Equal(int32(1), releaseCount.Load())
+	})
+
+	s.Run("AsyncLimiterSchedulesSynchronousClientCallback", func() {
+		originalClient := s.regionRequestSender.client
+		clientFinished := make(chan struct{})
+		s.regionRequestSender.client = &immediateAsyncClient{
+			fnClient: &fnClient{fn: func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+				return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{}}, nil
+			}},
+			finished: clientFinished,
+		}
+		defer func() { s.regionRequestSender.client = originalClient }()
+
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		req.RequestAttemptLimiter = func(context.Context, uint64) (func(), error) {
+			return func() {}, nil
+		}
+
+		complete := false
+		rl := async.NewRunLoop()
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Require().NoError(err)
+			s.Require().NotNil(resp)
+			complete = true
+		}))
+
+		select {
+		case <-clientFinished:
+		case <-time.After(time.Second):
+			s.FailNow("synchronous async callback was not invoked")
+		}
+		s.False(complete, "callback must be scheduled on the run loop")
+
+		for !complete {
+			_, err := rl.Exec(context.Background())
+			s.Require().NoError(err)
+		}
 	})
 
 	s.Run("AsyncLimiterWaitExcludedFromRPCStats", func() {
