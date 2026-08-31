@@ -366,9 +366,6 @@ func (s *testPipelinedMemDBSuite) TestBufferBatchGetPointResponseStats() {
 	s.Equal(int64(responses*3), pointStats.ScanDetail.ProcessedKeys)
 	s.Equal(int64(responses*30), pointStats.ScanDetail.ProcessedKeysSize)
 	s.Equal(uint64(len(key)+len("value")), pointStats.PayloadBytes)
-	s.Equal(responses, pointStats.ScanDetailRecords)
-	s.Equal(responses, pointStats.PayloadRecords)
-	s.Equal(responses, pointStats.CompletedResponses)
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {

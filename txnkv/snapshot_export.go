@@ -16,6 +16,7 @@ package txnkv
 
 import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // Scanner support tikv scan
@@ -28,10 +29,10 @@ type KVSnapshot = txnsnapshot.KVSnapshot
 type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
 
 // PointReadScanDetail is the storage work reported by point-read responses.
-type PointReadScanDetail = txnsnapshot.PointReadScanDetail
+type PointReadScanDetail = util.PointReadScanDetail
 
-// PointResponseStats is one atomic snapshot of point-read response statistics.
-type PointResponseStats = txnsnapshot.PointResponseStats
+// PointResponseStats is a value snapshot of point-read response statistics.
+type PointResponseStats = util.PointResponseStats
 
 // IsoLevel is the transaction's isolation level.
 type IsoLevel = txnsnapshot.IsoLevel

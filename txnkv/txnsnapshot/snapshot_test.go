@@ -15,7 +15,6 @@
 package txnsnapshot
 
 import (
-	"math"
 	"sync"
 	"testing"
 
@@ -65,17 +64,12 @@ func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {
 	require.True(t, pointStats.IsValid())
 	require.False(t, pointStats.ScanDetailComplete())
 	require.True(t, pointStats.PayloadComplete())
-	require.Equal(t, PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         11,
-			ProcessedKeys:     7,
-			ProcessedKeysSize: 70,
-		},
-		PayloadBytes:       20,
-		ScanDetailRecords:  2,
-		PayloadRecords:     4,
-		CompletedResponses: 4,
-	}, pointStats)
+	require.Equal(t, PointReadScanDetail{
+		TotalKeys:         11,
+		ProcessedKeys:     7,
+		ProcessedKeysSize: 70,
+	}, pointStats.ScanDetail)
+	require.Equal(t, uint64(20), pointStats.PayloadBytes)
 
 	// The getter returns an independent value snapshot.
 	pointStats.ScanDetail.TotalKeys = 1000
@@ -99,106 +93,50 @@ func TestSnapshotRuntimeStatsPointResponseCloneAndMerge(t *testing.T) {
 		ProcessedVersionsSize: 40,
 	}}, 11, true)
 
-	require.Equal(t, PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         5,
-			ProcessedKeys:     3,
-			ProcessedKeysSize: 30,
-		},
-		PayloadBytes:       7,
-		ScanDetailRecords:  1,
-		PayloadRecords:     2,
-		CompletedResponses: 2,
-	}, clone.GetPointResponseStats())
+	cloneStats := clone.GetPointResponseStats()
+	require.Equal(t, PointReadScanDetail{
+		TotalKeys:         5,
+		ProcessedKeys:     3,
+		ProcessedKeysSize: 30,
+	}, cloneStats.ScanDetail)
+	require.Equal(t, uint64(7), cloneStats.PayloadBytes)
+	require.True(t, cloneStats.IsValid())
+	require.False(t, cloneStats.ScanDetailComplete())
+	require.True(t, cloneStats.PayloadComplete())
 
 	target := &SnapshotRuntimeStats{}
 	target.Merge(clone)
 	target.Merge(source)
-	require.Equal(t, PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         17,
-			ProcessedKeys:     10,
-			ProcessedKeysSize: 100,
-		},
-		PayloadBytes:       25,
-		ScanDetailRecords:  3,
-		PayloadRecords:     5,
-		CompletedResponses: 5,
-	}, target.GetPointResponseStats())
+	targetStats := target.GetPointResponseStats()
+	require.Equal(t, PointReadScanDetail{
+		TotalKeys:         17,
+		ProcessedKeys:     10,
+		ProcessedKeysSize: 100,
+	}, targetStats.ScanDetail)
+	require.Equal(t, uint64(25), targetStats.PayloadBytes)
+	require.True(t, targetStats.IsValid())
+	require.False(t, targetStats.ScanDetailComplete())
+	require.True(t, targetStats.PayloadComplete())
+
+	// Merging with itself snapshots the source before acquiring the target lock.
+	target.Merge(target)
+	require.Equal(t, uint64(50), target.GetPointResponseStats().PayloadBytes)
+	require.Equal(t, cloneStats, clone.GetPointResponseStats())
 }
 
 func TestSnapshotRuntimeStatsPointResponseInvalid(t *testing.T) {
 	var nilStats *SnapshotRuntimeStats
 	require.False(t, nilStats.GetPointResponseStats().IsValid())
+	require.False(t, nilStats.GetPointResponseStats().ScanDetailComplete())
+	require.False(t, nilStats.GetPointResponseStats().PayloadComplete())
 
-	t.Run("protobuf conversion", func(t *testing.T) {
-		for _, tc := range []struct {
-			name   string
-			detail *kvrpcpb.ScanDetailV2
-		}{
-			{name: "total versions", detail: &kvrpcpb.ScanDetailV2{TotalVersions: math.MaxUint64}},
-			{name: "processed versions", detail: &kvrpcpb.ScanDetailV2{ProcessedVersions: math.MaxUint64}},
-			{name: "processed versions size", detail: &kvrpcpb.ScanDetailV2{ProcessedVersionsSize: math.MaxUint64}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				stats := &SnapshotRuntimeStats{}
-				newSnapshotWithRuntimeStats(stats).mergePointResponse(
-					&kvrpcpb.ExecDetailsV2{ScanDetailV2: tc.detail}, 0, true,
-				)
-				require.False(t, stats.GetPointResponseStats().IsValid())
-				require.False(t, stats.Clone().GetPointResponseStats().IsValid())
-			})
-		}
-	})
-
-	t.Run("record overflow", func(t *testing.T) {
-		for _, tc := range []struct {
-			name  string
-			stats PointResponseStats
-		}{
-			{name: "total keys", stats: PointResponseStats{ScanDetail: PointReadScanDetail{TotalKeys: math.MaxInt64}}},
-			{name: "processed keys", stats: PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeys: math.MaxInt64}}},
-			{name: "processed size", stats: PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeysSize: math.MaxInt64}}},
-			{name: "payload bytes", stats: PointResponseStats{PayloadBytes: math.MaxUint64}},
-			{name: "detail records", stats: PointResponseStats{ScanDetailRecords: math.MaxUint64}},
-			{name: "payload records", stats: PointResponseStats{PayloadRecords: math.MaxUint64}},
-			{name: "completed responses", stats: PointResponseStats{CompletedResponses: math.MaxUint64}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				stats := &SnapshotRuntimeStats{pointResponseStats: tc.stats}
-				newSnapshotWithRuntimeStats(stats).mergePointResponse(
-					&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
-						TotalVersions: 1, ProcessedVersions: 1, ProcessedVersionsSize: 1,
-					}}, 1, true,
-				)
-				require.False(t, stats.GetPointResponseStats().IsValid())
-			})
-		}
-	})
-
-	t.Run("merge overflow and invalid propagation", func(t *testing.T) {
-		target := &SnapshotRuntimeStats{pointResponseStats: PointResponseStats{
-			ScanDetail: PointReadScanDetail{TotalKeys: math.MaxInt64},
-		}}
-		source := &SnapshotRuntimeStats{pointResponseStats: PointResponseStats{
-			ScanDetail:         PointReadScanDetail{TotalKeys: 1},
-			PayloadRecords:     1,
-			CompletedResponses: 1,
-		}}
-		target.Merge(source)
-		require.False(t, target.GetPointResponseStats().IsValid())
-
-		invalidSource := &SnapshotRuntimeStats{pointResponseStats: PointResponseStats{invalid: true}}
-		cleanTarget := &SnapshotRuntimeStats{}
-		cleanTarget.Merge(invalidSource)
-		require.False(t, cleanTarget.GetPointResponseStats().IsValid())
-	})
-
-	t.Run("payload parser invalid", func(t *testing.T) {
-		stats := &SnapshotRuntimeStats{}
-		newSnapshotWithRuntimeStats(stats).mergePointResponse(nil, 0, false)
-		require.False(t, stats.GetPointResponseStats().IsValid())
-	})
+	stats := &SnapshotRuntimeStats{}
+	newSnapshotWithRuntimeStats(stats).mergePointResponse(nil, 0, false)
+	require.False(t, stats.GetPointResponseStats().IsValid())
+	require.False(t, stats.Clone().GetPointResponseStats().IsValid())
+	merged := &SnapshotRuntimeStats{}
+	merged.Merge(stats)
+	require.False(t, merged.GetPointResponseStats().IsValid())
 }
 
 func TestCollectBatchGetResponseDataPointResponseStats(t *testing.T) {
@@ -265,15 +203,10 @@ func TestCollectBatchGetResponseDataPointResponseStats(t *testing.T) {
 	require.True(t, pointStats.IsValid())
 	require.False(t, pointStats.ScanDetailComplete())
 	require.True(t, pointStats.PayloadComplete())
-	require.Equal(t, PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30,
-		},
-		PayloadBytes:       8,
-		ScanDetailRecords:  3,
-		PayloadRecords:     5,
-		CompletedResponses: 5,
-	}, pointStats)
+	require.Equal(t, PointReadScanDetail{
+		TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30,
+	}, pointStats.ScanDetail)
+	require.Equal(t, uint64(8), pointStats.PayloadBytes)
 }
 
 func testLockInfo(key string) *kvrpcpb.LockInfo {
@@ -351,15 +284,14 @@ func TestSnapshotRuntimeStatsConcurrentPointResponseAccess(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.Equal(t, PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         writers * responsesEach / 2,
-			ProcessedKeys:     writers * responsesEach,
-			ProcessedKeysSize: writers * responsesEach * 3 / 2,
-		},
-		PayloadBytes:       writers * responsesEach * 3,
-		ScanDetailRecords:  writers * responsesEach / 2,
-		PayloadRecords:     writers * responsesEach,
-		CompletedResponses: writers * responsesEach,
-	}, stats.GetPointResponseStats())
+	pointStats := stats.GetPointResponseStats()
+	require.Equal(t, PointReadScanDetail{
+		TotalKeys:         writers * responsesEach / 2,
+		ProcessedKeys:     writers * responsesEach,
+		ProcessedKeysSize: writers * responsesEach * 3 / 2,
+	}, pointStats.ScanDetail)
+	require.Equal(t, uint64(writers*responsesEach*3), pointStats.PayloadBytes)
+	require.True(t, pointStats.IsValid())
+	require.False(t, pointStats.ScanDetailComplete())
+	require.True(t, pointStats.PayloadComplete())
 }

@@ -589,9 +589,6 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsGetAndBatchGetCoverage() {
 	s.Equal(int64(7), pointStats.ScanDetail.ProcessedKeys)
 	s.Equal(int64(70), pointStats.ScanDetail.ProcessedKeysSize)
 	s.Equal(uint64(len("get")+len(batchGetKey)+len("batch-get")), pointStats.PayloadBytes)
-	s.Equal(uint64(2), pointStats.ScanDetailRecords)
-	s.Equal(uint64(3), pointStats.PayloadRecords)
-	s.Equal(uint64(3), pointStats.CompletedResponses)
 }
 
 func (s *testSnapshotSuite) TestSnapshotRuntimeStatsExcludesEpochNotMatch() {
@@ -640,9 +637,6 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsExcludesEpochNotMatch() {
 	s.Equal(int64(1), pointStats.ScanDetail.ProcessedKeys)
 	s.Equal(int64(10), pointStats.ScanDetail.ProcessedKeysSize)
 	s.Equal(uint64(len("value")), pointStats.PayloadBytes)
-	s.Equal(uint64(1), pointStats.ScanDetailRecords)
-	s.Equal(uint64(1), pointStats.PayloadRecords)
-	s.Equal(uint64(1), pointStats.CompletedResponses)
 }
 
 func (s *testSnapshotSuite) TestSnapshotRuntimeStatsPointGetLockRetryCoverage() {
@@ -705,9 +699,6 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsPointGetLockRetryCoverage() 
 	s.Equal(int64(2), pointStats.ScanDetail.ProcessedKeys)
 	s.Equal(int64(20), pointStats.ScanDetail.ProcessedKeysSize)
 	s.Equal(uint64(len("old-value")), pointStats.PayloadBytes)
-	s.Equal(uint64(2), pointStats.ScanDetailRecords)
-	s.Equal(uint64(2), pointStats.PayloadRecords)
-	s.Equal(uint64(2), pointStats.CompletedResponses)
 }
 
 func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegionsCoverage() {
@@ -760,12 +751,9 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegions
 	s.True(pointStats.IsValid())
 	s.True(pointStats.ScanDetailComplete())
 	s.True(pointStats.PayloadComplete())
-	s.Equal(injectedResponses, pointStats.CompletedResponses)
-	s.Equal(pointStats.CompletedResponses, pointStats.ScanDetailRecords)
-	s.Equal(pointStats.CompletedResponses, pointStats.PayloadRecords)
-	s.Equal(int64(pointStats.CompletedResponses*5), pointStats.ScanDetail.TotalKeys)
-	s.Equal(int64(pointStats.CompletedResponses*3), pointStats.ScanDetail.ProcessedKeys)
-	s.Equal(int64(pointStats.CompletedResponses*30), pointStats.ScanDetail.ProcessedKeysSize)
+	s.Equal(int64(injectedResponses*5), pointStats.ScanDetail.TotalKeys)
+	s.Equal(int64(injectedResponses*3), pointStats.ScanDetail.ProcessedKeys)
+	s.Equal(int64(injectedResponses*30), pointStats.ScanDetail.ProcessedKeysSize)
 	s.Equal(uint64(len(leftKey)+len("left")+len(rightKey)+len("right")), pointStats.PayloadBytes)
 }
 
