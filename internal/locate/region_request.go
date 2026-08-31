@@ -2147,7 +2147,9 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("request bucket version", ctx.BucketVersion),
 			zap.Stringer("ctx", ctx),
 		)
-		// bucket version is not match, we should split this cop request again.
+		// OnBucketVersionNotMatch stores boundaries that are later compared with
+		// decoded request keys. The API v2 response codec therefore strips their
+		// wire encoding and rejects malformed boundaries before this handler.
 		s.regionCache.OnBucketVersionNotMatch(ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
 		return false, nil
 	}

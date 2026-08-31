@@ -665,6 +665,16 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		for _, batchResp := range r.BatchResponses {
+			batchResp.RegionError, err = c.decodeRegionError(batchResp.RegionError)
+			if err != nil {
+				return nil, err
+			}
+			batchResp.Locked, err = c.decodeLockInfo(batchResp.Locked)
+			if err != nil {
+				return nil, err
+			}
+		}
 		r.Range, err = c.decodeCopRange(r.Range)
 		if err != nil {
 			return nil, err
@@ -718,6 +728,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 			return nil, err
 		}
 		r.Regions, err = c.decodeRegions(r.Regions)
+		if err != nil {
+			return nil, err
+		}
+		r.Errors, err = c.decodeKeyErrors(r.Errors)
 		if err != nil {
 			return nil, err
 		}
@@ -1002,6 +1016,18 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 			decodedRegions = append(decodedRegions, meta)
 		}
 		errInfo.CurrentRegions = decodedRegions
+	}
+
+	if errInfo := regionError.BucketVersionNotMatch; errInfo != nil {
+		// The region cache compares bucket boundaries with decoded user keys.
+		// BucketVersionNotMatch.Keys still uses API v2's mem-comparable,
+		// keyspace-prefixed region-key format, so caching it as-is would mix key
+		// representations and produce incorrect cop task boundaries. Decoding also
+		// keeps malformed boundaries out of the cache.
+		errInfo.Keys, err = c.DecodeBucketKeys(errInfo.Keys)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return regionError, nil
