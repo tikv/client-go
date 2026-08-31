@@ -547,6 +547,36 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 				}, decoded.DebugInfo.MvccInfo[0].Mvcc.Lock.Secondaries)
 			},
 		},
+		{
+			name: "SharedLockLost",
+			err: &kvrpcpb.KeyError{
+				SharedLockLost: &kvrpcpb.SharedLockLost{
+					Key:     append(keyspacePrefix, []byte("key1")...),
+					StartTs: 11,
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.SharedLockLost.Key)
+				re.Equal(uint64(11), decoded.SharedLockLost.StartTs)
+			},
+		},
+		{
+			name: "LockUpgradeConflict",
+			err: &kvrpcpb.KeyError{
+				LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+					Key:          append(keyspacePrefix, []byte("key1")...),
+					StartTs:      11,
+					OwnerStartTs: 22,
+					Reason:       kvrpcpb.LockUpgradeConflict_DuplicateInFlight,
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.LockUpgradeConflict.Key)
+				re.Equal(uint64(11), decoded.LockUpgradeConflict.StartTs)
+				re.Equal(uint64(22), decoded.LockUpgradeConflict.OwnerStartTs)
+				re.Equal(kvrpcpb.LockUpgradeConflict_DuplicateInFlight, decoded.LockUpgradeConflict.Reason)
+			},
+		},
 	}
 
 	codec := suite.codec
