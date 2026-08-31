@@ -1250,7 +1250,7 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	bo *retry.Backoffer,
 	rcInterceptor resourceControlClient.ResourceGroupKVInterceptor,
 	ruDetails *util.RUDetails,
-) (*resourcecontrol.RequestInfo, error) {
+) (resourceControlClient.RequestInfo, error) {
 	if rcInterceptor == nil {
 		return nil, nil
 	}
@@ -1292,14 +1292,17 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		writeBytes = int64(float64(writeBytes) * discountRatio)
 	}
 
-	reqInfo := resourcecontrol.NewRequestInfo(
+	baseReqInfo := resourcecontrol.NewRequestInfo(
 		writeBytes,
 		region.GetLeaderStoreID(),
 		replicaNumber,
 		false,
 	)
+	reqInfo := client.WrapRequestInfoWithRUDetails(rcInterceptor, baseReqInfo, ruDetails)
 
-	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(ctx, c.resourceGroupName, reqInfo)
+	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := rcInterceptor.OnRequestWait(
+		ctx, c.resourceGroupName, reqInfo,
+	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -1311,7 +1314,7 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 	return reqInfo, nil
 }
 
-func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
+func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlClient.ResourceGroupKVInterceptor, reqInfo resourceControlClient.RequestInfo, ruDetails *util.RUDetails) error {
 	if rcInterceptor == nil {
 		return nil
 	}
@@ -1322,7 +1325,7 @@ func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor resourceControlCli
 		return errors.WithStack(err)
 	}
 	if ruDetails != nil {
-		ruDetails.Update(consumption, time.Duration(0))
+		ruDetails.Update(consumption, 0)
 	}
 
 	return nil

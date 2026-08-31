@@ -15,12 +15,14 @@
 package util
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 func TestRUDetailsDrainRUV2(t *testing.T) {
@@ -85,6 +87,94 @@ func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
 	assert.Equal(t, uint64(7), merged.WriteRpcCount)
 	rightDrained := right.DrainRUV2()
 	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
+}
+
+func TestRUDetailsCalculationDetails(t *testing.T) {
+	details := NewRUDetails()
+	factors := resourceControlClient.RUFactorSnapshot{
+		ReadBaseCost: 1,
+	}
+	delta := resourceControlClient.RUCalculation{
+		Factors: factors,
+		Inputs: resourceControlClient.RUCalculationInputs{
+			ReadRPCCount: 1,
+		},
+		RRU: 1,
+	}
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			details.Update(&rmpb.Consumption{RRU: 1}, 0)
+			details.AddRUCalculation(delta)
+		}()
+	}
+	wg.Wait()
+
+	calculation, ok, consistent := details.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, factors, calculation.Factors)
+	assert.Equal(t, float64(10), calculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(10), calculation.RRU)
+	assert.Equal(t, float64(10), details.RRU())
+
+	cloned := details.Clone()
+	clonedCalculation, ok, consistent := cloned.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(10), clonedCalculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(10), clonedCalculation.RRU)
+
+	sameFactors := NewRUDetails()
+	sameFactors.AddRUCalculation(delta)
+	cloned.Merge(sameFactors)
+	clonedCalculation, ok, consistent = cloned.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(11), clonedCalculation.Inputs.ReadRPCCount)
+	assert.Equal(t, float64(11), clonedCalculation.RRU)
+
+	otherFactors := factors
+	otherFactors.ReadBaseCost = 2
+	otherDelta := delta
+	otherDelta.Factors = otherFactors
+	otherDelta.RRU = 2
+	other := NewRUDetails()
+	other.Update(&rmpb.Consumption{RRU: 2}, 0)
+	other.AddRUCalculation(otherDelta)
+	other.UpdateTiFlash(&rmpb.Consumption{RRU: 3, WRU: 4})
+	cloned.Merge(other)
+
+	_, ok, consistent = cloned.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
+	assert.Equal(t, float64(7), cloned.TiflashRU())
+	_, ok, consistent = details.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+
+	zeroDetails := NewRUDetails()
+	zeroDelta := resourceControlClient.RUCalculation{
+		Factors: resourceControlClient.RUFactorSnapshot{},
+		Inputs:  resourceControlClient.RUCalculationInputs{ReadRPCCount: 1},
+	}
+	zeroDetails.AddRUCalculation(zeroDelta)
+	zeroCalculation, ok, consistent := zeroDetails.RUCalculation()
+	assert.True(t, ok)
+	assert.True(t, consistent)
+	assert.Equal(t, float64(1), zeroCalculation.Inputs.ReadRPCCount)
+
+	invalidClone := cloned.Clone()
+	_, ok, consistent = invalidClone.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
+	invalidClone.AddRUCalculation(delta)
+	_, ok, consistent = invalidClone.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
 }
 
 func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
