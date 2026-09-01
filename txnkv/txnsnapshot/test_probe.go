@@ -38,8 +38,6 @@ func (s SnapshotProbe) RecordBackoffInfo(bo *retry.Backoffer) {
 
 // MergeExecDetail merges exec stats into snapshot's stats.
 func (s SnapshotProbe) MergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.mergeExecDetail(detail)
 }
 
