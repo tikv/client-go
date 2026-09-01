@@ -383,7 +383,10 @@ func (b *Backoffer) longestSleepCfg() (*Config, int) {
 }
 
 func (b *Backoffer) CheckKilled() error {
-	if b.vars != nil && b.vars.Killed != nil {
+	if b.vars == nil {
+		return nil
+	}
+	if b.vars.Killed != nil {
 		killed := atomic.LoadUint32(b.vars.Killed)
 		if killed != 0 {
 			logutil.BgLogger().Info(
@@ -392,6 +395,9 @@ func (b *Backoffer) CheckKilled() error {
 			)
 			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
 		}
+	}
+	if b.vars.KillSignalHandler != nil {
+		return b.vars.KillSignalHandler.HandleSignal()
 	}
 	return nil
 }
