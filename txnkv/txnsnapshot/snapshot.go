@@ -401,7 +401,11 @@ type batchGetLockInfo struct {
 func collectBatchGetResponseData(
 	resp *tikvrpc.Response,
 	onKvPair func([]byte, kv.ValueEntry),
-	onResponse func(*kvrpcpb.ExecDetailsV2, uint64, bool),
+	// onResponse receives the execution details and logical payload bytes.
+	onResponse func(
+		details *kvrpcpb.ExecDetailsV2,
+		payloadBytes uint64,
+	),
 ) (*batchGetLockInfo, error) {
 	if resp.Resp == nil {
 		return nil, errors.WithStack(tikverr.ErrBodyMissing)
@@ -424,10 +428,10 @@ func collectBatchGetResponseData(
 		return nil, errors.Errorf("unknown response %T", v)
 	}
 	if onResponse != nil {
-		payloadBytes, payloadValid := batchGetResponsePayloadBytes(data.keyErr, pairs)
+		payloadBytes := batchGetResponsePayloadBytes(data.keyErr, pairs)
 		// Record every recognized response, including missing ExecDetailsV2 and
 		// key errors, so missing detail remains visible across successful retries.
-		onResponse(details, payloadBytes, payloadValid)
+		onResponse(details, payloadBytes)
 	}
 	if data.keyErr != nil {
 		// If a response-level error happens, skip reading pairs.
@@ -466,25 +470,18 @@ func collectBatchGetResponseData(
 	return data, nil
 }
 
-func batchGetResponsePayloadBytes(responseError *kvrpcpb.KeyError, pairs []*kvrpcpb.KvPair) (uint64, bool) {
+func batchGetResponsePayloadBytes(responseError *kvrpcpb.KeyError, pairs []*kvrpcpb.KvPair) uint64 {
 	if responseError != nil {
-		return 0, true
+		return 0
 	}
 	var payloadBytes uint64
 	for _, pair := range pairs {
 		if pair.GetError() != nil {
 			continue
 		}
-		pairBytes, ok := checkedAddUint64(uint64(len(pair.GetKey())), uint64(len(pair.GetValue())))
-		if !ok {
-			return 0, false
-		}
-		payloadBytes, ok = checkedAddUint64(payloadBytes, pairBytes)
-		if !ok {
-			return 0, false
-		}
+		payloadBytes += uint64(len(pair.GetKey())) + uint64(len(pair.GetValue()))
 	}
-	return payloadBytes, true
+	return payloadBytes
 }
 
 //go:noinline
@@ -908,7 +905,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 			if cmdGetResp.GetError() != nil {
 				payloadBytes = 0
 			}
-			onResponse(cmdGetResp.ExecDetailsV2, payloadBytes, true)
+			onResponse(cmdGetResp.ExecDetailsV2, payloadBytes)
 		}
 		if cmdGetResp.ExecDetailsV2 != nil {
 			readKeys := len(cmdGetResp.Value)
@@ -978,7 +975,7 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	if detail == nil || s.mu.stats == nil {
 		return
 	}
-	s.mu.stats.pointResponseStats.recordScanDetail(detail.ScanDetailV2)
+	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.GetScanDetailV2())
 	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
 	if details := detail.GetReadPoolTaskDetails(); details != nil {
 		if s.mu.stats.readPoolTaskDetails == nil {
@@ -988,7 +985,7 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	}
 }
 
-func (s *KVSnapshot) pointResponseRecorder() func(*kvrpcpb.ExecDetailsV2, uint64, bool) {
+func (s *KVSnapshot) pointResponseRecorder() func(*kvrpcpb.ExecDetailsV2, uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.stats == nil {
@@ -997,13 +994,18 @@ func (s *KVSnapshot) pointResponseRecorder() func(*kvrpcpb.ExecDetailsV2, uint64
 	return s.mergePointResponse
 }
 
-func (s *KVSnapshot) mergePointResponse(detail *kvrpcpb.ExecDetailsV2, payloadBytes uint64, payloadValid bool) {
+func (s *KVSnapshot) mergePointResponse(detail *kvrpcpb.ExecDetailsV2, payloadBytes uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.stats == nil {
 		return
 	}
-	s.mu.stats.pointResponseStats.recordResponse(detail.GetScanDetailV2(), payloadBytes, payloadValid)
+	scanDetail := detail.GetScanDetailV2()
+	s.mu.stats.pointResponseExtra.recordResponse(
+		scanDetail,
+		payloadBytes,
+	)
+	s.mu.stats.scanDetail.MergeFromScanDetailV2(scanDetail)
 	if detail == nil {
 		return
 	}
@@ -1347,57 +1349,62 @@ type PointReadScanDetail = util.PointReadScanDetail
 // PointResponseStats is a value snapshot of point-read response statistics.
 type PointResponseStats = util.PointResponseStats
 
-// pointResponseStats keeps the diagnostic scan detail and point-response
-// snapshot under one lock. Only the data, never the lock, is copied or merged.
-type pointResponseStats struct {
-	mu         sync.RWMutex
-	scanDetail util.ScanDetail
-	stats      util.PointResponseStats
+// pointReadResponseExtraStats stores only state that is not already present in
+// SnapshotRuntimeStats.scanDetail. Scan counters are projected when the public
+// PointResponseStats value is requested.
+type pointReadResponseExtraStats struct {
+	payloadBytes      uint64
+	seenResponse      bool
+	missingScanDetail bool
 }
 
-func (s *pointResponseStats) recordResponse(scanDetail *kvrpcpb.ScanDetailV2, payloadBytes uint64, payloadValid bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.scanDetail.MergeFromScanDetailV2(scanDetail)
-	s.stats.RecordResponse(scanDetail, payloadBytes, payloadValid)
+func (s *pointReadResponseExtraStats) recordResponse(
+	scanDetail *kvrpcpb.ScanDetailV2,
+	payloadBytes uint64,
+) {
+	s.payloadBytes += payloadBytes
+	s.seenResponse = true
+	s.missingScanDetail = s.missingScanDetail || scanDetail == nil
 }
 
-func (s *pointResponseStats) recordScanDetail(detail *kvrpcpb.ScanDetailV2) {
-	if detail == nil {
-		return
+func (s *pointReadResponseExtraStats) merge(other pointReadResponseExtraStats) {
+	s.payloadBytes += other.payloadBytes
+	s.seenResponse = s.seenResponse || other.seenResponse
+	s.missingScanDetail = s.missingScanDetail || other.missingScanDetail
+}
+
+func (s pointReadResponseExtraStats) buildPointResponseStats(scanDetail util.ScanDetail) PointResponseStats {
+	if !s.seenResponse {
+		return PointResponseStats{}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.scanDetail.MergeFromScanDetailV2(detail)
-}
-
-func (s *pointResponseStats) snapshot() (util.ScanDetail, util.PointResponseStats) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.scanDetail, s.stats
-}
-
-func (s *pointResponseStats) clone() pointResponseStats {
-	scanDetail, stats := s.snapshot()
-	// Construct a fresh mutex instead of copying the source's mutex.
-	return pointResponseStats{scanDetail: scanDetail, stats: stats}
-}
-
-func (s *pointResponseStats) merge(other *pointResponseStats) {
-	// Release the source lock before locking the target, including for self-merge.
-	scanDetail, stats := other.snapshot()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.scanDetail.Merge(&scanDetail)
-	s.stats.Merge(stats)
+	stats := PointResponseStats{
+		ScanDetail: PointReadScanDetail{
+			TotalKeys:         scanDetail.TotalKeys,
+			ProcessedKeys:     scanDetail.ProcessedKeys,
+			ProcessedKeysSize: scanDetail.ProcessedKeysSize,
+		},
+		PayloadBytes: s.payloadBytes,
+	}
+	// PointResponseStats keeps coverage private. Record a zero-valued response
+	// here only to transfer that coverage into the returned value.
+	coverageScanDetail := &kvrpcpb.ScanDetailV2{}
+	if s.missingScanDetail {
+		coverageScanDetail = nil
+	}
+	stats.RecordResponse(coverageScanDetail, 0)
+	return stats
 }
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats struct {
-	rpcStats            *locate.RegionRequestRuntimeStats
-	backoffSleepMS      map[string]int
-	backoffTimes        map[string]int
-	pointResponseStats  pointResponseStats
+	rpcStats       *locate.RegionRequestRuntimeStats
+	backoffSleepMS map[string]int
+	backoffTimes   map[string]int
+	// scanDetail stores the aggregated storage scan details for this stats instance.
+	// Each instance represents either coprocessor or point-read (Get/BatchGet)
+	// responses, never a mixture of both.
+	scanDetail          util.ScanDetail
+	pointResponseExtra  pointReadResponseExtraStats
 	timeDetail          util.TimeDetail
 	resolveLockDetail   util.ResolveLockDetail
 	readPoolTaskDetails *util.PoolTaskDetails
@@ -1406,7 +1413,8 @@ type SnapshotRuntimeStats struct {
 // Clone implements the RuntimeStats interface.
 func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 	newRs := SnapshotRuntimeStats{
-		pointResponseStats:  rs.pointResponseStats.clone(),
+		scanDetail:          rs.scanDetail,
+		pointResponseExtra:  rs.pointResponseExtra,
 		timeDetail:          rs.timeDetail,
 		resolveLockDetail:   rs.resolveLockDetail,
 		readPoolTaskDetails: rs.readPoolTaskDetails.Clone(),
@@ -1449,7 +1457,10 @@ func (rs *SnapshotRuntimeStats) Merge(other *SnapshotRuntimeStats) {
 			rs.backoffTimes[k] += v
 		}
 	}
-	rs.pointResponseStats.merge(&other.pointResponseStats)
+	otherScanDetail := other.scanDetail
+	otherPointResponseExtra := other.pointResponseExtra
+	rs.pointResponseExtra.merge(otherPointResponseExtra)
+	rs.scanDetail.Merge(&otherScanDetail)
 	rs.timeDetail.Merge(&other.timeDetail)
 	rs.resolveLockDetail.Merge(&other.resolveLockDetail)
 	if !other.readPoolTaskDetails.Empty() {
@@ -1490,8 +1501,7 @@ func (rs *SnapshotRuntimeStats) String() string {
 		buf.WriteString("resolve_lock_time:")
 		buf.WriteString(util.FormatDuration(time.Duration(rs.resolveLockDetail.ResolveLockTime)))
 	}
-	scanDetailSnapshot, _ := rs.pointResponseStats.snapshot()
-	scanDetail := scanDetailSnapshot.String()
+	scanDetail := rs.scanDetail.String()
 	if scanDetail != "" {
 		buf.WriteString(", ")
 		buf.WriteString(scanDetail)
@@ -1506,16 +1516,9 @@ func (rs *SnapshotRuntimeStats) String() string {
 	return buf.String()
 }
 
-func checkedAddUint64(current, delta uint64) (uint64, bool) {
-	if delta > math.MaxUint64-current {
-		return 0, false
-	}
-	return current + delta, true
-}
-
 // GetPointResponseStats returns a consistent value snapshot of point-read scan
 // detail, response payload, and their response-level coverage. The result is
-// invalid when the receiver is nil or any field overflowed during aggregation.
+// invalid when the receiver is nil.
 // ScanDetailComplete and PayloadComplete distinguish response coverage from a
 // valid zero-response snapshot.
 func (rs *SnapshotRuntimeStats) GetPointResponseStats() PointResponseStats {
@@ -1524,8 +1527,7 @@ func (rs *SnapshotRuntimeStats) GetPointResponseStats() PointResponseStats {
 		stats.Invalidate()
 		return stats
 	}
-	_, pointResponseStats := rs.pointResponseStats.snapshot()
-	return pointResponseStats
+	return rs.pointResponseExtra.buildPointResponseStats(rs.scanDetail)
 }
 
 // GetTimeDetail returns the timeDetail

@@ -15,7 +15,6 @@
 package util
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -32,7 +31,7 @@ func TestPointResponseStatsRecordResponse(t *testing.T) {
 	require.False(t, stats.PayloadComplete())
 
 	// A real all-zero response establishes coverage without contributing values.
-	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0, true)
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
 	require.True(t, stats.ScanDetailComplete())
 	require.True(t, stats.PayloadComplete())
 	require.Zero(t, stats.ScanDetail)
@@ -40,24 +39,24 @@ func TestPointResponseStatsRecordResponse(t *testing.T) {
 
 	stats.RecordResponse(&kvrpcpb.ScanDetailV2{
 		TotalVersions: 5, ProcessedVersions: 3, ProcessedVersionsSize: 30,
-	}, 7, true)
+	}, 7)
 	require.Equal(t, PointReadScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30}, stats.ScanDetail)
 	require.Equal(t, uint64(7), stats.PayloadBytes)
 
 	// Missing scan detail does not invalidate an otherwise accounted-for payload.
-	stats.RecordResponse(nil, 2, true)
+	stats.RecordResponse(nil, 2)
 	require.True(t, stats.IsValid())
 	require.False(t, stats.ScanDetailComplete())
 	require.True(t, stats.PayloadComplete())
 	require.Equal(t, uint64(9), stats.PayloadBytes)
-	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0, true)
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
 	require.False(t, stats.ScanDetailComplete(), "later responses must not hide missing detail")
 }
 
 func TestPointResponseStatsMerge(t *testing.T) {
 	var complete, missing, invalid PointResponseStats
-	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2}, 3, true)
-	missing.RecordResponse(nil, 5, true)
+	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2}, 3)
+	missing.RecordResponse(nil, 5)
 	invalid.Invalidate()
 	states := []struct {
 		name              string
@@ -111,74 +110,17 @@ func TestPointResponseStatsInvalid(t *testing.T) {
 		require.False(t, stats.ScanDetailComplete())
 		require.False(t, stats.PayloadComplete())
 		before := stats
-		stats.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1, true)
+		stats.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1)
 		require.Equal(t, before, stats, "invalid state and accumulated values must be preserved")
 	}
 
-	t.Run("protobuf conversion", func(t *testing.T) {
-		for _, tc := range []struct {
-			name   string
-			detail *kvrpcpb.ScanDetailV2
-		}{
-			{"total versions", &kvrpcpb.ScanDetailV2{TotalVersions: math.MaxUint64}},
-			{"processed versions", &kvrpcpb.ScanDetailV2{ProcessedVersions: math.MaxUint64}},
-			{"processed versions size", &kvrpcpb.ScanDetailV2{ProcessedVersionsSize: math.MaxUint64}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				var stats PointResponseStats
-				stats.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 2, true)
-				before := stats
-				stats.RecordResponse(tc.detail, 3, true)
-				assertInvalid(t, stats)
-				require.Equal(t, before.ScanDetail, stats.ScanDetail)
-				require.Equal(t, before.PayloadBytes, stats.PayloadBytes)
-			})
-		}
-	})
-
-	t.Run("numeric aggregation", func(t *testing.T) {
-		for _, tc := range []struct {
-			name  string
-			stats PointResponseStats
-		}{
-			{"total keys", PointResponseStats{ScanDetail: PointReadScanDetail{TotalKeys: math.MaxInt64}}},
-			{"processed keys", PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeys: math.MaxInt64}}},
-			{"processed size", PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeysSize: math.MaxInt64}}},
-			{"payload bytes", PointResponseStats{PayloadBytes: math.MaxUint64}},
-			{"negative total keys", PointResponseStats{ScanDetail: PointReadScanDetail{TotalKeys: -1}}},
-			{"negative processed keys", PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeys: -1}}},
-			{"negative processed size", PointResponseStats{ScanDetail: PointReadScanDetail{ProcessedKeysSize: -1}}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				stats := tc.stats
-				stats.RecordResponse(&kvrpcpb.ScanDetailV2{
-					TotalVersions: 1, ProcessedVersions: 1, ProcessedVersionsSize: 1,
-				}, 1, true)
-				assertInvalid(t, stats)
-				require.Equal(t, tc.stats.ScanDetail, stats.ScanDetail)
-				require.Equal(t, tc.stats.PayloadBytes, stats.PayloadBytes)
-
-				// Merge also rejects overflow and negative fields in its source.
-				var merged PointResponseStats
-				merged.RecordResponse(&kvrpcpb.ScanDetailV2{
-					TotalVersions: 1, ProcessedVersions: 1, ProcessedVersionsSize: 1,
-				}, 1, true)
-				before := merged
-				merged.Merge(tc.stats)
-				assertInvalid(t, merged)
-				require.Equal(t, before.ScanDetail, merged.ScanDetail)
-				require.Equal(t, before.PayloadBytes, merged.PayloadBytes)
-			})
-		}
-	})
-
-	t.Run("payload accounting and explicit invalidation", func(t *testing.T) {
+	t.Run("explicit invalidation", func(t *testing.T) {
 		var stats PointResponseStats
-		stats.RecordResponse(nil, 0, false)
+		stats.Invalidate()
 		assertInvalid(t, stats)
 
 		var complete PointResponseStats
-		complete.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0, true)
+		complete.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
 		complete.Invalidate()
 		assertInvalid(t, complete)
 	})

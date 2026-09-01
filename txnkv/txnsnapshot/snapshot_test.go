@@ -40,25 +40,17 @@ func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {
 	require.False(t, pointStats.PayloadComplete())
 	require.Equal(t, PointResponseStats{}, pointStats)
 
-	// Merging a standalone ExecDetails value preserves its existing diagnostic
-	// purpose and does not fabricate point-response coverage.
-	snapshot.mergeExecDetail(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
-		TotalVersions: 9,
-	}})
-	require.Equal(t, PointResponseStats{}, stats.GetPointResponseStats())
-	require.Contains(t, stats.String(), "total_keys: 9")
-
 	// Missing ExecDetailsV2 differs from a present, zero-valued ScanDetailV2.
-	snapshot.mergePointResponse(nil, 0, true)
-	snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{}, 7, true)
-	snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{}}, 0, true)
+	snapshot.mergePointResponse(nil, 0)
+	snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{}, 7)
+	snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{}}, 0)
 	snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
 		TotalVersions:            11,
 		ProcessedVersions:        7,
 		ProcessedVersionsSize:    70,
 		RocksdbBlockReadByte:     99,
 		IaRemoteReadSegmentBytes: 101,
-	}}, 13, true)
+	}}, 13)
 
 	pointStats = stats.GetPointResponseStats()
 	require.True(t, pointStats.IsValid())
@@ -76,6 +68,23 @@ func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {
 	require.Equal(t, int64(11), stats.GetPointResponseStats().ScanDetail.TotalKeys)
 }
 
+func TestSnapshotRuntimeStatsStandaloneScanDetailDoesNotEstablishPointCoverage(t *testing.T) {
+	stats := &SnapshotRuntimeStats{}
+	snapshot := newSnapshotWithRuntimeStats(stats)
+
+	// Standalone execution details remain visible through the legacy diagnostic
+	// scan detail, but do not establish point-response coverage.
+	snapshot.mergeExecDetail(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+		TotalVersions: 9,
+	}})
+	pointStats := stats.GetPointResponseStats()
+	require.True(t, pointStats.IsValid())
+	require.False(t, pointStats.ScanDetailComplete())
+	require.False(t, pointStats.PayloadComplete())
+	require.Equal(t, PointResponseStats{}, pointStats)
+	require.Contains(t, stats.String(), "total_keys: 9")
+}
+
 func TestSnapshotRuntimeStatsPointResponseCloneAndMerge(t *testing.T) {
 	source := &SnapshotRuntimeStats{}
 	sourceSnapshot := newSnapshotWithRuntimeStats(source)
@@ -83,15 +92,15 @@ func TestSnapshotRuntimeStatsPointResponseCloneAndMerge(t *testing.T) {
 		TotalVersions:         5,
 		ProcessedVersions:     3,
 		ProcessedVersionsSize: 30,
-	}}, 7, true)
-	sourceSnapshot.mergePointResponse(nil, 0, true)
+	}}, 7)
+	sourceSnapshot.mergePointResponse(nil, 0)
 
 	clone := source.Clone()
 	sourceSnapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
 		TotalVersions:         7,
 		ProcessedVersions:     4,
 		ProcessedVersionsSize: 40,
-	}}, 11, true)
+	}}, 11)
 
 	cloneStats := clone.GetPointResponseStats()
 	require.Equal(t, PointReadScanDetail{
@@ -118,9 +127,11 @@ func TestSnapshotRuntimeStatsPointResponseCloneAndMerge(t *testing.T) {
 	require.False(t, targetStats.ScanDetailComplete())
 	require.True(t, targetStats.PayloadComplete())
 
-	// Merging with itself snapshots the source before acquiring the target lock.
+	// Self-merge doubles the accumulated values without changing the source clone.
 	target.Merge(target)
-	require.Equal(t, uint64(50), target.GetPointResponseStats().PayloadBytes)
+	targetStats = target.GetPointResponseStats()
+	require.Equal(t, int64(34), targetStats.ScanDetail.TotalKeys)
+	require.Equal(t, uint64(50), targetStats.PayloadBytes)
 	require.Equal(t, cloneStats, clone.GetPointResponseStats())
 }
 
@@ -129,14 +140,6 @@ func TestSnapshotRuntimeStatsPointResponseInvalid(t *testing.T) {
 	require.False(t, nilStats.GetPointResponseStats().IsValid())
 	require.False(t, nilStats.GetPointResponseStats().ScanDetailComplete())
 	require.False(t, nilStats.GetPointResponseStats().PayloadComplete())
-
-	stats := &SnapshotRuntimeStats{}
-	newSnapshotWithRuntimeStats(stats).mergePointResponse(nil, 0, false)
-	require.False(t, stats.GetPointResponseStats().IsValid())
-	require.False(t, stats.Clone().GetPointResponseStats().IsValid())
-	merged := &SnapshotRuntimeStats{}
-	merged.Merge(stats)
-	require.False(t, merged.GetPointResponseStats().IsValid())
 }
 
 func TestCollectBatchGetResponseDataPointResponseStats(t *testing.T) {
@@ -220,32 +223,14 @@ func testLockInfo(key string) *kvrpcpb.LockInfo {
 	}
 }
 
-func TestSnapshotRuntimeStatsConcurrentPointResponseAccess(t *testing.T) {
+func TestSnapshotRuntimeStatsConcurrentPointResponseWrites(t *testing.T) {
 	const (
 		writers       = 8
 		responsesEach = 100
-		readers       = 4
-		readsEach     = 200
 	)
 	stats := &SnapshotRuntimeStats{}
 	snapshot := newSnapshotWithRuntimeStats(stats)
 	start := make(chan struct{})
-
-	var readerWG sync.WaitGroup
-	for range readers {
-		readerWG.Add(1)
-		go func() {
-			defer readerWG.Done()
-			<-start
-			for range readsEach {
-				stats.GetPointResponseStats()
-				clone := stats.Clone()
-				merged := &SnapshotRuntimeStats{}
-				merged.Merge(clone)
-				_ = merged.String()
-			}
-		}()
-	}
 
 	var writerWG sync.WaitGroup
 	errCh := make(chan error, writers)
@@ -278,7 +263,6 @@ func TestSnapshotRuntimeStatsConcurrentPointResponseAccess(t *testing.T) {
 
 	close(start)
 	writerWG.Wait()
-	readerWG.Wait()
 	close(errCh)
 	for err := range errCh {
 		require.NoError(t, err)

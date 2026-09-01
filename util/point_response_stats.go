@@ -14,11 +14,7 @@
 
 package util
 
-import (
-	"math"
-
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-)
+import "github.com/pingcap/kvproto/pkg/kvrpcpb"
 
 // PointReadScanDetail is the storage work reported by point-read responses.
 type PointReadScanDetail struct {
@@ -81,25 +77,14 @@ func (stats *PointResponseStats) Invalidate() {
 // RecordResponse records one recognized response after transport and region
 // errors have been handled. Empty and key-error responses must also be recorded,
 // and each retry response is recorded separately. A nil scanDetail records
-// missing scan detail. A false payloadValid or any numeric overflow invalidates
-// the snapshot without adding the response's values.
-func (stats *PointResponseStats) RecordResponse(scanDetail *kvrpcpb.ScanDetailV2, payloadBytes uint64, payloadValid bool) {
-	if !payloadValid {
-		stats.Invalidate()
-		return
-	}
+// missing scan detail.
+func (stats *PointResponseStats) RecordResponse(scanDetail *kvrpcpb.ScanDetailV2, payloadBytes uint64) {
 	delta := PointResponseStats{
 		PayloadBytes:      payloadBytes,
 		seenResponse:      true,
 		missingScanDetail: scanDetail == nil,
 	}
 	if scanDetail != nil {
-		if scanDetail.TotalVersions > math.MaxInt64 ||
-			scanDetail.ProcessedVersions > math.MaxInt64 ||
-			scanDetail.ProcessedVersionsSize > math.MaxInt64 {
-			stats.Invalidate()
-			return
-		}
 		delta.ScanDetail = PointReadScanDetail{
 			TotalKeys:         int64(scanDetail.TotalVersions),
 			ProcessedKeys:     int64(scanDetail.ProcessedVersions),
@@ -109,36 +94,22 @@ func (stats *PointResponseStats) RecordResponse(scanDetail *kvrpcpb.ScanDetailV2
 	stats.Merge(delta)
 }
 
-// Merge adds another snapshot's values and preserves missing-detail and invalid
-// states. Invalid input or arithmetic overflow invalidates the receiver without
-// changing its accumulated values. Merging a zero-value snapshot is a no-op.
+// Merge adds another snapshot's values and preserves missing-detail state. If
+// either snapshot is invalid, the receiver becomes invalid without changing its
+// accumulated values. Merging a zero-value snapshot is a no-op.
 func (stats *PointResponseStats) Merge(other PointResponseStats) {
 	if !stats.IsValid() || !other.IsValid() {
 		stats.Invalidate()
 		return
 	}
-	totalKeys, totalOK := checkedAddNonNegativeInt64(stats.ScanDetail.TotalKeys, other.ScanDetail.TotalKeys)
-	processedKeys, processedOK := checkedAddNonNegativeInt64(stats.ScanDetail.ProcessedKeys, other.ScanDetail.ProcessedKeys)
-	processedSize, sizeOK := checkedAddNonNegativeInt64(stats.ScanDetail.ProcessedKeysSize, other.ScanDetail.ProcessedKeysSize)
-	if !totalOK || !processedOK || !sizeOK || other.PayloadBytes > math.MaxUint64-stats.PayloadBytes {
-		stats.Invalidate()
-		return
-	}
 	*stats = PointResponseStats{
 		ScanDetail: PointReadScanDetail{
-			TotalKeys:         totalKeys,
-			ProcessedKeys:     processedKeys,
-			ProcessedKeysSize: processedSize,
+			TotalKeys:         stats.ScanDetail.TotalKeys + other.ScanDetail.TotalKeys,
+			ProcessedKeys:     stats.ScanDetail.ProcessedKeys + other.ScanDetail.ProcessedKeys,
+			ProcessedKeysSize: stats.ScanDetail.ProcessedKeysSize + other.ScanDetail.ProcessedKeysSize,
 		},
 		PayloadBytes:      stats.PayloadBytes + other.PayloadBytes,
 		seenResponse:      stats.seenResponse || other.seenResponse,
 		missingScanDetail: stats.missingScanDetail || other.missingScanDetail,
 	}
-}
-
-func checkedAddNonNegativeInt64(current, delta int64) (int64, bool) {
-	if current < 0 || delta < 0 || delta > math.MaxInt64-current {
-		return 0, false
-	}
-	return current + delta, true
 }
