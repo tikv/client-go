@@ -74,7 +74,7 @@ func TestSnapshotRuntimeStatsStandaloneScanDetailDoesNotEstablishPointCoverage(t
 
 	// Standalone execution details remain visible through the legacy diagnostic
 	// scan detail, but do not establish point-response coverage.
-	snapshot.mergeExecDetail(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+	SnapshotProbe{KVSnapshot: snapshot}.MergeExecDetail(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
 		TotalVersions: 9,
 	}})
 	pointStats := stats.GetPointResponseStats()

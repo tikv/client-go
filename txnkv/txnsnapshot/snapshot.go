@@ -969,9 +969,9 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 	}
 }
 
+// mergeExecDetail merges execution details into runtime stats. The caller must
+// hold s.mu.
 func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if detail == nil || s.mu.stats == nil {
 		return
 	}
@@ -1005,17 +1005,7 @@ func (s *KVSnapshot) mergePointResponse(detail *kvrpcpb.ExecDetailsV2, payloadBy
 		scanDetail,
 		payloadBytes,
 	)
-	s.mu.stats.scanDetail.MergeFromScanDetailV2(scanDetail)
-	if detail == nil {
-		return
-	}
-	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
-	if details := detail.GetReadPoolTaskDetails(); details != nil {
-		if s.mu.stats.readPoolTaskDetails == nil {
-			s.mu.stats.readPoolTaskDetails = &util.PoolTaskDetails{}
-		}
-		s.mu.stats.readPoolTaskDetails.MergeFromPB(details)
-	}
+	s.mergeExecDetail(detail)
 }
 
 // Iter return a list of key-value pair after `k`.
