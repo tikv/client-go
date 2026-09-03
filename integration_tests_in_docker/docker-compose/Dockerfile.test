@@ -1,0 +1,14 @@
+FROM golang:1.25.12@sha256:fe5d57d3b718e7a4986bae156c2d73f44973bfd313073aed08a4de6692bb6161
+
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+COPY integration_tests_in_docker/go.mod integration_tests_in_docker/go.sum ./integration_tests_in_docker/
+WORKDIR /workspace/integration_tests_in_docker
+RUN go mod download
+
+WORKDIR /workspace
+COPY . .
+
+WORKDIR /workspace/integration_tests_in_docker
+CMD ["go", "test", "-v", "-count=1", "-timeout=10m", "./txn_file"]
