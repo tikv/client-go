@@ -483,7 +483,11 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 		if limit == 0 {
 			n = 1
 		}
-		b.entries.Take(int(n), build)
+		reqs := b.entries.Take(int(n))
+		if len(reqs) == 0 {
+			break
+		}
+		build(reqs)
 	}
 	var directGroup *batchCommandsRequestGroup
 	if len(b.directGroup.req.Requests) > 0 {
