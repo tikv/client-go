@@ -21,7 +21,110 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPointResponseStatsRecordResponse(t *testing.T) {
+	var stats PointResponseStats
+	require.True(t, stats.IsValid())
+	require.False(t, stats.ScanDetailComplete())
+	require.False(t, stats.PayloadComplete())
+
+	// A real all-zero response establishes coverage without contributing values.
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+	require.True(t, stats.ScanDetailComplete())
+	require.True(t, stats.PayloadComplete())
+	require.Zero(t, stats.ScanDetail)
+	require.Zero(t, stats.PayloadBytes)
+
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{
+		TotalVersions: 5, ProcessedVersions: 3, ProcessedVersionsSize: 30,
+	}, 7)
+	require.Equal(t, PointReadScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30}, stats.ScanDetail)
+	require.Equal(t, uint64(7), stats.PayloadBytes)
+
+	// Missing scan detail does not invalidate an otherwise accounted-for payload.
+	stats.RecordResponse(nil, 2)
+	require.True(t, stats.IsValid())
+	require.False(t, stats.ScanDetailComplete())
+	require.True(t, stats.PayloadComplete())
+	require.Equal(t, uint64(9), stats.PayloadBytes)
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+	require.False(t, stats.ScanDetailComplete(), "later responses must not hide missing detail")
+}
+
+func TestPointResponseStatsMerge(t *testing.T) {
+	var complete, missing, invalid PointResponseStats
+	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2}, 3)
+	missing.RecordResponse(nil, 5)
+	invalid.Invalidate()
+	states := []struct {
+		name              string
+		stats             PointResponseStats
+		valid             bool
+		seenResponse      bool
+		missingScanDetail bool
+	}{
+		{name: "empty", valid: true},
+		{name: "complete", stats: complete, valid: true, seenResponse: true},
+		{name: "missing", stats: missing, valid: true, seenResponse: true, missingScanDetail: true},
+		{name: "invalid", stats: invalid},
+	}
+	for _, left := range states {
+		for _, right := range states {
+			t.Run(left.name+"/"+right.name, func(t *testing.T) {
+				stats := left.stats
+				stats.Merge(right.stats)
+				valid := left.valid && right.valid
+				seen := left.seenResponse || right.seenResponse
+				missingDetail := left.missingScanDetail || right.missingScanDetail
+				require.Equal(t, valid, stats.IsValid())
+				require.Equal(t, valid && seen, stats.PayloadComplete())
+				require.Equal(t, valid && seen && !missingDetail, stats.ScanDetailComplete())
+				if valid {
+					require.Equal(t, left.stats.ScanDetail.TotalKeys+right.stats.ScanDetail.TotalKeys, stats.ScanDetail.TotalKeys)
+					require.Equal(t, left.stats.PayloadBytes+right.stats.PayloadBytes, stats.PayloadBytes)
+				} else {
+					require.Equal(t, left.stats.ScanDetail, stats.ScanDetail)
+					require.Equal(t, left.stats.PayloadBytes, stats.PayloadBytes)
+				}
+			})
+		}
+	}
+
+	// Copies are independent and merging an empty snapshot preserves all state.
+	copy := complete
+	copy.Merge(PointResponseStats{})
+	require.Equal(t, complete, copy)
+	copy.Merge(copy)
+	require.Equal(t, int64(4), copy.ScanDetail.TotalKeys)
+	require.Equal(t, uint64(6), copy.PayloadBytes)
+	require.Equal(t, int64(2), complete.ScanDetail.TotalKeys)
+	require.Equal(t, uint64(3), complete.PayloadBytes)
+}
+
+func TestPointResponseStatsInvalid(t *testing.T) {
+	assertInvalid := func(t *testing.T, stats PointResponseStats) {
+		t.Helper()
+		require.False(t, stats.IsValid())
+		require.False(t, stats.ScanDetailComplete())
+		require.False(t, stats.PayloadComplete())
+		before := stats
+		stats.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1)
+		require.Equal(t, before, stats, "invalid state and accumulated values must be preserved")
+	}
+
+	t.Run("explicit invalidation", func(t *testing.T) {
+		var stats PointResponseStats
+		stats.Invalidate()
+		assertInvalid(t, stats)
+
+		var complete PointResponseStats
+		complete.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+		complete.Invalidate()
+		assertInvalid(t, complete)
+	})
+}
 
 func TestRUDetailsDrainRUV2(t *testing.T) {
 	ruDetails := NewRUDetails()
