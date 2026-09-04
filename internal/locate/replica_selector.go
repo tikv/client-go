@@ -40,6 +40,14 @@ type replicaSelector struct {
 	proxy                     *replica
 	attempts                  int
 	regionInvalidatedForRetry bool // set when region is hard-invalidated but this selector should still retry on leader
+	// leaderBusyCount counts the ServerIsBusy(0) errors received on the cached leader, and
+	// leaderBusyProbed records whether a suspect-not-leader probe has been fired. Both are
+	// per-selector states used to work around tikv/client-go#2028, see onServerIsBusy.
+	// leaderBusyPeerID is the peer the count belongs to: the count restarts whenever the
+	// cached leader changes, so a new leader won't inherit the old leader's count.
+	leaderBusyCount  int
+	leaderBusyPeerID uint64
+	leaderBusyProbed bool
 }
 
 // disableReadFeaturesForNextGen disables replica-read and stale-read feature
@@ -244,7 +252,10 @@ type ReplicaSelectLeaderStrategy struct {
 
 func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	leader := replicas[s.leaderIdx]
-	if isLeaderCandidate(leader) {
+	// Skip a leader replica flagged with suspectNotLeaderFlag, so that the selector falls
+	// back to the mixed strategy and probes a follower to trigger a NotLeader reply which
+	// heals the region cache (tikv/client-go#2028).
+	if isLeaderCandidate(leader) && !leader.hasFlag(suspectNotLeaderFlag) {
 		return leader
 	}
 	return nil
@@ -319,6 +330,17 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	if s.busyThreshold > 0 {
 		// when can't find an idle replica, no need to invalidate region.
 		return nil
+	}
+	// The leader is skipped only because it is suspected to have lost leadership. When there
+	// is no other replica to probe (single-replica region, or all followers are
+	// unreachable/stale/exhausted) or the probe turns out fruitless, restore the leader and
+	// fall back to the existing backoff-retry behavior instead of invalidating the region
+	// and reloading it from PD for nothing (tikv/client-go#2028).
+	if leader := replicas[s.leaderIdx]; leader.hasFlag(suspectNotLeaderFlag) {
+		leader.deleteFlag(suspectNotLeaderFlag)
+		if isLeaderCandidate(leader) {
+			return leader
+		}
 	}
 	// when meet deadline exceeded error, do fast retry without invalidate region cache.
 	if !hasDeadlineExceededError(selector.replicas) {
@@ -565,6 +587,10 @@ func (s *replicaSelector) onRegionNotFound(
 	return false, nil
 }
 
+// leaderBusyProbeThreshold is the number of ServerIsBusy(0) errors received from the same
+// cached leader within one selector that triggers a suspect-not-leader probe.
+const leaderBusyProbeThreshold = 2
+
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
@@ -586,6 +612,34 @@ func (s *replicaSelector) onServerIsBusy(
 		} else {
 			// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
 			ctx.Store.healthStatus.markAlreadySlow()
+			// Workaround for tikv/client-go#2028: if the store's read pool is wedged, leader
+			// reads are rejected with ServerIsBusy(0) at the pool entrance, so the request
+			// never reaches the raft layer and no NotLeader error is returned even if PD has
+			// already moved the leader away. Retrying the cached leader then hammers the
+			// half-dead store indefinitely. After 2 such rejections from the same cached
+			// leader within this selector (the count restarts only when the cached leader
+			// changes), mark it suspect-not-leader so that the next attempt probes a follower
+			// with the leader read (req.ReplicaRead is kept unchanged). The follower replies
+			// NotLeader with the real leader hint, which heals the shared region cache via
+			// onNotLeader/updateLeader. Probe at most once per selector; if the store is
+			// still the leader, the hint points back to it, onUpdateLeader clears the flag,
+			// and the only cost is one rejected RPC.
+			leaderPeerID := s.region.GetLeaderPeerID()
+			if s.replicaReadType == kv.ReplicaReadLeader && !s.isStaleRead && !s.option.leaderOnly &&
+				s.target != nil && s.target.peer != nil && s.target.peer.Id == leaderPeerID && !s.leaderBusyProbed {
+				// The count belongs to a specific cached leader: whenever the cached leader
+				// changes (e.g. switched by a NotLeader hint), restart the count for the new
+				// leader so that it won't be marked after inheriting the old leader's count.
+				if s.leaderBusyPeerID != leaderPeerID {
+					s.leaderBusyPeerID = leaderPeerID
+					s.leaderBusyCount = 0
+				}
+				s.leaderBusyCount++
+				if s.leaderBusyCount >= leaderBusyProbeThreshold {
+					s.target.addFlag(suspectNotLeaderFlag)
+					s.leaderBusyProbed = true
+				}
+			}
 		}
 	}
 	backoffErr := newBackoffErrWithRPCContext("server is busy", ctx)

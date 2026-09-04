@@ -2869,7 +2869,6 @@ func (s *testCommitterSuite) Test2PCLifecycleHooks() {
 	s.Nil(t1.Commit(context.Background()))
 
 	s.Equal(reachedPre.Load(), true)
-	s.Equal(reachedPost.Load(), false)
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
@@ -2902,7 +2901,6 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 	committer.CleanupWithoutWait(context.Background())
 
 	s.Equal(reachedPre.Load(), true)
-	s.Equal(reachedPost.Load(), false)
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }

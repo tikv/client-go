@@ -59,14 +59,17 @@ func defaultLockWaitTime() *lockWaitTimeInMs {
 
 // LockCtx contains information for LockKeys method.
 type LockCtx struct {
-	Killed                  *uint32
-	ForUpdateTS             uint64
-	lockWaitTime            *lockWaitTimeInMs
-	WaitStartTime           time.Time
-	ReturnValues            bool
-	CheckExistence          bool
-	LockOnlyIfExists        bool
-	InShareMode             bool
+	Killed           *uint32
+	ForUpdateTS      uint64
+	lockWaitTime     *lockWaitTimeInMs
+	WaitStartTime    time.Time
+	ReturnValues     bool
+	CheckExistence   bool
+	LockOnlyIfExists bool
+	InShareMode      bool
+	// AllowSharedLockUpgrade allows LockKeys to upgrade pessimistic shared
+	// locks already held by the transaction to exclusive locks.
+	AllowSharedLockUpgrade  bool
 	Values                  map[string]ReturnedValue
 	MaxLockedWithConflictTS uint64
 	ValuesLock              sync.Mutex

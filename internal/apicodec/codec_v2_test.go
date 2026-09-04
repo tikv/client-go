@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -42,7 +43,7 @@ func TestCodecV2(t *testing.T) {
 
 func (suite *testCodecV2Suite) SetupSuite() {
 	testKeyspaceMeta := keyspacepb.KeyspaceMeta{
-		Id: testKeyspaceID,
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testKeyspaceID},
 	}
 	codec, err := NewCodecV2(ModeRaw, &testKeyspaceMeta)
 	suite.NoError(err)
@@ -181,7 +182,7 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 				// TiFlash carries API v2 context separately through ApiVersion and KeyspaceId.
 				re.Equal([]byte("compact-start"), encoded.Compact().StartKey)
 				re.Equal(kvrpcpb.APIVersion_V2, encoded.Compact().ApiVersion)
-				re.Equal(testKeyspaceID, encoded.Compact().KeyspaceId)
+				re.Equal(testKeyspaceID, encoded.Compact().GetKeyspaceId())
 			},
 		},
 	}
@@ -289,7 +290,7 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 	}
 	for _, testCase := range testCases {
 
-		keyspaceMeta := &keyspacepb.KeyspaceMeta{Id: testCase.keyspaceID}
+		keyspaceMeta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: testCase.keyspaceID}}
 		if testCase.shouldErr {
 			_, err := NewCodecV2(testCase.mode, keyspaceMeta)
 			re.Error(err)
@@ -304,6 +305,22 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 		re.Equal(testCase.expectedPrefix, v2Codec.prefix)
 		re.Equal(testCase.expectedEnd, v2Codec.endKey)
 	}
+}
+
+func (suite *testCodecV2Suite) TestNewCodecV2RejectsKeyspaceIdentity() {
+	re := suite.Require()
+	// API V3 identity must not be silently treated as the default keyspace (ID 0).
+	meta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_KeyspaceIdentity{
+		KeyspaceIdentity: &apipb.KeyspaceIdentity{NamespaceId: 1, KeyspaceId: 2},
+	}}
+	_, err := NewCodecV2(ModeTxn, meta)
+	re.Error(err)
+}
+
+func (suite *testCodecV2Suite) TestNewCodecV2RejectsNilMeta() {
+	// A nil meta must fail loudly instead of silently becoming keyspace 0.
+	_, err := NewCodecV2(ModeTxn, nil)
+	suite.Require().Error(err)
 }
 
 func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
@@ -530,6 +547,36 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 				}, decoded.DebugInfo.MvccInfo[0].Mvcc.Lock.Secondaries)
 			},
 		},
+		{
+			name: "SharedLockLost",
+			err: &kvrpcpb.KeyError{
+				SharedLockLost: &kvrpcpb.SharedLockLost{
+					Key:     append(keyspacePrefix, []byte("key1")...),
+					StartTs: 11,
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.SharedLockLost.Key)
+				re.Equal(uint64(11), decoded.SharedLockLost.StartTs)
+			},
+		},
+		{
+			name: "LockUpgradeConflict",
+			err: &kvrpcpb.KeyError{
+				LockUpgradeConflict: &kvrpcpb.LockUpgradeConflict{
+					Key:          append(keyspacePrefix, []byte("key1")...),
+					StartTs:      11,
+					OwnerStartTs: 22,
+					Reason:       kvrpcpb.LockUpgradeConflict_DuplicateInFlight,
+				},
+			},
+			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.LockUpgradeConflict.Key)
+				re.Equal(uint64(11), decoded.LockUpgradeConflict.StartTs)
+				re.Equal(uint64(22), decoded.LockUpgradeConflict.OwnerStartTs)
+				re.Equal(kvrpcpb.LockUpgradeConflict_DuplicateInFlight, decoded.LockUpgradeConflict.Reason)
+			},
+		},
 	}
 
 	codec := suite.codec
@@ -683,6 +730,104 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			},
 		},
 		{
+			name: "CmdCopStoreBatchLock",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("batch-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("batch-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("batch-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				lock := resp.BatchResponses[0].Locked
+				re.Equal([]byte("batch-lock-key"), lock.Key)
+				re.Equal([]byte("batch-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("batch-secondary")}, lock.Secondaries)
+
+				// A decoded lock must round-trip through request encoding, e.g. when
+				// the lock's primary is fed back into a CheckTxnStatus request.
+				checkTxnStatusReq, err := suite.codec.EncodeRequest(&tikvrpc.Request{
+					Type: tikvrpc.CmdCheckTxnStatus,
+					Req: &kvrpcpb.CheckTxnStatusRequest{
+						PrimaryKey: lock.PrimaryLock,
+					},
+				})
+				re.NoError(err)
+				re.Equal(append(keyspacePrefix, []byte("batch-primary")...), checkTxnStatusReq.CheckTxnStatus().PrimaryKey)
+			},
+		},
+		{
+			name: "CmdCopStoreBatchRegionError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: makeRegionError(
+								[]byte("batch-region-key"),
+								[]byte("batch-range-start"),
+								[]byte("batch-range-end"),
+							),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				regionErr := resp.BatchResponses[0].RegionError.KeyNotInRegion
+				re.Equal([]byte("batch-region-key"), regionErr.Key)
+				re.Equal([]byte("batch-range-start"), regionErr.StartKey)
+				re.Equal([]byte("batch-range-end"), regionErr.EndKey)
+			},
+		},
+		{
+			name: "CmdCopStoreBatchBucketVersionNotMatch",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: &errorpb.Error{
+								BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+									Version: 2,
+									Keys: [][]byte{
+										suite.codec.EncodeRegionKey([]byte("bucket-a")),
+										suite.codec.EncodeRegionKey([]byte("bucket-b")),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				bucketErr := resp.BatchResponses[0].RegionError.BucketVersionNotMatch
+				re.Equal(uint64(2), bucketErr.Version)
+				re.Equal([][]byte{[]byte("bucket-a"), []byte("bucket-b")}, bucketErr.Keys)
+			},
+		},
+		{
 			name: "CmdLockWaitInfo",
 			req: &tikvrpc.Request{
 				Type: tikvrpc.CmdLockWaitInfo,
@@ -829,6 +974,45 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 				re.Equal([]byte("compacted-end"), resp.CompactedEndKey)
 			},
 		},
+		{
+			name: "CmdSplitRegionKeyError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdSplitRegion,
+				Req:  &kvrpcpb.SplitRegionRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.SplitRegionResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Regions: []*metapb.Region{
+						{
+							StartKey: suite.codec.EncodeRegionKey([]byte("split-start")),
+							EndKey:   suite.codec.EncodeRegionKey([]byte("split-end")),
+						},
+					},
+					Errors: []*kvrpcpb.KeyError{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("split-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("split-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("split-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.SplitRegionResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Len(resp.Regions, 1)
+				re.Equal([]byte("split-start"), resp.Regions[0].StartKey)
+				re.Equal([]byte("split-end"), resp.Regions[0].EndKey)
+				re.Len(resp.Errors, 1)
+				lock := resp.Errors[0].Locked
+				re.Equal([]byte("split-lock-key"), lock.Key)
+				re.Equal([]byte("split-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("split-secondary")}, lock.Secondaries)
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -840,6 +1024,35 @@ func (suite *testCodecV2Suite) TestDecodeResponseSecondWaveCommands() {
 			test.validate(re, decoded)
 		})
 	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseMalformedBucketKeys() {
+	re := suite.Require()
+	req := &tikvrpc.Request{
+		Type: tikvrpc.CmdCop,
+		Req:  &coprocessor.Request{},
+	}
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+				{
+					RegionError: &errorpb.Error{
+						BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+							Keys: [][]byte{
+								suite.codec.EncodeRegionKey([]byte("bucket-a")),
+								{0x01}, // Invalid mem-comparable encoding.
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	decoded, err := suite.codec.DecodeResponse(req, resp)
+	re.Error(err)
+	re.True(IsDecodeError(err))
+	re.Nil(decoded)
 }
 
 func (suite *testCodecV2Suite) TestDecodeMvccInfoPreservesEmptyLockKeys() {
@@ -884,7 +1097,7 @@ func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
 	suite.Nil(err)
 	task, ok := req.Req.(*mpp.DispatchTaskRequest)
 	suite.True(ok)
-	suite.Equal(task.Meta.KeyspaceId, testKeyspaceID)
+	suite.Equal(testKeyspaceID, task.Meta.GetKeyspaceId())
 	suite.Equal(task.Meta.ApiVersion, kvrpcpb.APIVersion_V2)
 	suite.Equal(task.Regions[0].Ranges[0].Start, suite.codec.EncodeKey([]byte("a")))
 	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))

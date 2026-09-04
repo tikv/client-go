@@ -21,7 +21,110 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPointResponseStatsRecordResponse(t *testing.T) {
+	var stats PointResponseStats
+	require.True(t, stats.IsValid())
+	require.False(t, stats.ScanDetailComplete())
+	require.False(t, stats.PayloadComplete())
+
+	// A real all-zero response establishes coverage without contributing values.
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+	require.True(t, stats.ScanDetailComplete())
+	require.True(t, stats.PayloadComplete())
+	require.Zero(t, stats.ScanDetail)
+	require.Zero(t, stats.PayloadBytes)
+
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{
+		TotalVersions: 5, ProcessedVersions: 3, ProcessedVersionsSize: 30,
+	}, 7)
+	require.Equal(t, PointReadScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30}, stats.ScanDetail)
+	require.Equal(t, uint64(7), stats.PayloadBytes)
+
+	// Missing scan detail does not invalidate an otherwise accounted-for payload.
+	stats.RecordResponse(nil, 2)
+	require.True(t, stats.IsValid())
+	require.False(t, stats.ScanDetailComplete())
+	require.True(t, stats.PayloadComplete())
+	require.Equal(t, uint64(9), stats.PayloadBytes)
+	stats.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+	require.False(t, stats.ScanDetailComplete(), "later responses must not hide missing detail")
+}
+
+func TestPointResponseStatsMerge(t *testing.T) {
+	var complete, missing, invalid PointResponseStats
+	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2}, 3)
+	missing.RecordResponse(nil, 5)
+	invalid.Invalidate()
+	states := []struct {
+		name              string
+		stats             PointResponseStats
+		valid             bool
+		seenResponse      bool
+		missingScanDetail bool
+	}{
+		{name: "empty", valid: true},
+		{name: "complete", stats: complete, valid: true, seenResponse: true},
+		{name: "missing", stats: missing, valid: true, seenResponse: true, missingScanDetail: true},
+		{name: "invalid", stats: invalid},
+	}
+	for _, left := range states {
+		for _, right := range states {
+			t.Run(left.name+"/"+right.name, func(t *testing.T) {
+				stats := left.stats
+				stats.Merge(right.stats)
+				valid := left.valid && right.valid
+				seen := left.seenResponse || right.seenResponse
+				missingDetail := left.missingScanDetail || right.missingScanDetail
+				require.Equal(t, valid, stats.IsValid())
+				require.Equal(t, valid && seen, stats.PayloadComplete())
+				require.Equal(t, valid && seen && !missingDetail, stats.ScanDetailComplete())
+				if valid {
+					require.Equal(t, left.stats.ScanDetail.TotalKeys+right.stats.ScanDetail.TotalKeys, stats.ScanDetail.TotalKeys)
+					require.Equal(t, left.stats.PayloadBytes+right.stats.PayloadBytes, stats.PayloadBytes)
+				} else {
+					require.Equal(t, left.stats.ScanDetail, stats.ScanDetail)
+					require.Equal(t, left.stats.PayloadBytes, stats.PayloadBytes)
+				}
+			})
+		}
+	}
+
+	// Copies are independent and merging an empty snapshot preserves all state.
+	copy := complete
+	copy.Merge(PointResponseStats{})
+	require.Equal(t, complete, copy)
+	copy.Merge(copy)
+	require.Equal(t, int64(4), copy.ScanDetail.TotalKeys)
+	require.Equal(t, uint64(6), copy.PayloadBytes)
+	require.Equal(t, int64(2), complete.ScanDetail.TotalKeys)
+	require.Equal(t, uint64(3), complete.PayloadBytes)
+}
+
+func TestPointResponseStatsInvalid(t *testing.T) {
+	assertInvalid := func(t *testing.T, stats PointResponseStats) {
+		t.Helper()
+		require.False(t, stats.IsValid())
+		require.False(t, stats.ScanDetailComplete())
+		require.False(t, stats.PayloadComplete())
+		before := stats
+		stats.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1)
+		require.Equal(t, before, stats, "invalid state and accumulated values must be preserved")
+	}
+
+	t.Run("explicit invalidation", func(t *testing.T) {
+		var stats PointResponseStats
+		stats.Invalidate()
+		assertInvalid(t, stats)
+
+		var complete PointResponseStats
+		complete.RecordResponse(&kvrpcpb.ScanDetailV2{}, 0)
+		complete.Invalidate()
+		assertInvalid(t, complete)
+	})
+}
 
 func TestRUDetailsDrainRUV2(t *testing.T) {
 	ruDetails := NewRUDetails()
@@ -85,6 +188,402 @@ func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
 	assert.Equal(t, uint64(7), merged.WriteRpcCount)
 	rightDrained := right.DrainRUV2()
 	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
+}
+
+func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
+	details := &PoolTaskDetails{
+		TaskCount:                      2,
+		PollCount:                      8,
+		MaxPollCount:                   5,
+		MinPollCount:                   3,
+		DispatchCount:                  6,
+		MaxDispatchCount:               4,
+		MinDispatchCount:               2,
+		TotalWallTime:                  20 * time.Millisecond,
+		TaskWallTimeSampleCount:        2,
+		MaxTaskWallTime:                12 * time.Millisecond,
+		MinTaskWallTime:                8 * time.Millisecond,
+		TotalQueueWaitTime:             12 * time.Millisecond,
+		MaxQueueWaitTime:               4 * time.Millisecond,
+		MinQueueWaitTime:               time.Millisecond,
+		TotalWakeWaitTime:              8 * time.Millisecond,
+		MaxWakeWaitTime:                3 * time.Millisecond,
+		MinWakeWaitTime:                time.Millisecond,
+		FairQueueSampleCount:           6,
+		TotalFairQueueWaitedTaskSlices: 18,
+		MaxFairQueueWaitedTaskSlices:   5,
+		MinFairQueueWaitedTaskSlices:   2,
+		PollCPUTime:                    8 * time.Millisecond,
+		MaxPollCPUTime:                 2 * time.Millisecond,
+		MinPollCPUTime:                 500 * time.Microsecond,
+		PollWallTime:                   12 * time.Millisecond,
+		MaxPollWallTime:                3 * time.Millisecond,
+		MinPollWallTime:                750 * time.Microsecond,
+	}
+
+	assert.Equal(t,
+		"{tasks:2, poll_count:{total:8, avg:4, max:5, min:3}, "+
+			"dispatch_count:{total:6, max:4, min:2}, "+
+			"task_wall_time:{total:20ms, avg:10ms, max:12ms, min:8ms}, "+
+			"queue_wait:{total:12ms, avg:2ms, max:4ms, min:1ms}, "+
+			"wake_wait:{total:8ms, avg:2ms, max:3ms, min:1ms}, "+
+			"fair_queue:{enabled:true, "+
+			"waited_task_slices:{total:18, avg:3, max:5, min:2}}, "+
+			"poll_cpu:{total:8ms, avg:1ms, max:2ms, min:500\u00b5s}, "+
+			"poll_wall:{total:12ms, avg:1.5ms, max:3ms, min:750\u00b5s}}",
+		details.String(),
+	)
+}
+
+func TestPoolTaskDetailsStringOmitsZeroTimes(t *testing.T) {
+	details := &PoolTaskDetails{
+		TaskCount:        1,
+		PollCount:        2,
+		MaxPollCount:     2,
+		MinPollCount:     2,
+		DispatchCount:    2,
+		MaxDispatchCount: 2,
+		MinDispatchCount: 2,
+	}
+
+	assert.Equal(t,
+		"{tasks:1, poll_count:{total:2, avg:2, max:2, min:2}, "+
+			"dispatch_count:{total:2, max:2, min:2}, "+
+			"fair_queue:{enabled:false, waited_task_slices:{total:0, max:0, min:0}}}",
+		details.String(),
+	)
+}
+
+func TestPoolTaskDetailsStringOmitsAverageWithNoSamples(t *testing.T) {
+	details := &PoolTaskDetails{
+		TaskCount:          1,
+		TotalQueueWaitTime: 2 * time.Millisecond,
+		MaxQueueWaitTime:   2 * time.Millisecond,
+		MinQueueWaitTime:   2 * time.Millisecond,
+	}
+
+	assert.Equal(t,
+		"{tasks:1, poll_count:{total:0, avg:0, max:0, min:0}, "+
+			"dispatch_count:{total:0, max:0, min:0}, "+
+			"queue_wait:{total:2ms, max:2ms, min:2ms}, "+
+			"fair_queue:{enabled:false, waited_task_slices:{total:0, max:0, min:0}}}",
+		details.String(),
+	)
+}
+
+func TestPoolTaskDetailsMergeFromPBAndMerge(t *testing.T) {
+	details := &PoolTaskDetails{}
+	details.MergeFromPB(&kvrpcpb.PoolTaskDetails{
+		PollCount:                      5,
+		DispatchCount:                  3,
+		TotalWallNanos:                 uint64((10 * time.Millisecond).Nanoseconds()),
+		TotalQueueWaitNanos:            uint64((6 * time.Millisecond).Nanoseconds()),
+		MaxQueueWaitNanos:              uint64((3 * time.Millisecond).Nanoseconds()),
+		MinQueueWaitNanos:              uint64(time.Millisecond.Nanoseconds()),
+		TotalWakeWaitNanos:             uint64((4 * time.Millisecond).Nanoseconds()),
+		MaxWakeWaitNanos:               uint64((3 * time.Millisecond).Nanoseconds()),
+		MinWakeWaitNanos:               uint64(time.Millisecond.Nanoseconds()),
+		FairQueueEnabled:               true,
+		TotalFairQueueWaitedTaskSlices: 9,
+		MaxFairQueueWaitedTaskSlices:   5,
+		MinFairQueueWaitedTaskSlices:   1,
+		PollCpuNanos:                   uint64((5 * time.Millisecond).Nanoseconds()),
+		MaxPollCpuNanos:                uint64((2 * time.Millisecond).Nanoseconds()),
+		MinPollCpuNanos:                uint64((500 * time.Microsecond).Nanoseconds()),
+		PollWallNanos:                  uint64((8 * time.Millisecond).Nanoseconds()),
+		MaxPollWallNanos:               uint64((4 * time.Millisecond).Nanoseconds()),
+		MinPollWallNanos:               uint64(time.Millisecond.Nanoseconds()),
+	})
+	details.MergeFromPB(&kvrpcpb.PoolTaskDetails{
+		PollCount:                      2,
+		DispatchCount:                  1,
+		TotalQueueWaitNanos:            uint64((2 * time.Millisecond).Nanoseconds()),
+		MaxQueueWaitNanos:              uint64((2 * time.Millisecond).Nanoseconds()),
+		MinQueueWaitNanos:              uint64((2 * time.Millisecond).Nanoseconds()),
+		FairQueueEnabled:               false,
+		TotalFairQueueWaitedTaskSlices: 100,
+		MaxFairQueueWaitedTaskSlices:   100,
+		MinFairQueueWaitedTaskSlices:   100,
+		PollCpuNanos:                   uint64((2 * time.Millisecond).Nanoseconds()),
+		MaxPollCpuNanos:                uint64((1500 * time.Microsecond).Nanoseconds()),
+		MinPollCpuNanos:                uint64((400 * time.Microsecond).Nanoseconds()),
+		PollWallNanos:                  uint64((3 * time.Millisecond).Nanoseconds()),
+		MaxPollWallNanos:               uint64((2 * time.Millisecond).Nanoseconds()),
+		MinPollWallNanos:               uint64((800 * time.Microsecond).Nanoseconds()),
+	})
+
+	assert.Equal(t, &PoolTaskDetails{
+		TaskCount:                      2,
+		PollCount:                      7,
+		MaxPollCount:                   5,
+		MinPollCount:                   2,
+		DispatchCount:                  4,
+		MaxDispatchCount:               3,
+		MinDispatchCount:               1,
+		TotalWallTime:                  10 * time.Millisecond,
+		TaskWallTimeSampleCount:        1,
+		MaxTaskWallTime:                10 * time.Millisecond,
+		MinTaskWallTime:                10 * time.Millisecond,
+		TotalQueueWaitTime:             8 * time.Millisecond,
+		MaxQueueWaitTime:               3 * time.Millisecond,
+		MinQueueWaitTime:               time.Millisecond,
+		TotalWakeWaitTime:              4 * time.Millisecond,
+		MaxWakeWaitTime:                3 * time.Millisecond,
+		MinWakeWaitTime:                time.Millisecond,
+		FairQueueSampleCount:           3,
+		TotalFairQueueWaitedTaskSlices: 9,
+		MaxFairQueueWaitedTaskSlices:   5,
+		MinFairQueueWaitedTaskSlices:   1,
+		PollCPUTime:                    7 * time.Millisecond,
+		MaxPollCPUTime:                 2 * time.Millisecond,
+		MinPollCPUTime:                 400 * time.Microsecond,
+		PollWallTime:                   11 * time.Millisecond,
+		MaxPollWallTime:                4 * time.Millisecond,
+		MinPollWallTime:                800 * time.Microsecond,
+	}, details)
+
+	other := &PoolTaskDetails{}
+	other.MergeFromPB(&kvrpcpb.PoolTaskDetails{
+		PollCount:                      8,
+		DispatchCount:                  4,
+		TotalWallNanos:                 uint64((20 * time.Millisecond).Nanoseconds()),
+		TotalQueueWaitNanos:            uint64((12 * time.Millisecond).Nanoseconds()),
+		MaxQueueWaitNanos:              uint64((5 * time.Millisecond).Nanoseconds()),
+		MinQueueWaitNanos:              uint64((2 * time.Millisecond).Nanoseconds()),
+		TotalWakeWaitNanos:             uint64((6 * time.Millisecond).Nanoseconds()),
+		MaxWakeWaitNanos:               uint64((4 * time.Millisecond).Nanoseconds()),
+		MinWakeWaitNanos:               uint64((2 * time.Millisecond).Nanoseconds()),
+		FairQueueEnabled:               true,
+		TotalFairQueueWaitedTaskSlices: 8,
+		MaxFairQueueWaitedTaskSlices:   4,
+		MinFairQueueWaitedTaskSlices:   0,
+		PollCpuNanos:                   uint64((8 * time.Millisecond).Nanoseconds()),
+		MaxPollCpuNanos:                uint64((3 * time.Millisecond).Nanoseconds()),
+		MinPollCpuNanos:                uint64((300 * time.Microsecond).Nanoseconds()),
+		PollWallNanos:                  uint64((10 * time.Millisecond).Nanoseconds()),
+		MaxPollWallNanos:               uint64((5 * time.Millisecond).Nanoseconds()),
+		MinPollWallNanos:               uint64((700 * time.Microsecond).Nanoseconds()),
+	})
+	details.Merge(other)
+
+	assert.Equal(t, &PoolTaskDetails{
+		TaskCount:                      3,
+		PollCount:                      15,
+		MaxPollCount:                   8,
+		MinPollCount:                   2,
+		DispatchCount:                  8,
+		MaxDispatchCount:               4,
+		MinDispatchCount:               1,
+		TotalWallTime:                  30 * time.Millisecond,
+		TaskWallTimeSampleCount:        2,
+		MaxTaskWallTime:                20 * time.Millisecond,
+		MinTaskWallTime:                10 * time.Millisecond,
+		TotalQueueWaitTime:             20 * time.Millisecond,
+		MaxQueueWaitTime:               5 * time.Millisecond,
+		MinQueueWaitTime:               time.Millisecond,
+		TotalWakeWaitTime:              10 * time.Millisecond,
+		MaxWakeWaitTime:                4 * time.Millisecond,
+		MinWakeWaitTime:                time.Millisecond,
+		FairQueueSampleCount:           7,
+		TotalFairQueueWaitedTaskSlices: 17,
+		MaxFairQueueWaitedTaskSlices:   5,
+		MinFairQueueWaitedTaskSlices:   0,
+		PollCPUTime:                    15 * time.Millisecond,
+		MaxPollCPUTime:                 3 * time.Millisecond,
+		MinPollCPUTime:                 300 * time.Microsecond,
+		PollWallTime:                   21 * time.Millisecond,
+		MaxPollWallTime:                5 * time.Millisecond,
+		MinPollWallTime:                700 * time.Microsecond,
+	}, details)
+}
+
+func TestPoolTaskDetailsMergeMinimumPresence(t *testing.T) {
+	mergeSequentiallyAndByAggregate := func(
+		t *testing.T,
+		first *kvrpcpb.PoolTaskDetails,
+		second *kvrpcpb.PoolTaskDetails,
+	) *PoolTaskDetails {
+		t.Helper()
+
+		sequential := &PoolTaskDetails{}
+		sequential.MergeFromPB(first)
+		sequential.MergeFromPB(second)
+
+		left := &PoolTaskDetails{}
+		left.MergeFromPB(first)
+		right := &PoolTaskDetails{}
+		right.MergeFromPB(second)
+		left.Merge(right)
+
+		assert.Equal(t, sequential, left)
+		return sequential
+	}
+
+	t.Run("absent wait samples do not pin minimum to zero", func(t *testing.T) {
+		details := mergeSequentiallyAndByAggregate(t,
+			&kvrpcpb.PoolTaskDetails{
+				PollCount:       2,
+				DispatchCount:   1,
+				TotalWallNanos:  uint64((3 * time.Millisecond).Nanoseconds()),
+				PollCpuNanos:    uint64(time.Millisecond.Nanoseconds()),
+				MaxPollCpuNanos: uint64(time.Millisecond.Nanoseconds()),
+				PollWallNanos:   uint64((2 * time.Millisecond).Nanoseconds()),
+				MaxPollWallNanos: uint64(
+					(2 * time.Millisecond).Nanoseconds(),
+				),
+			},
+			&kvrpcpb.PoolTaskDetails{
+				PollCount:                      3,
+				DispatchCount:                  2,
+				TotalWallNanos:                 uint64((25 * time.Millisecond).Nanoseconds()),
+				TotalQueueWaitNanos:            uint64((10 * time.Millisecond).Nanoseconds()),
+				MaxQueueWaitNanos:              uint64((7 * time.Millisecond).Nanoseconds()),
+				MinQueueWaitNanos:              uint64((3 * time.Millisecond).Nanoseconds()),
+				TotalWakeWaitNanos:             uint64((2 * time.Millisecond).Nanoseconds()),
+				MaxWakeWaitNanos:               uint64((2 * time.Millisecond).Nanoseconds()),
+				MinWakeWaitNanos:               uint64((2 * time.Millisecond).Nanoseconds()),
+				FairQueueEnabled:               true,
+				TotalFairQueueWaitedTaskSlices: 4,
+				MaxFairQueueWaitedTaskSlices:   3,
+				MinFairQueueWaitedTaskSlices:   1,
+				PollCpuNanos:                   uint64((6 * time.Millisecond).Nanoseconds()),
+				MaxPollCpuNanos:                uint64((3 * time.Millisecond).Nanoseconds()),
+				MinPollCpuNanos:                uint64(time.Millisecond.Nanoseconds()),
+				PollWallNanos:                  uint64((9 * time.Millisecond).Nanoseconds()),
+				MaxPollWallNanos:               uint64((4 * time.Millisecond).Nanoseconds()),
+				MinPollWallNanos:               uint64((2 * time.Millisecond).Nanoseconds()),
+			},
+		)
+
+		assert.Equal(t, 3*time.Millisecond, details.MinQueueWaitTime)
+		assert.Equal(t, 2*time.Millisecond, details.MinWakeWaitTime)
+		assert.Equal(t, uint64(1), details.MinFairQueueWaitedTaskSlices)
+		// The first response contains a poll sample, so its zero-valued CPU and
+		// wall-time minima are real samples rather than missing values.
+		assert.Zero(t, details.MinPollCPUTime)
+		assert.Zero(t, details.MinPollWallTime)
+	})
+
+	t.Run("recorded zero minimum remains zero", func(t *testing.T) {
+		details := mergeSequentiallyAndByAggregate(t,
+			&kvrpcpb.PoolTaskDetails{
+				PollCount:                      3,
+				DispatchCount:                  3,
+				TotalWallNanos:                 uint64((10 * time.Millisecond).Nanoseconds()),
+				TotalQueueWaitNanos:            uint64(time.Millisecond.Nanoseconds()),
+				MaxQueueWaitNanos:              uint64(time.Millisecond.Nanoseconds()),
+				MinQueueWaitNanos:              0,
+				TotalWakeWaitNanos:             uint64(time.Millisecond.Nanoseconds()),
+				MaxWakeWaitNanos:               uint64(time.Millisecond.Nanoseconds()),
+				MinWakeWaitNanos:               0,
+				FairQueueEnabled:               true,
+				TotalFairQueueWaitedTaskSlices: 0,
+				MaxFairQueueWaitedTaskSlices:   0,
+				MinFairQueueWaitedTaskSlices:   0,
+				PollCpuNanos:                   uint64(time.Millisecond.Nanoseconds()),
+				MaxPollCpuNanos:                uint64(time.Millisecond.Nanoseconds()),
+				MinPollCpuNanos:                0,
+				PollWallNanos:                  uint64(time.Millisecond.Nanoseconds()),
+				MaxPollWallNanos:               uint64(time.Millisecond.Nanoseconds()),
+				MinPollWallNanos:               0,
+			},
+			&kvrpcpb.PoolTaskDetails{
+				PollCount:                      2,
+				DispatchCount:                  2,
+				TotalWallNanos:                 uint64((10 * time.Millisecond).Nanoseconds()),
+				TotalQueueWaitNanos:            uint64((4 * time.Millisecond).Nanoseconds()),
+				MaxQueueWaitNanos:              uint64((3 * time.Millisecond).Nanoseconds()),
+				MinQueueWaitNanos:              uint64(time.Millisecond.Nanoseconds()),
+				TotalWakeWaitNanos:             uint64(time.Millisecond.Nanoseconds()),
+				MaxWakeWaitNanos:               uint64(time.Millisecond.Nanoseconds()),
+				MinWakeWaitNanos:               uint64(time.Millisecond.Nanoseconds()),
+				FairQueueEnabled:               true,
+				TotalFairQueueWaitedTaskSlices: 3,
+				MaxFairQueueWaitedTaskSlices:   2,
+				MinFairQueueWaitedTaskSlices:   1,
+				PollCpuNanos:                   uint64((2 * time.Millisecond).Nanoseconds()),
+				MaxPollCpuNanos:                uint64(time.Millisecond.Nanoseconds()),
+				MinPollCpuNanos:                uint64(time.Millisecond.Nanoseconds()),
+				PollWallNanos:                  uint64((2 * time.Millisecond).Nanoseconds()),
+				MaxPollWallNanos:               uint64(time.Millisecond.Nanoseconds()),
+				MinPollWallNanos:               uint64(time.Millisecond.Nanoseconds()),
+			},
+		)
+
+		assert.Zero(t, details.MinQueueWaitTime)
+		assert.Zero(t, details.MinWakeWaitTime)
+		assert.Zero(t, details.MinFairQueueWaitedTaskSlices)
+		assert.Zero(t, details.MinPollCPUTime)
+		assert.Zero(t, details.MinPollWallTime)
+	})
+}
+
+func TestPoolTaskDetailsStringFormatsFractionalCountAverages(t *testing.T) {
+	details := &PoolTaskDetails{
+		TaskCount:                      3,
+		PollCount:                      8,
+		MaxPollCount:                   5,
+		MinPollCount:                   1,
+		DispatchCount:                  3,
+		MaxDispatchCount:               1,
+		MinDispatchCount:               1,
+		FairQueueSampleCount:           3,
+		TotalFairQueueWaitedTaskSlices: 7,
+		MaxFairQueueWaitedTaskSlices:   4,
+		MinFairQueueWaitedTaskSlices:   0,
+	}
+
+	assert.Equal(t,
+		"{tasks:3, poll_count:{total:8, avg:2.67, max:5, min:1}, "+
+			"dispatch_count:{total:3, max:1, min:1}, "+
+			"fair_queue:{enabled:true, waited_task_slices:{total:7, avg:2.33, max:4, min:0}}}",
+		details.String(),
+	)
+}
+
+func TestPoolTaskDetailsStringKeepsZeroFairQueueWait(t *testing.T) {
+	details := &PoolTaskDetails{
+		TaskCount:            1,
+		PollCount:            2,
+		MaxPollCount:         2,
+		MinPollCount:         2,
+		DispatchCount:        2,
+		MaxDispatchCount:     2,
+		MinDispatchCount:     2,
+		FairQueueSampleCount: 2,
+	}
+
+	assert.Equal(t,
+		"{tasks:1, poll_count:{total:2, avg:2, max:2, min:2}, "+
+			"dispatch_count:{total:2, max:2, min:2}, "+
+			"fair_queue:{enabled:true, waited_task_slices:{total:0, avg:0, max:0, min:0}}}",
+		details.String(),
+	)
+}
+
+func TestPoolTaskDetailsEmptyAndClone(t *testing.T) {
+	var nilDetails *PoolTaskDetails
+	assert.True(t, nilDetails.Empty())
+	assert.Empty(t, nilDetails.String())
+	assert.Nil(t, nilDetails.Clone())
+
+	details := &PoolTaskDetails{}
+	details.MergeFromPB(nil)
+	assert.True(t, details.Empty())
+
+	details.MergeFromPB(&kvrpcpb.PoolTaskDetails{PollCount: 1, DispatchCount: 1})
+	assert.False(t, details.Empty())
+
+	clone := details.Clone()
+	assert.Equal(t, details, clone)
+	assert.NotSame(t, details, clone)
+	clone.PollCount++
+	assert.NotEqual(t, details.PollCount, clone.PollCount)
+
+	beforeMerge := details.Clone()
+	details.Merge(nil)
+	details.Merge(&PoolTaskDetails{})
+	assert.Equal(t, beforeMerge, details)
 }
 
 func TestScanDetailMergeFromScanDetailV2IncludesIAFields(t *testing.T) {
