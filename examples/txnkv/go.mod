@@ -3,7 +3,7 @@ module txnkv
 go 1.25.8
 
 require (
-	github.com/pingcap/kvproto v0.0.0-20260724075646-dc53c468806a
+	github.com/pingcap/kvproto v0.0.0-20260902031311-e98c296c957f
 	github.com/tikv/client-go/v2 v2.0.0
 )
 
