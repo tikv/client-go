@@ -103,7 +103,7 @@ func TestNewClientClosesConnectionsOnError(t *testing.T) {
 		{"invalid API version", kvrpcpb.APIVersion(999), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 			require.NoError(t, err)
 			tracker := &constructorConnectionStats{}
 			keyspace := &constructorKeyspace{}
