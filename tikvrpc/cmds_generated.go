@@ -386,6 +386,15 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 			req.Req = &cmd
 		}
 		req.rev++
+	case CmdGetEstimateTiCICount:
+		if req.rev == 0 {
+			req.GetEstimateTiCICount().Context = ctx
+		} else {
+			cmd := *req.GetEstimateTiCICount()
+			cmd.Context = ctx
+			req.Req = &cmd
+		}
+		req.rev++
 	default:
 		return false
 	}
@@ -477,6 +486,8 @@ func isValidReqType(cmd CmdType) bool {
 	case CmdFlush:
 		return true
 	case CmdBufferBatchGet:
+		return true
+	case CmdGetEstimateTiCICount:
 		return true
 	case CmdCopStream, CmdMPPTask, CmdMPPConn, CmdMPPCancel, CmdMPPAlive, CmdEmpty:
 		return true
