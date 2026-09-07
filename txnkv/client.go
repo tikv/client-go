@@ -64,7 +64,7 @@ func WithSafePointKVPrefix(prefix string) ClientOpt {
 }
 
 // NewClient creates a txn client with pdAddrs.
-func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
+func NewClient(pdAddrs []string, opts ...ClientOpt) (_ *Client, retErr error) {
 	// Apply options.
 	opt := &option{}
 	for _, o := range opts {
@@ -75,6 +75,13 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	// The store takes ownership only when construction succeeds.
+	defer func() {
+		if retErr != nil {
+			pdClient.Close()
+		}
+	}()
 
 	pdClient = util.NewInterceptedPDClient(pdClient)
 
@@ -107,7 +114,19 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, err
 	}
 
+	defer func() {
+		if retErr != nil {
+			_ = spkv.Close()
+		}
+	}()
+
 	rpcClient := tikv.NewRPCClient(tikv.WithSecurity(cfg.Security), tikv.WithCodec(codecCli.GetCodec()))
+
+	defer func() {
+		if retErr != nil {
+			_ = rpcClient.Close()
+		}
+	}()
 
 	s, err := tikv.NewKVStore(uuid, pdClient, spkv, rpcClient)
 	if err != nil {
