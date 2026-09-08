@@ -278,6 +278,24 @@ func TestRUDetailsCalculationDetails(t *testing.T) {
 	_, ok, consistent = invalidClone.RUCalculation()
 	assert.False(t, ok)
 	assert.False(t, consistent)
+
+	// Merging invalid details must discard the destination's formula but retain RU totals.
+	merged := details.Clone()
+	merged.Merge(invalidClone)
+	_, ok, consistent = merged.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
+	assert.Equal(t, float64(25), merged.RRU())
+	assert.Equal(t, float64(4), merged.WRU())
+	assert.Equal(t, float64(7), merged.TiflashRU())
+
+	merged.Update(&rmpb.Consumption{RRU: 1}, 0)
+	merged.AddRUCalculation(delta)
+	_, ok, consistent = merged.RUCalculation()
+	assert.False(t, ok)
+	assert.False(t, consistent)
+	assert.Equal(t, float64(26), merged.RRU())
+	assert.Equal(t, float64(4), merged.WRU())
 }
 
 func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
