@@ -92,6 +92,16 @@ func RedactKeyErrIfNecessary(err *kvrpcpb.KeyError) {
 			e.Primary = redactMarker
 		}
 	}
+	if e := err.SharedLockLost; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+	}
+	if e := err.LockUpgradeConflict; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+	}
 	if e := err.AlreadyExist; e != nil {
 		if len(e.Key) > 0 {
 			e.Key = redactMarker
