@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -96,6 +97,7 @@ func (m *mockStore) GetTiKVClient() client.Client {
 type recorderStore struct {
 	*mockStore
 	getTimestampWithRetry func(*retry.Backoffer, string) (uint64, error)
+	waitGroup             sync.WaitGroup
 }
 
 func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -104,6 +106,10 @@ func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regio
 
 func (m *recorderStore) GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error) {
 	return m.getTimestampWithRetry(bo, scope)
+}
+
+func (m *recorderStore) WaitGroup() *sync.WaitGroup {
+	return &m.waitGroup
 }
 
 func (m *mockStore) GetOracle() oracle.Oracle {
@@ -115,6 +121,12 @@ type testTxn struct {
 
 	store    *mockStore
 	snapshot *txnsnapshot.KVSnapshot
+}
+
+type testKillSignalHandler func() error
+
+func (f testKillSignalHandler) HandleSignal() error {
+	return f()
 }
 
 func newTestTxn(t *testing.T, startTS uint64) *testTxn {
@@ -133,6 +145,75 @@ func newTestTxnWithOptions(t *testing.T, startTS uint64, options *TxnOptions) *t
 		KVTxn:    txn,
 		store:    store,
 		snapshot: snapshot,
+	}
+}
+
+func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
+	testCases := []struct {
+		name    string
+		setKill func(*kv.Variables)
+	}{
+		{
+			name: "legacy killed flag",
+			setKill: func(vars *kv.Variables) {
+				*vars.Killed = 1
+			},
+		},
+		{
+			name: "kill signal handler",
+			setKill: func(vars *kv.Variables) {
+				vars.KillSignalHandler = testKillSignalHandler(func() error {
+					return errors.New("query interrupted")
+				})
+			},
+		},
+	}
+
+	for _, async := range []bool{false, true} {
+		mode := "sync"
+		if async {
+			mode = "async"
+		}
+		for _, testCase := range testCases {
+			t.Run(mode+"/"+testCase.name, func(t *testing.T) {
+				txn := newTestTxn(t, 1)
+				txn.KVTxn.store = &recorderStore{mockStore: txn.store}
+				txn.SetPessimistic(true)
+				key := []byte("key")
+				rollbackRequests := 0
+				txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+					switch req.Type {
+					case tikvrpc.CmdPessimisticLock:
+						return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+					case tikvrpc.CmdPessimisticRollback:
+						rollbackRequests++
+						if rollbackRequests == 1 {
+							return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{
+								RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{RegionId: 1}},
+							}}, nil
+						}
+						return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+					default:
+						return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+					}
+				}
+
+				lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+				require.NoError(t, txn.lockKeys(context.Background(), lockCtx, nil, key))
+
+				killed := uint32(0)
+				vars := kv.NewVariables(&killed)
+				testCase.setKill(vars)
+				txn.SetVars(vars)
+
+				if async {
+					txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+				} else {
+					require.NoError(t, txn.Rollback())
+				}
+				require.Equal(t, 2, rollbackRequests)
+			})
+		}
 	}
 }
 
