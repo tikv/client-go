@@ -1051,6 +1051,42 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	}
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOnLeader() {
+	s.False(isNoisyTenantBusy(nil))
+	s.False(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy"}))
+	s.True(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy|noisy_tenant"}))
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		BusyThresholdMs: 50,
+	})
+
+	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.NotNil(replicaSelector)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err := replicaSelector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+
+	// A wait over the threshold normally diverts the retry to an idle replica.
+	replicaSelector.pinRetryToLeader(req)
+	s.Zero(req.BusyThresholdMs)
+	s.False(req.ReplicaRead)
+	s.False(req.StaleRead)
+
+	rpcCtx, err = replicaSelector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.False(req.ReplicaRead)
+
+	// The store is not marked slow: the verdict is per store, not per group.
+	s.False(rpcCtx.Store.healthStatus.IsSlow())
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	if config.NextGen {
 		s.T().Skip("NextGen does not support replica read")

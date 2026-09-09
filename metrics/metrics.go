@@ -105,6 +105,7 @@ var (
 	TiKVSafeTSUpdateCounter                        *prometheus.CounterVec
 	TiKVMinSafeTSGapSeconds                        *prometheus.GaugeVec
 	TiKVReplicaSelectorFailureCounter              *prometheus.CounterVec
+	TiKVNoisyTenantServerBusyCounter               prometheus.Counter
 	TiKVRequestRetryTimesHistogram                 prometheus.Histogram
 	TiKVTxnCommitBackoffSeconds                    prometheus.Histogram
 	TiKVTxnCommitBackoffCount                      prometheus.Histogram
@@ -764,6 +765,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType})
 
+	TiKVNoisyTenantServerBusyCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "noisy_tenant_server_busy_total",
+			Help:        "Counter of ServerIsBusy responses TiKV attributed to the request's own resource group, which are retried on the leader rather than redirected to a follower.",
+			ConstLabels: constLabels,
+		})
+
 	TiKVRequestRetryTimesHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
@@ -1189,6 +1199,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVSafeTSUpdateCounter)
 	prometheus.MustRegister(TiKVMinSafeTSGapSeconds)
 	prometheus.MustRegister(TiKVReplicaSelectorFailureCounter)
+	prometheus.MustRegister(TiKVNoisyTenantServerBusyCounter)
 	prometheus.MustRegister(TiKVRequestRetryTimesHistogram)
 	prometheus.MustRegister(TiKVTxnCommitBackoffSeconds)
 	prometheus.MustRegister(TiKVTxnCommitBackoffCount)

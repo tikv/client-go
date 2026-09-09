@@ -16,6 +16,7 @@ package locate
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -588,9 +589,48 @@ func (s *replicaSelector) onRegionNotFound(
 // cached leader within one selector that triggers a suspect-not-leader probe.
 const leaderBusyProbeThreshold = 2
 
+// Kept in step with NOISY_TENANT_REASON_SUFFIX in TiKV's resource_control crate.
+const noisyTenantReasonSuffix = "|noisy_tenant"
+
+// Whether TiKV blamed this request's own resource group for the overload.
+func isNoisyTenantBusy(serverIsBusy *errorpb.ServerIsBusy) bool {
+	return serverIsBusy != nil &&
+		strings.HasSuffix(serverIsBusy.GetReason(), noisyTenantReasonSuffix)
+}
+
+// Backs off and returns to the leader: a follower read comes back to this same
+// leader as a ReadIndex, and the store is not slow, one tenant is over quota.
+func (s *replicaSelector) onNoisyTenantServerIsBusy(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (shouldRetry bool, err error) {
+	metrics.TiKVNoisyTenantServerBusyCounter.Inc()
+	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
+	// store with no group dimension.
+	s.pinRetryToLeader(req)
+	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
+	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Pins every remaining attempt to the leader. busyThreshold must go too, or
+// nextForReplicaReadLeader diverts to a replica whenever the leader is busy.
+func (s *replicaSelector) pinRetryToLeader(req *tikvrpc.Request) {
+	req.SetReplicaReadType(kv.ReplicaReadLeader)
+	req.BusyThresholdMs = 0
+	req.StaleRead = false
+	s.replicaReadType = kv.ReplicaReadLeader
+	s.busyThreshold = 0
+	s.option.leaderOnly = true
+}
+
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
+	if isNoisyTenantBusy(serverIsBusy) {
+		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
+	}
 	var store *Store
 	if ctx != nil && ctx.Store != nil {
 		store = ctx.Store
