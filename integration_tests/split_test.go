@@ -339,6 +339,23 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt
 	return c.client.GetStore(ctx, storeID)
 }
 
+func (c *mockPDClient) GetStoreResponse(ctx context.Context, storeID uint64, opts ...opt.GetStoreOption) (*pdpb.GetStoreResponse, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if c.stop {
+		return nil, errors.WithStack(errStopped)
+	}
+	if client, ok := c.client.(pd.RPCClientExt); ok {
+		return client.GetStoreResponse(ctx, storeID, opts...)
+	}
+	store, err := c.client.GetStore(ctx, storeID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpb.GetStoreResponse{Store: store}, nil
+}
+
 func (c *mockPDClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	c.RLock()
 	defer c.Unlock()

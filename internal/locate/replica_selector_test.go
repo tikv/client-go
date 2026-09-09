@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -3294,6 +3295,30 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 			s.True(s.runCaseAndCompare(ca))
 		}
 	}
+}
+
+func TestReplicaReadFiltersPDSchedulingState(t *testing.T) {
+	follower := newStore(1, "store-1", "", "", tikvrpc.TiKV, resolved, nil)
+	leader := newStore(2, "store-2", "", "", tikvrpc.TiKV, resolved, nil)
+	strategy := ReplicaSelectMixedStrategy{leaderIdx: 1}
+
+	require.True(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.healthStatus.isSlow.Store(true)
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.healthStatus.isSlow.Store(false)
+	follower.schedulingState.update(&pdpb.StoreSchedulingState{EvictedAsSlowStore: true}, 0)
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+
+	// PD scheduling state restricts all follower and learner reads. The leader
+	// remains available as the existing leader-read fallback.
+	leader.schedulingState.update(&pdpb.StoreSchedulingState{EvictedAsSlowStore: true}, 0)
+	require.True(t, strategy.isCandidate(&replica{store: leader}, true, false, reachable))
+
+	follower.schedulingState.update(&pdpb.StoreSchedulingState{}, 0)
+	follower.schedulingState.onHealthStatusChanged()
+	require.False(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
+	follower.schedulingState.update(&pdpb.StoreSchedulingState{}, follower.schedulingState.currentCheckEpoch())
+	require.True(t, strategy.isCandidate(&replica{store: follower}, false, false, reachable))
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
