@@ -239,6 +239,10 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
+	// The resource groups this store last blamed for its own overload, so that
+	// their reads can stay on the leader from the first request rather than
+	// after one has been rejected.
+	noisyGroups noisyGroups
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -1120,6 +1124,12 @@ func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
 	// only a slow score. It's prepared for possible use in the future.
 	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
+	// An absent message means the store does not report noisy groups at all, so
+	// whatever is already known is left alone; only a store that does report
+	// them may clear the set, by reporting it empty.
+	if groups := feedback.GetNoisyGroups(); groups != nil {
+		s.noisyGroups.replace(groups.GetNames())
+	}
 }
 
 // getReplicaFlowsStats returns the statistics on the related replicaFlowsType.

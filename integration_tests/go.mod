@@ -177,5 +177,8 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	// Temporary: fork of kvproto master adding HealthFeedback.noisy_groups.
+	// Drop once https://github.com/pingcap/kvproto is updated.
+	github.com/pingcap/kvproto => github.com/mittalrishabh/kvproto v0.0.0-20260922195209-09946a827f2a
 	github.com/tikv/client-go/v2 => ../
 )

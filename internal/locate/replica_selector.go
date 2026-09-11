@@ -78,7 +78,7 @@ func newReplicaSelector(
 	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 		WithPerferLeader()(&option)
 	}
-	return &replicaSelector{
+	selector := &replicaSelector{
 		baseReplicaSelector: baseReplicaSelector{
 			regionCache:   regionCache,
 			region:        cachedRegion,
@@ -91,7 +91,24 @@ func newReplicaSelector(
 		option:          option,
 		target:          nil,
 		attempts:        0,
-	}, nil
+	}
+	// A group the leader has already named goes straight to that leader, for the
+	// same reason a noisy-tenant ServerIsBusy pins the retry there: a follower
+	// read only returns to this leader as a ReadIndex, so diverting spends an
+	// extra hop to arrive at the store that is already overloaded.
+	//
+	// Stale reads are exempt, because that reasoning inverts for them: a stale
+	// read is served from the follower's own state with no ReadIndex, so it is
+	// already keeping off the leader, and pinning it would push the group's load
+	// onto the one store that just said it was overloaded by that group.
+	if leaderIdx := int(cachedRegion.getStore().workTiKVIdx); !req.StaleRead && leaderIdx < len(replicas) {
+		group := req.GetResourceControlContext().GetResourceGroupName()
+		if replicas[leaderIdx].store.noisyGroups.contains(group) {
+			metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
+			selector.pinRetryToLeader(req)
+		}
+	}
+	return selector, nil
 }
 
 func buildTiKVReplicas(region *Region) []*replica {

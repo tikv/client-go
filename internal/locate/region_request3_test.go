@@ -1087,6 +1087,83 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.False(rpcCtx.Store.healthStatus.IsSlow())
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {
+	const group = "uds_006"
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	newReq := func() *tikvrpc.Request {
+		return tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+			BusyThresholdMs:        50,
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{ResourceGroupName: group},
+		})
+	}
+	bo := retry.NewBackoffer(context.Background(), -1)
+
+	// Find the leader's store the way a request does, then let it report that
+	// the group is noisy, as it would on its next health feedback.
+	req := newReq()
+	selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	rpcCtx, err := selector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	leaderStore := rpcCtx.Store
+	// Leave nothing behind for the other tests in the suite.
+	defer leaderStore.noisyGroups.replace(nil)
+	s.Equal(uint32(50), req.BusyThresholdMs, "not pinned before the store says anything")
+
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:     leaderStore.storeID,
+		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+	})
+
+	// A later request from that group is now pinned up front, without having to
+	// be rejected first: busyThreshold is dropped, so a busy leader no longer
+	// diverts it to a follower that would only come back here for a ReadIndex.
+	req = newReq()
+	selector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.Zero(req.BusyThresholdMs)
+	s.False(req.ReplicaRead)
+	s.True(selector.option.leaderOnly)
+	rpcCtx, err = selector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	// The verdict is about one group, not the store's health.
+	s.False(rpcCtx.Store.healthStatus.IsSlow())
+
+	// A neighbour on the same store is not implicated by it.
+	other := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		BusyThresholdMs:        50,
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{ResourceGroupName: "uds_007"},
+	})
+	_, err = newReplicaSelector(s.cache, regionLoc.Region, other)
+	s.Nil(err)
+	s.Equal(uint32(50), other.BusyThresholdMs)
+
+	// A stale read is left alone: it is served from a follower's own state
+	// without a ReadIndex, so pinning it would move the group's load onto the
+	// leader that just reported being overloaded by it.
+	stale := newReq()
+	stale.StaleRead = true
+	_, err = newReplicaSelector(s.cache, regionLoc.Region, stale)
+	s.Nil(err)
+	s.True(stale.StaleRead)
+	s.Equal(uint32(50), stale.BusyThresholdMs)
+
+	// Once the store reports that it blames nobody, pinning stops.
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:     leaderStore.storeID,
+		NoisyGroups: &kvrpcpb.NoisyGroups{},
+	})
+	req = newReq()
+	_, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.Equal(uint32(50), req.BusyThresholdMs)
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	if config.NextGen {
 		s.T().Skip("NextGen does not support replica read")
