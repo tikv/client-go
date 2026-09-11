@@ -16,6 +16,7 @@ package locate
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/require"
@@ -51,6 +52,7 @@ func TestRecordHealthFeedbackNoisyGroups(t *testing.T) {
 	// rather than being taken to have cleared it.
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{StoreId: 1, SlowScore: 1})
 	require.False(t, store.noisyGroups.contains("uds_006"))
+	require.False(t, store.healthStatus.IsOverloaded())
 
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{
 		StoreId:     1,
@@ -58,9 +60,12 @@ func TestRecordHealthFeedbackNoisyGroups(t *testing.T) {
 		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{"uds_006"}},
 	})
 	require.True(t, store.noisyGroups.contains("uds_006"))
+	// Naming anyone marks the whole store, which is what routing keys on.
+	require.True(t, store.healthStatus.IsOverloaded())
 
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{StoreId: 1, SlowScore: 1})
 	require.True(t, store.noisyGroups.contains("uds_006"))
+	require.True(t, store.healthStatus.IsOverloaded())
 
 	// Only a store that does report the set may clear it, by reporting empty.
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{
@@ -69,4 +74,12 @@ func TestRecordHealthFeedbackNoisyGroups(t *testing.T) {
 		NoisyGroups: &kvrpcpb.NoisyGroups{},
 	})
 	require.False(t, store.noisyGroups.contains("uds_006"))
+	require.False(t, store.healthStatus.IsOverloaded())
+
+	// A store too old to report the set can only ever signal by ServerIsBusy,
+	// which nothing clears, so that mark has to lapse on its own.
+	store.healthStatus.markOverloaded(true)
+	require.True(t, store.healthStatus.IsOverloaded())
+	store.healthStatus.overloadedUntil.Store(time.Now().Add(-time.Second).UnixNano())
+	require.False(t, store.healthStatus.IsOverloaded())
 }

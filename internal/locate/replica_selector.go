@@ -92,22 +92,6 @@ func newReplicaSelector(
 		target:          nil,
 		attempts:        0,
 	}
-	// A group the leader has already named goes straight to that leader, for the
-	// same reason a noisy-tenant ServerIsBusy pins the retry there: a follower
-	// read only returns to this leader as a ReadIndex, so diverting spends an
-	// extra hop to arrive at the store that is already overloaded.
-	//
-	// Stale reads are exempt, because that reasoning inverts for them: a stale
-	// read is served from the follower's own state with no ReadIndex, so it is
-	// already keeping off the leader, and pinning it would push the group's load
-	// onto the one store that just said it was overloaded by that group.
-	if leaderIdx := int(cachedRegion.getStore().workTiKVIdx); !req.StaleRead && leaderIdx < len(replicas) {
-		group := req.GetResourceControlContext().GetResourceGroupName()
-		if replicas[leaderIdx].store.noisyGroups.contains(group) {
-			metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
-			selector.pinRetryToLeader(req)
-		}
-	}
 	return selector, nil
 }
 
@@ -152,16 +136,52 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	s.attempts++
 	s.target = nil
 	s.proxy = nil
-	switch s.replicaReadType {
-	case kv.ReplicaReadLeader:
-		s.nextForReplicaReadLeader(req)
-	default:
-		s.nextForReplicaReadMixed(req)
+	if !s.isStaleRead {
+		s.tryOverloadedLeader(req)
+	}
+	if s.target == nil {
+		switch s.replicaReadType {
+		case kv.ReplicaReadLeader:
+			s.nextForReplicaReadLeader(req)
+		default:
+			s.nextForReplicaReadMixed(req)
+		}
 	}
 	if s.target == nil {
 		return nil, nil
 	}
 	return s.buildRPCContext(bo, s.target, s.proxy)
+}
+
+// tryOverloadedLeader takes the leader when its store reports a tenant is
+// overloading it -- for every tenant, not only the blamed group. A follower read
+// returns here as a ReadIndex over the 1-4 gRPC connections per store pair that
+// all groups share, so a bystander queues behind the noisy group's raft traffic
+// anyway; serving from the leader's lease removes that message instead of moving
+// it. Stale reads are excluded by the caller: they need no ReadIndex.
+func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
+	leaderIdx := s.region.getStore().workTiKVIdx
+	if int(leaderIdx) >= len(s.replicas) {
+		return
+	}
+	leader := s.replicas[leaderIdx]
+	if !leader.store.healthStatus.IsOverloaded() {
+		return
+	}
+	if s.target = (ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}).next(s.replicas); s.target == nil {
+		return
+	}
+	blamed := "false"
+	if leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName()) {
+		blamed = "true"
+	}
+	metrics.TiKVNoisyTenantLeaderPinnedCounter.WithLabelValues(blamed).Inc()
+	// A plain leader read: no ReplicaRead, and no busy threshold, because the
+	// threshold's own fallback is to an idle follower and that is a ReadIndex.
+	req.ReplicaRead = false
+	req.StaleRead = false
+	req.BusyThresholdMs = 0
+	s.busyThreshold = 0
 }
 
 func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
@@ -623,7 +643,14 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	metrics.TiKVNoisyTenantServerBusyCounter.Inc()
 	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
 	// store with no group dimension.
-	s.pinRetryToLeader(req)
+	//
+	// The rejection is a second way to learn what health feedback reports
+	// directly, so it marks the store rather than steering this one request:
+	// every tenant's next read on a region this store leads then stays on the
+	// leader instead of reaching it as a ReadIndex from a follower.
+	if ctx != nil && ctx.Store != nil {
+		ctx.Store.healthStatus.markOverloaded(true)
+	}
 	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
 	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
 		return false, err
@@ -633,15 +660,6 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 
 // Pins every remaining attempt to the leader. busyThreshold must go too, or
 // nextForReplicaReadLeader diverts to a replica whenever the leader is busy.
-func (s *replicaSelector) pinRetryToLeader(req *tikvrpc.Request) {
-	req.SetReplicaReadType(kv.ReplicaReadLeader)
-	req.BusyThresholdMs = 0
-	req.StaleRead = false
-	s.replicaReadType = kv.ReplicaReadLeader
-	s.busyThreshold = 0
-	s.option.leaderOnly = true
-}
-
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {

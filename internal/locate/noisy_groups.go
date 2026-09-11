@@ -19,11 +19,10 @@ import "sync/atomic"
 // noisyGroups is the set of resource groups one store currently blames for its
 // own overload, as last reported in that store's HealthFeedback.
 //
-// Knowing the whole set is what lets a group's reads stay on the leader from
-// the first request onwards. The alternative, learning from a ServerIsBusy
-// tagged with the noisy-tenant suffix, only ever teaches the one request that
-// was already rejected, and teaches it after it has bounced off a follower that
-// had to consult that same overloaded leader for a ReadIndex.
+// A report naming anyone marks the whole store overloaded, which is mirrored
+// onto StoreHealthStatus so the replica selector can consult it the same way it
+// consults IsSlow. This set is kept only to attribute blame in metrics: which
+// group is named changes nothing about how a request is routed.
 //
 // The zero value means nothing is known, which is deliberately not the same as
 // knowing that nobody is noisy: a store running a version that does not report
