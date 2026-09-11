@@ -36,6 +36,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -294,6 +295,55 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		val, err := txn.Get(context.Background(), key)
 		s.Nil(err)
 		s.Equal([]byte(strconv.Itoa(i)), val.Value)
+	}
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
+	for _, test := range []struct {
+		name         string
+		lostResponse bool
+	}{
+		{name: "lost response", lostResponse: true},
+		{name: "definitive failure"},
+	} {
+		s.Run(test.name, func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+			s.Require().NoError(err)
+			key, value := s.key(test.name), []byte("value")
+			s.Require().NoError(txn.Set(key, value))
+			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("pipelined-commit-error", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					if req.Type != tikvrpc.CmdCommit {
+						return next(target, req)
+					}
+					if !test.lostResponse {
+						return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{Abort: "injected abort"}}}, nil
+					}
+					resp, err := next(target, req)
+					s.Require().NoError(err)
+					s.Require().Nil(resp.Resp.(*kvrpcpb.CommitResponse).GetError())
+					// Lose the response after the primary has actually committed.
+					cancel()
+					return nil, context.Canceled
+				}
+			}))
+
+			err = txn.Commit(ctx)
+			if !test.lostResponse {
+				s.Require().ErrorContains(err, "injected abort")
+				s.False(tikverr.IsErrorUndetermined(err))
+				return
+			}
+			s.Require().ErrorIs(err, tikverr.ErrResultUndetermined)
+			reader, err := s.store.Begin()
+			s.Require().NoError(err)
+			defer reader.Rollback()
+			result, err := reader.Get(context.Background(), key)
+			s.Require().NoError(err)
+			s.Equal(value, result.Value)
+		})
 	}
 }
 

@@ -326,6 +326,9 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	primaryMutation := NewPlainMutations(1)
 	primaryMutation.Push(c.pipelinedCommitInfo.primaryOp, c.primaryKey, nil, false, false, false, false)
 	if err = c.commitMutations(bo, &primaryMutation); err != nil {
+		if c.getUndeterminedErr() != nil {
+			return errors.WithStack(tikverr.ErrResultUndetermined)
+		}
 		return errors.Trace(err)
 	}
 	c.mu.Lock()
