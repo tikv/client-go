@@ -165,12 +165,10 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 		return
 	}
 	leader := s.replicas[leaderIdx]
-	if !leader.store.healthStatus.IsOverloaded() {
+	if !leader.store.healthStatus.IsOverloaded() || !isOverloadedLeaderCandidate(leader) {
 		return
 	}
-	if s.target = (ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}).next(s.replicas); s.target == nil {
-		return
-	}
+	s.target = leader
 	blamed := "false"
 	if leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName()) {
 		blamed = "true"
@@ -300,6 +298,28 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 }
 
 // check leader is candidate or not.
+// isOverloadedLeaderCandidate is isLeaderCandidate without the deadline test, for
+// a leader whose store reports being overloaded.
+//
+// A configurable-timeout deadline error from such a leader means the request sat
+// in that store's read-pool queue until it expired, which is resource control
+// shedding the group. Normally that flag diverts the retry to a follower (see
+// nextForReplicaReadLeader, which even converts it into a replica read), but the
+// same group is throttled against the same quota on that follower, so the retry
+// deadlines again having first spent a ReadIndex to get there. Keeping the
+// request on the leader spends the retry without the raft round trip.
+//
+// The other disqualifiers stand. An unreachable leader still needs the forwarding
+// path, a peer that answered NotLeader is not the leader any more, a stale epoch
+// needs a fresh region, and isExhausted still bounds how many times the deadline
+// may be re-hit before normal selection takes over again.
+func isOverloadedLeaderCandidate(leader *replica) bool {
+	return leader.store.getLivenessState() == reachable &&
+		!leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) &&
+		!leader.hasFlag(notLeaderFlag) &&
+		!leader.isEpochStale()
+}
+
 func isLeaderCandidate(leader *replica) bool {
 	// If hibernate region is enabled and the leader is not reachable, the raft group
 	// will not be wakened up and re-elect the leader until the follower receives

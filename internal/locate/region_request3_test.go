@@ -1094,6 +1094,55 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.False(rpcCtx.Store.healthStatus.IsSlow())
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineRetry() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	bo := retry.NewBackoffer(context.Background(), -1)
+	newReq := func() *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadMixed, nil)
+		req.BusyThresholdMs = 50
+		return req
+	}
+
+	req := newReq()
+	selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	leaderIdx := selector.region.getStore().workTiKVIdx
+	leaderStore := selector.replicas[leaderIdx].store
+	defer leaderStore.healthStatus.markOverloaded(false)
+
+	// First attempt: the overload mark takes it to the leader.
+	leaderStore.healthStatus.markOverloaded(true)
+	rpcCtx, err := selector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.Zero(req.BusyThresholdMs)
+
+	// The leader then answers with a configurable-timeout deadline. Upstream that
+	// disqualifies it and turns the retry into a replica read on a follower, but
+	// a follower throttles the same group against the same quota, so while the
+	// store is overloaded the retry stays here rather than spending a ReadIndex.
+	selector.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	rpcCtx, err = selector.next(bo, req)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "an overloaded leader keeps the deadline retry")
+	s.False(req.ReplicaRead)
+	s.False(req.StaleRead)
+
+	// Once the store is no longer overloaded the upstream behaviour stands: the
+	// pin does not fire, so the busy threshold it would have cleared survives.
+	leaderStore.healthStatus.markOverloaded(false)
+	other := newReq()
+	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
+	s.Nil(err)
+	otherSel.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	_, err = otherSel.next(bo, other)
+	s.Nil(err)
+	s.Equal(uint32(50), other.BusyThresholdMs, "without the mark the deadline flag is left to upstream")
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {
 	const group = "uds_006"
 
