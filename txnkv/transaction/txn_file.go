@@ -1059,7 +1059,7 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 				zap.Stringer("action", action))
 			return nil
 		}
-		errGo := c.txn.spawnWithStorePool(func() {
+		errGo := c.txn.spawn(func() {
 			err := c.executeTxnFileSliceWithRetry(secondaryBo, chunkSlice, secondaries, action)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),

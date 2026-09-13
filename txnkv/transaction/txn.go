@@ -464,38 +464,30 @@ func (txn *KVTxn) SetBackgroundGoroutineLifecycleHooks(hooks LifecycleHooks) {
 	txn.backgroundGoroutineLifecycleHooks = hooks
 }
 
-// spawn starts a goroutine to run the given function.
-func (txn *KVTxn) spawn(f func()) {
+// spawn starts a background goroutine to run the given function.
+//
+// It is the only way a transaction spawns a background goroutine: the function
+// runs in the store's goroutine pool and is tracked by the store, so that
+// closing the store waits for it instead of racing with it.
+//
+// A non-nil error means the function is rejected and will never run, which
+// happens when the store is closing. The caller then owns the cleanup of
+// whatever it has prepared for the function.
+func (txn *KVTxn) spawn(f func()) error {
 	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
 		txn.backgroundGoroutineLifecycleHooks.Pre()
 	}
-	txn.store.WaitGroup().Add(1)
-	go func() {
-		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
-			defer txn.backgroundGoroutineLifecycleHooks.Post()
-		}
-		defer txn.store.WaitGroup().Done()
-
-		f()
-	}()
-}
-
-// spawnWithStorePool starts a goroutine to run the given function with the store's goroutine pool.
-func (txn *KVTxn) spawnWithStorePool(f func()) error {
-	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
-		txn.backgroundGoroutineLifecycleHooks.Pre()
-	}
-	txn.store.WaitGroup().Add(1)
 	err := txn.store.Go(func() {
 		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
 			defer txn.backgroundGoroutineLifecycleHooks.Post()
 		}
-		defer txn.store.WaitGroup().Done()
 
 		f()
 	})
-	if err != nil {
-		txn.store.WaitGroup().Done()
+	if err != nil && txn.backgroundGoroutineLifecycleHooks.Post != nil {
+		// Pre has been called but the goroutine will never run, so Post must be
+		// called here to keep the hooks balanced.
+		txn.backgroundGoroutineLifecycleHooks.Post()
 	}
 	return err
 }
@@ -1020,7 +1012,7 @@ func (txn *KVTxn) Rollback() error {
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
-		txn.spawnWithStorePool(
+		err := txn.spawn(
 			func() {
 				broadcastToAllStores(
 					txn,
@@ -1042,6 +1034,10 @@ func (txn *KVTxn) Rollback() error {
 				)
 			},
 		)
+		if err != nil {
+			logutil.BgLogger().Warn("[kv] failed to spawn the goroutine broadcasting the rolled back txn status",
+				zap.Uint64("txnStartTS", txn.startTS), zap.Error(err))
+		}
 		if needCleanUpLocks {
 			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)
 			txn.committer.resolveFlushedLocks(rollbackBo, pipelinedStart, pipelinedEnd, false)
@@ -2141,16 +2137,14 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
-	txn.store.WaitGroup().Add(1)
-	go func() {
-		defer txn.store.WaitGroup().Done()
+	err := txn.spawn(func() {
+		defer wg.Done()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
 				switch s {
 				case "skip":
 					logutil.Logger(ctx).Info("[failpoint] injected skip async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS))
-					wg.Done()
 					return
 				case "delay":
 					duration := time.Duration(rand.Int63n(int64(time.Second) * 2))
@@ -2165,8 +2159,14 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		if err != nil {
 			logutil.Logger(ctx).Warn("[kv] pessimisticRollback failed.", zap.Error(err))
 		}
+	})
+	if err != nil {
+		// The rollback will never run, release the waiter so that it does not
+		// block forever.
 		wg.Done()
-	}()
+		logutil.Logger(ctx).Warn("[kv] failed to spawn the async pessimistic rollback",
+			zap.Uint64("txnStartTS", txn.startTS), zap.Error(err))
+	}
 	return wg
 }
 

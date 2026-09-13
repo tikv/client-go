@@ -120,6 +120,10 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 // or at runtime by calling SetLowResolutionTimestampUpdateInterval on the oracle
 var defaultOracleUpdateInterval = 2 * time.Second
 
+// ErrStoreClosed is returned by KVStore.Go when the store is closing, which
+// means the submitted function is rejected and will never be executed.
+var ErrStoreClosed = errors.New("the store is closed")
+
 // KVStore contains methods to interact with a TiKV cluster.
 type KVStore struct {
 	clusterID uint64
@@ -160,16 +164,57 @@ type KVStore struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
 	close  atomicutil.Bool
 	gP     Pool
+
+	// backgroundJobs guards the spawning of background goroutines. Every
+	// background goroutine owned by the store is started by Go and tracked by
+	// wg, and no new one is admitted once the store starts closing. The lock is
+	// what makes `wg.Add` in Go and `wg.Wait` in stopBackgroundJobs mutually
+	// exclusive, which a plain atomic flag cannot guarantee.
+	backgroundJobs struct {
+		sync.RWMutex
+		closed bool
+	}
+	wg sync.WaitGroup
 }
 
 var _ Storage = (*KVStore)(nil)
 
-// Go run the function in a separate goroutine.
+// Go runs f in a background goroutine owned by the store.
+//
+// This is the only supported way to spawn a background goroutine on behalf of a
+// store: f runs in the store's goroutine pool and is tracked by the store, so
+// that Close waits for it instead of racing with it.
+//
+// A non-nil error means f is rejected and will never run, which happens when
+// the store is closing. The caller then owns the cleanup of whatever it has
+// prepared for f, for example releasing a token or marking a WaitGroup done.
 func (s *KVStore) Go(f func()) error {
-	return s.gP.Run(f)
+	s.backgroundJobs.RLock()
+	if s.backgroundJobs.closed {
+		s.backgroundJobs.RUnlock()
+		return ErrStoreClosed
+	}
+	s.wg.Add(1)
+	err := s.gP.Run(func() {
+		defer s.wg.Done()
+		f()
+	})
+	s.backgroundJobs.RUnlock()
+	if err != nil {
+		s.wg.Done()
+	}
+	return err
+}
+
+// stopBackgroundJobs rejects any new background job and waits for the running
+// ones to finish.
+func (s *KVStore) stopBackgroundJobs() {
+	s.backgroundJobs.Lock()
+	s.backgroundJobs.closed = true
+	s.backgroundJobs.Unlock()
+	s.wg.Wait()
 }
 
 // UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
@@ -359,6 +404,9 @@ func NewKVStore(
 		if retErr != nil {
 			regionCache.Close()
 			cancel()
+			// Background jobs may already have been started below, stop them
+			// before reporting the failure.
+			store.stopBackgroundJobs()
 		}
 	}()
 
@@ -378,9 +426,11 @@ func NewKVStore(
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 
-	store.wg.Add(2)
-	go store.runTxnSafePointUpdater()
-	go store.safeTSUpdater()
+	for _, updater := range []func(){store.runTxnSafePointUpdater, store.safeTSUpdater} {
+		if err := store.Go(updater); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
 
 	return store, nil
 }
@@ -425,7 +475,6 @@ func (s *KVStore) IsLatchEnabled() bool {
 }
 
 func (s *KVStore) runTxnSafePointUpdater() {
-	defer s.wg.Done()
 	if _, e := util.EvalFailpoint("noBuiltInTxnSafePointUpdater"); e == nil {
 		return
 	}
@@ -502,7 +551,7 @@ func (s *KVStore) Close() error {
 	defer s.gP.Close()
 	s.close.Store(true)
 	s.cancel()
-	s.wg.Wait()
+	s.stopBackgroundJobs()
 
 	s.oracle.Close()
 	if s.txnLatches != nil {
@@ -715,7 +764,12 @@ func (s *KVStore) IsClose() bool {
 	return s.close.Load()
 }
 
-// WaitGroup returns wg
+// WaitGroup returns the WaitGroup that tracks the store's background
+// goroutines.
+//
+// Deprecated: use Go to spawn a background goroutine, which registers it with
+// this WaitGroup for you. Adding to the WaitGroup directly races with the
+// Wait done by Close.
 func (s *KVStore) WaitGroup() *sync.WaitGroup {
 	return &s.wg
 }
@@ -776,7 +830,6 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 }
 
 func (s *KVStore) safeTSUpdater() {
-	defer s.wg.Done()
 	t := time.NewTicker(safeTSUpdateInterval)
 	if _, e := util.EvalFailpoint("mockFastSafeTSUpdater"); e == nil {
 		t.Reset(time.Millisecond * 100)
