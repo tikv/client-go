@@ -44,24 +44,19 @@ func TestPriority(t *testing.T) {
 		re.Equal(uint64(5), aq.highestPriority())
 		aq.clean()
 		re.Equal(5, aq.Len())
-		arr := make([]Item, 0)
-		collect := func(items []Item) {
-			arr = arr[:0]
-			arr = append(arr, items...)
-		}
 
-		aq.Take(1, collect)
+		arr := aq.Take(1)
 		re.Len(arr, 1)
 		re.Equal(uint64(5), arr[0].priority())
 		re.Equal(uint64(4), aq.highestPriority())
 
-		aq.Take(2, collect)
+		arr = aq.Take(2)
 		re.Len(arr, 2)
 		re.Equal(uint64(4), arr[0].priority())
 		re.Equal(uint64(3), arr[1].priority())
 		re.Equal(uint64(2), aq.highestPriority())
 
-		aq.Take(5, collect)
+		arr = aq.Take(5)
 		re.Len(arr, 2)
 		re.Equal(uint64(2), arr[0].priority())
 		re.Equal(uint64(1), arr[1].priority())
@@ -75,47 +70,4 @@ func TestPriority(t *testing.T) {
 	}
 	hq := NewPriorityQueue()
 	testFunc(hq)
-}
-
-func TestPriorityQueueTakeAllLeavesReferencesInBackingArray(t *testing.T) {
-	re := require.New(t)
-	pq := NewPriorityQueue()
-	checkReferences := func() bool {
-		backing := pq.ps[len(pq.ps):cap(pq.ps)]
-		for _, v := range backing {
-			if v != nil {
-				return true
-			}
-		}
-		return false
-	}
-
-	for i := 0; i < 3; i++ {
-		pq.Push(&FakeItem{pri: uint64(i + 1)})
-	}
-	re.False(checkReferences(), "expected no references in backing array yet")
-
-	arr := make([]Item, 0)
-	collect := func(items []Item) {
-		arr = arr[:0]
-		arr = append(arr, items...)
-	}
-
-	// pop one item, should leave reference in backing array.
-	pq.Take(1, collect)
-	re.Len(pq.ps, 2)
-	re.Len(arr, 1)
-	re.False(checkReferences(), "expected no references in backing array yet")
-
-	// Take all items without clean, the references remain in the backing array.
-	pq.Take(pq.Len(), collect)
-	re.Empty(pq.ps)
-	re.False(checkReferences(), "expected no references in backing array yet")
-
-	for i := 0; i < 3; i++ {
-		pq.Push(&FakeItem{pri: uint64(i + 1), canceled: true})
-	}
-	pq.clean()
-	re.Empty(pq.ps)
-	re.False(checkReferences(), "expected no references in backing array yet")
 }
