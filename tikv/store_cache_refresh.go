@@ -92,12 +92,16 @@ func (s *KVStore) taskStillLive(storeID uint64, task *storeCacheRefreshTask) boo
 	return ok && cur == task
 }
 
-// testRefreshTaskAfterLoad runs after a task is loaded and before it is locked.
-// Tests use it to create a deterministic recycle interleaving.
-var testRefreshTaskAfterLoad func()
+func (s *KVStore) recycleIfIdleReadyLocked(storeID uint64, task *storeCacheRefreshTask, remaining, failed int) {
+	if remaining == 0 && failed == 0 && !task.running {
+		s.refreshTasks.CompareAndDelete(storeID, task)
+	}
+}
 
 // dropMovedUnresolvedLocked removes failures only when the original key range is
 // fully covered by unexpired cached regions that no longer work on storeID.
+// Cache TTL expiry is not success: Operator fallback is a separate wait, and
+// leftover failures are dropped only by ResetStoreCacheRefresh.
 func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
 	var idx *locate.WorkSpanIndex
 	for id, u := range task.unresolved {
@@ -134,6 +138,46 @@ func (s *KVStore) stopRefreshTasks() {
 	for _, ch := range waits {
 		<-ch
 	}
+	s.refreshTasks.Range(func(k, v any) bool {
+		s.refreshTasks.CompareAndDelete(k, v)
+		return true
+	})
+}
+
+// ResetStoreCacheRefresh drops unresolved failures and the idle task for storeID.
+// It does not mark a refresh successful. Operator fallback is: stop waiting for
+// ready, wait the region-cache TTL, then restart; pass reset=1 on the next
+// rolling's POST so leftover failures from that fallback do not stick.
+func (s *KVStore) ResetStoreCacheRefresh(storeID uint64) {
+	if storeID == 0 {
+		return
+	}
+	for {
+		task := s.getRefreshTaskIfAny(storeID)
+		if task == nil {
+			return
+		}
+		task.mu.Lock()
+		if !s.taskStillLive(storeID, task) {
+			task.mu.Unlock()
+			continue
+		}
+		if task.running {
+			if task.cancel != nil {
+				task.cancel()
+			}
+			wait := task.round
+			task.mu.Unlock()
+			if wait != nil {
+				<-wait.done
+			}
+			continue
+		}
+		task.unresolved = make(map[locate.RegionVerID]unresolvedFail)
+		s.refreshTasks.CompareAndDelete(storeID, task)
+		task.mu.Unlock()
+		return
+	}
 }
 
 func closedStoreCacheResult(storeID uint64) StoreCacheRefreshResult {
@@ -161,6 +205,7 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 	s.dropMovedUnresolvedLocked(task, storeID)
 	failed := len(task.unresolved)
 	inProgress := task.running
+	s.recycleIfIdleReadyLocked(storeID, task, n, failed)
 	task.mu.Unlock()
 	return StoreCacheStatus{
 		StoreID:    storeID,
@@ -176,6 +221,12 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 // It does not use RegionRequestSender.SendReq, so it will not retry on the new leader.
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
+	return s.refreshStoreCache(ctx, storeID, nil)
+}
+
+// afterLoad runs after the task is loaded and before it is locked. Tests use it
+// to interleave recycle with a stale pointer; production passes nil.
+func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -197,8 +248,9 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 			return closedStoreCacheResult(storeID)
 		}
 		task = s.getRefreshTask(storeID)
-		if testRefreshTaskAfterLoad != nil {
-			testRefreshTaskAfterLoad()
+		if afterLoad != nil {
+			afterLoad()
+			afterLoad = nil
 		}
 		task.mu.Lock()
 		if s.IsClose() || !s.taskStillLive(storeID, task) {
@@ -268,9 +320,7 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	task.running = false
 	task.cancel = nil
 	close(round.done)
-	if res.Ready {
-		s.refreshTasks.CompareAndDelete(storeID, task)
-	}
+	s.recycleIfIdleReadyLocked(storeID, task, res.Remaining, res.Failed)
 	task.mu.Unlock()
 	cancel()
 	return res
