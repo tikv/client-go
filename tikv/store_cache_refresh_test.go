@@ -629,7 +629,7 @@ func TestStoreCacheRefreshResetClearsFailure(t *testing.T) {
 	require.Greater(t, res.Failed, 0)
 
 	store.GetRegionCache().InvalidateCachedRegion(loc.Region)
-	store.ResetStoreCacheRefresh(storeIDs[0])
+	require.NoError(t, store.ResetStoreCacheRefresh(storeIDs[0]))
 	status := store.GetStoreCacheStatus(storeIDs[0])
 	require.Equal(t, 0, status.Failed)
 	require.True(t, status.Ready)
@@ -639,6 +639,103 @@ func TestStoreCacheRefreshResetClearsFailure(t *testing.T) {
 		return true
 	})
 	require.Zero(t, n)
+}
+
+func TestStoreCacheRefreshResetBusyLeavesRunningJob(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var inFlight atomic.Int64
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				inFlight.Add(1)
+				select {
+				case <-started:
+				default:
+					close(started)
+				}
+				<-release
+				inFlight.Add(-1)
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	done := make(chan StoreCacheRefreshResult, 1)
+	go func() {
+		done <- store.RefreshStoreCache(context.Background(), storeIDs[0])
+	}()
+	<-started
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- store.ResetStoreCacheRefresh(storeIDs[0])
+	}()
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, ErrStoreCacheRefreshBusy)
+	case <-time.After(time.Second):
+		t.Fatal("reset waited on the running refresh")
+	}
+	require.Equal(t, int64(1), inFlight.Load())
+	close(release)
+	res := <-done
+	require.False(t, res.Ready)
+	require.Greater(t, res.Failed, 0)
+}
+
+func TestStoreCacheRefreshCancelledWaiterDoesNotReset(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				select {
+				case <-started:
+				default:
+					close(started)
+				}
+				<-release
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	done := make(chan StoreCacheRefreshResult, 1)
+	go func() {
+		done <- store.RefreshStoreCache(context.Background(), storeIDs[0])
+	}()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	waitDone := make(chan StoreCacheRefreshResult, 1)
+	go func() {
+		waitDone <- store.RefreshStoreCache(ctx, storeIDs[0])
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	waited := <-waitDone
+	require.False(t, waited.Ready)
+	require.Contains(t, waited.Errors, context.Canceled.Error())
+	require.ErrorIs(t, store.ResetStoreCacheRefresh(storeIDs[0]), ErrStoreCacheRefreshBusy)
+	close(release)
+	<-done
 }
 
 type refreshInterceptClient struct {
