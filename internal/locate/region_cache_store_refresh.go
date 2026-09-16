@@ -9,6 +9,7 @@
 package locate
 
 import (
+	"bytes"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -16,12 +17,12 @@ import (
 
 // WorkStoreMatch is a cached region whose working TiKV is a given store.
 type WorkStoreMatch struct {
-	Region    RegionVerID
-	StartKey  []byte
-	Peer      *metapb.Peer
-	AccessIdx AccessIndex
-	Addr      string
-	Epoch     *metapb.RegionEpoch
+	Region   RegionVerID
+	StartKey []byte
+	EndKey   []byte
+	Peer     *metapb.Peer
+	Addr     string
+	Epoch    *metapb.RegionEpoch
 }
 
 // CountWorkStoreMatches returns how many unexpired cache entries currently work on storeID.
@@ -68,18 +69,19 @@ func (c *RegionCache) CollectWorkStoreMatches(storeID uint64) []WorkStoreMatch {
 		if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
 			continue
 		}
-		store, peer, accessIdx, _ := r.WorkStorePeer(rs)
+		store, peer, _, _ := r.WorkStorePeer(rs)
 		if store == nil || peer == nil || store.StoreID() != storeID {
 			continue
 		}
 		start := append([]byte(nil), r.StartKey()...)
+		end := append([]byte(nil), r.EndKey()...)
 		out = append(out, WorkStoreMatch{
-			Region:    r.VerID(),
-			StartKey:  start,
-			Peer:      protoClonePeer(peer),
-			AccessIdx: accessIdx,
-			Addr:      store.GetAddr(),
-			Epoch:     protoCloneEpoch(r.meta.GetRegionEpoch()),
+			Region:   r.VerID(),
+			StartKey: start,
+			EndKey:   end,
+			Peer:     protoClonePeer(peer),
+			Addr:     store.GetAddr(),
+			Epoch:    protoCloneEpoch(r.meta.GetRegionEpoch()),
 		})
 	}
 	return out
@@ -125,41 +127,40 @@ func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStor
 	return WorkStoreOnStore
 }
 
-func (c *RegionCache) validCachedRegionByKey(key []byte) *Region {
-	r, expired := c.searchCachedRegionByKey(key, false)
-	if r == nil {
-		return nil
+func keyRangesOverlap(aStart, aEnd, bStart, bEnd []byte) bool {
+	if len(aEnd) > 0 && bytes.Compare(bStart, aEnd) >= 0 {
+		return false
 	}
+	if len(bEnd) > 0 && bytes.Compare(aStart, bEnd) >= 0 {
+		return false
+	}
+	return true
+}
+
+// OverlappingWorkStoreState reports whether any unexpired cached region overlapping
+// [startKey, endKey) still works on storeID. It does not renew region TTL.
+func (c *RegionCache) OverlappingWorkStoreState(startKey, endKey []byte, storeID uint64) (anyOnStore, anyValid bool) {
 	now := time.Now().Unix()
-	if !expired && !r.isCacheTTLExpired(now) {
-		return r
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, r := range c.mu.regions {
+		if r == nil || r.meta == nil || r.isCacheTTLExpired(now) {
+			continue
+		}
+		if !keyRangesOverlap(startKey, endKey, r.StartKey(), r.EndKey()) {
+			continue
+		}
+		anyValid = true
+		rs := r.getStore()
+		if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
+			continue
+		}
+		store, peer, _, _ := r.WorkStorePeer(rs)
+		if store != nil && peer != nil && store.StoreID() == storeID {
+			return true, true
+		}
 	}
-	latest, latestExpired := c.searchCachedRegionByID(r.GetID())
-	if latest == nil || latestExpired || latest.isCacheTTLExpired(now) {
-		return nil
-	}
-	return latest
-}
-
-// ClassifyKeyWorkStore reports the working-store state of the cached region covering key.
-func (c *RegionCache) ClassifyKeyWorkStore(key []byte, storeID uint64) WorkStoreMatchState {
-	r := c.validCachedRegionByKey(key)
-	if r == nil {
-		return WorkStoreGone
-	}
-	if r.GetLeaderStoreID() != storeID {
-		return WorkStoreMoved
-	}
-	return WorkStoreOnStore
-}
-
-// CachedRegionVerIDByKey returns the current cached RegionVerID covering key, if any.
-func (c *RegionCache) CachedRegionVerIDByKey(key []byte) (RegionVerID, bool) {
-	r := c.validCachedRegionByKey(key)
-	if r == nil {
-		return RegionVerID{}, false
-	}
-	return r.VerID(), true
+	return false, anyValid
 }
 
 // StillWorksOnStore reports whether the cached region still uses storeID as working TiKV.
