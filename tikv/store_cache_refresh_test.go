@@ -237,6 +237,54 @@ func TestStoreCacheRefreshJobDeadline(t *testing.T) {
 	require.Greater(t, res.Failed, 0)
 }
 
+func TestStoreCacheRefreshResolvesFailureAfterBusinessMovesLeader(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	first := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, first.Ready)
+	require.Greater(t, first.Failed, 0)
+
+	store.GetRegionCache().UpdateLeader(loc.Region, &metapb.Peer{Id: peerIDs[1], StoreId: storeIDs[1]}, 0)
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, result.Ready, "business corrected cached route but task never recovers: %+v", result)
+	require.Equal(t, 0, result.Failed)
+	status := store.GetStoreCacheStatus(storeIDs[0])
+	require.True(t, status.Ready)
+	require.Equal(t, 0, status.Failed)
+}
+
+func TestStoreCacheRefreshSetsInternalRequestSource(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var got string
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onReq: func(req *tikvrpc.Request) {
+				got = req.GetRequestSource()
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	_ = store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Equal(t, "internal_store_cache_refresh", got)
+}
+
 func TestStoreCacheRefreshRetainsUnrelatedFailure(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
@@ -307,9 +355,13 @@ func TestStoreCacheRefreshCloseRefusesAndCancels(t *testing.T) {
 type refreshInterceptClient struct {
 	Client
 	onGet func()
+	onReq func(req *tikvrpc.Request)
 }
 
 func (c *refreshInterceptClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdGet && c.onReq != nil {
+		c.onReq(req)
+	}
 	if req.Type == tikvrpc.CmdGet && c.onGet != nil {
 		c.onGet()
 	}
