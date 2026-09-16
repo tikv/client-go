@@ -26,8 +26,29 @@ type WorkStoreMatch struct {
 
 // CountWorkStoreMatches returns how many unexpired cache entries currently work on storeID.
 // It does not call isValid()/checkRegionCacheTTL, so it will not renew TTL.
+// Unlike CollectWorkStoreMatches it does not copy keys or peers.
 func (c *RegionCache) CountWorkStoreMatches(storeID uint64) int {
-	return len(c.CollectWorkStoreMatches(storeID))
+	if storeID == 0 {
+		return 0
+	}
+	now := time.Now().Unix()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	n := 0
+	for _, r := range c.mu.regions {
+		if r == nil || r.meta == nil || r.isCacheTTLExpired(now) {
+			continue
+		}
+		rs := r.getStore()
+		if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
+			continue
+		}
+		store, peer, _, _ := r.WorkStorePeer(rs)
+		if store != nil && peer != nil && store.StoreID() == storeID {
+			n++
+		}
+	}
+	return n
 }
 
 // CollectWorkStoreMatches snapshots unexpired cache entries whose working TiKV is storeID.
@@ -102,6 +123,43 @@ func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStor
 		return WorkStoreMoved
 	}
 	return WorkStoreOnStore
+}
+
+func (c *RegionCache) validCachedRegionByKey(key []byte) *Region {
+	r, expired := c.searchCachedRegionByKey(key, false)
+	if r == nil {
+		return nil
+	}
+	now := time.Now().Unix()
+	if !expired && !r.isCacheTTLExpired(now) {
+		return r
+	}
+	latest, latestExpired := c.searchCachedRegionByID(r.GetID())
+	if latest == nil || latestExpired || latest.isCacheTTLExpired(now) {
+		return nil
+	}
+	return latest
+}
+
+// ClassifyKeyWorkStore reports the working-store state of the cached region covering key.
+func (c *RegionCache) ClassifyKeyWorkStore(key []byte, storeID uint64) WorkStoreMatchState {
+	r := c.validCachedRegionByKey(key)
+	if r == nil {
+		return WorkStoreGone
+	}
+	if r.GetLeaderStoreID() != storeID {
+		return WorkStoreMoved
+	}
+	return WorkStoreOnStore
+}
+
+// CachedRegionVerIDByKey returns the current cached RegionVerID covering key, if any.
+func (c *RegionCache) CachedRegionVerIDByKey(key []byte) (RegionVerID, bool) {
+	r := c.validCachedRegionByKey(key)
+	if r == nil {
+		return RegionVerID{}, false
+	}
+	return r.VerID(), true
 }
 
 // StillWorksOnStore reports whether the cached region still uses storeID as working TiKV.

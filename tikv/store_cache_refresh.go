@@ -53,28 +53,60 @@ type StoreCacheRefreshResult struct {
 	ObservedAt int64    `json:"observed_at"`
 }
 
+type unresolvedFail struct {
+	startKey []byte
+	err      string
+}
+
+type refreshRound struct {
+	done chan struct{}
+	res  StoreCacheRefreshResult
+}
+
 type storeCacheRefreshTask struct {
 	mu         sync.Mutex
 	running    bool
 	cancel     context.CancelFunc
-	done       chan struct{}
-	last       StoreCacheRefreshResult
-	unresolved map[locate.RegionVerID]string
+	round      *refreshRound
+	unresolved map[locate.RegionVerID]unresolvedFail
 }
 
 func (s *KVStore) getRefreshTask(storeID uint64) *storeCacheRefreshTask {
 	v, _ := s.refreshTasks.LoadOrStore(storeID, &storeCacheRefreshTask{
-		unresolved: make(map[locate.RegionVerID]string),
+		unresolved: make(map[locate.RegionVerID]unresolvedFail),
 	})
 	return v.(*storeCacheRefreshTask)
 }
 
-// dropMovedUnresolvedLocked removes failures whose same-version cache entry
-// is still valid but no longer works on storeID. Expired/removed entries stay.
+func (s *KVStore) getRefreshTaskIfAny(storeID uint64) *storeCacheRefreshTask {
+	v, ok := s.refreshTasks.Load(storeID)
+	if !ok {
+		return nil
+	}
+	return v.(*storeCacheRefreshTask)
+}
+
+// dropMovedUnresolvedLocked removes failures that are no longer on storeID.
+// Same-version cache that already moved is dropped. If the version is gone
+// but a replacement region covering the same start key has also left storeID,
+// the old failure is dropped. Expired keys with no replacement stay.
 func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
-	for id := range task.unresolved {
-		if s.regionCache.ClassifyWorkStore(id, storeID) == locate.WorkStoreMoved {
+	for id, u := range task.unresolved {
+		switch s.regionCache.ClassifyWorkStore(id, storeID) {
+		case locate.WorkStoreMoved:
 			delete(task.unresolved, id)
+		case locate.WorkStoreGone:
+			switch s.regionCache.ClassifyKeyWorkStore(u.startKey, storeID) {
+			case locate.WorkStoreMoved:
+				delete(task.unresolved, id)
+			case locate.WorkStoreOnStore:
+				if newID, ok := s.regionCache.CachedRegionVerIDByKey(u.startKey); ok && newID != id {
+					delete(task.unresolved, id)
+					if _, exists := task.unresolved[newID]; !exists {
+						task.unresolved[newID] = u
+					}
+				}
+			}
 		}
 	}
 }
@@ -88,8 +120,8 @@ func (s *KVStore) stopRefreshTasks() {
 			if task.cancel != nil {
 				task.cancel()
 			}
-			if task.done != nil {
-				waits = append(waits, task.done)
+			if task.round != nil {
+				waits = append(waits, task.round.done)
 			}
 		}
 		task.mu.Unlock()
@@ -112,7 +144,15 @@ func closedStoreCacheResult(storeID uint64) StoreCacheRefreshResult {
 // plus unresolved failures from previous refreshes of this store.
 func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 	n := s.regionCache.CountWorkStoreMatches(storeID)
-	task := s.getRefreshTask(storeID)
+	task := s.getRefreshTaskIfAny(storeID)
+	if task == nil {
+		return StoreCacheStatus{
+			StoreID:    storeID,
+			Matched:    n,
+			Ready:      n == 0,
+			ObservedAt: time.Now().Unix(),
+		}
+	}
 	task.mu.Lock()
 	s.dropMovedUnresolvedLocked(task, storeID)
 	failed := len(task.unresolved)
@@ -145,20 +185,21 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 		return closedStoreCacheResult(storeID)
 	}
 	if task.running {
-		done := task.done
+		round := task.round
 		task.mu.Unlock()
+		if round == nil {
+			return StoreCacheRefreshResult{StoreID: storeID, ObservedAt: time.Now().Unix()}
+		}
 		select {
 		case <-ctx.Done():
 			return StoreCacheRefreshResult{StoreID: storeID, Errors: []string{ctx.Err().Error()}, ObservedAt: time.Now().Unix()}
-		case <-done:
-			task.mu.Lock()
-			last := task.last
-			task.mu.Unlock()
-			return last
+		case <-round.done:
+			return round.res
 		}
 	}
+	round := &refreshRound{done: make(chan struct{})}
 	task.running = true
-	task.done = make(chan struct{})
+	task.round = round
 	parent := s.ctx
 	if parent == nil {
 		parent = context.Background()
@@ -175,32 +216,34 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 
 	task.mu.Lock()
 	if task.unresolved == nil {
-		task.unresolved = make(map[locate.RegionVerID]string)
+		task.unresolved = make(map[locate.RegionVerID]unresolvedFail)
 	}
 	for _, ev := range events {
 		switch ev.outcome {
 		case probeApplied, probeMoved:
 			delete(task.unresolved, ev.id)
 		case probeFailed:
-			task.unresolved[ev.id] = ev.err
+			start := append([]byte(nil), ev.startKey...)
+			task.unresolved[ev.id] = unresolvedFail{startKey: start, err: ev.err}
 		}
 	}
 	s.dropMovedUnresolvedLocked(task, storeID)
 	res.Failed = len(task.unresolved)
 	res.Ready = res.Remaining == 0 && res.Failed == 0
-	task.last = res
+	round.res = res
 	task.running = false
 	task.cancel = nil
-	close(task.done)
+	close(round.done)
 	task.mu.Unlock()
 	cancel()
 	return res
 }
 
 type probeEvent struct {
-	id      locate.RegionVerID
-	outcome probeOutcome
-	err     string
+	id       locate.RegionVerID
+	startKey []byte
+	outcome  probeOutcome
+	err      string
 }
 
 func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRefreshResult, []probeEvent) {
@@ -236,14 +279,14 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 			defer wg.Done()
 			for m := range jobs {
 				if ctx.Err() != nil {
-					events <- probeEvent{id: m.Region, outcome: probeFailed, err: ctx.Err().Error()}
+					events <- probeEvent{id: m.Region, startKey: m.StartKey, outcome: probeFailed, err: ctx.Err().Error()}
 					continue
 				}
 				outcome, errMsg := s.probeWorkStoreMatch(ctx, storeID, m)
 				if outcome == probeApplied {
 					updated.Add(1)
 				}
-				events <- probeEvent{id: m.Region, outcome: outcome, err: errMsg}
+				events <- probeEvent{id: m.Region, startKey: m.StartKey, outcome: outcome, err: errMsg}
 			}
 		}()
 	}
