@@ -2,6 +2,7 @@ package resourcecontrol
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -135,4 +136,50 @@ func TestResponseInfoReadBytes(t *testing.T) {
 		infoCompat := MakeResponseInfo(respCompat)
 		assert.Equal(t, uint64(100), infoCompat.ReadBytes())
 	}
+}
+
+func TestResponseInfoBatchedTasks(t *testing.T) {
+	// Every nested batched response must contribute scan bytes and KV CPU
+	// because the top-level execution details do not include that work.
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					TotalVersionsSize:     100,
+					ProcessedVersionsSize: 80,
+				},
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 1000},
+			},
+			BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+				{
+					Data: []byte("data"),
+					ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+						ScanDetailV2: &kvrpcpb.ScanDetailV2{
+							TotalVersionsSize:     15,
+							ProcessedVersionsSize: 10,
+						},
+						TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 100},
+					},
+				},
+				{
+					ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+						ScanDetailV2: &kvrpcpb.ScanDetailV2{
+							TotalVersionsSize:     25,
+							ProcessedVersionsSize: 20,
+						},
+						TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: 200},
+					},
+				},
+				{Data: []byte("12345678")},
+			},
+		},
+	}
+
+	info := MakeResponseInfo(resp)
+	expectedReadBytes := uint64(80 + 10 + 20 + 8)
+	if config.NextGen {
+		expectedReadBytes = 100 + 15 + 25 + 8
+	}
+	assert.Equal(t, expectedReadBytes, info.ReadBytes())
+	assert.Equal(t, time.Duration(1000+100+200), info.KVCPU())
 }

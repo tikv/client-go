@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -193,6 +194,34 @@ func (s *testAssertionSuite) TestPrewriteAssertion() {
 	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict)
 	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict)
 	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict)
+}
+
+func (s *testAssertionSuite) TestPrewriteAssertionWithTxnFileEnabled() {
+	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Require().NoError(err)
+	key := encodeKey("~assertion", fmt.Sprintf("test-txn-file-assertion-%d", ts))
+
+	prepareTxn, err := s.store.Begin()
+	s.Require().NoError(err)
+	s.Require().NoError(prepareTxn.Set(key, []byte("existing")))
+	s.Require().NoError(prepareTxn.Commit(context.Background()))
+
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.TxnChunkWriterAddr = "127.0.0.1"
+		conf.TiKVClient.TxnFileMinMutationSize = 1
+	})
+	s.T().Cleanup(restore)
+
+	txn, err := s.store.Begin()
+	s.Require().NoError(err)
+	txn.SetAssertionLevel(kvrpcpb.AssertionLevel_Strict)
+	s.Require().NoError(txn.GetMemBuffer().SetWithFlags(key, []byte("updated"), kv.SetAssertNotExist))
+
+	err = txn.Commit(context.Background())
+	assertionFailed, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed)
+	s.Require().True(ok, "expected ErrAssertionFailed, got %v", err)
+	s.Equal(key, assertionFailed.Key)
+	s.Equal(kvrpcpb.Assertion_NotExist, assertionFailed.Assertion)
 }
 
 func (s *testAssertionSuite) TestFastAssertion() {

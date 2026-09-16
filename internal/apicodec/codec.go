@@ -118,8 +118,22 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 	return nil, nil, errors.Errorf("unsupported api version %s", version.String())
 }
 
+// keyspaceOneofProvider is implemented by codecs that cache the keyspace
+// oneof wrapper (the keyspace ID of a codec never changes). It is an
+// unexported interface so the public Codec interface stays
+// source-compatible for external implementations; setAPICtx falls back to
+// building a fresh wrapper when the codec does not implement it.
+type keyspaceOneofProvider interface {
+	getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId
+}
+
 func setAPICtx(c Codec, r *tikvrpc.Request) {
 	r.ApiVersion = c.GetAPIVersion()
+	if p, ok := c.(keyspaceOneofProvider); ok {
+		r.Keyspace = p.getKeyspaceOneof()
+	} else {
+		r.Keyspace = &kvrpcpb.Context_KeyspaceId{KeyspaceId: uint32(c.GetKeyspaceID())}
+	}
 	keyspaceMeta := c.GetKeyspaceMeta()
 	if keyspaceMeta != nil {
 		r.KeyspaceName = keyspaceMeta.Name

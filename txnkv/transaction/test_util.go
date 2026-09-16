@@ -464,6 +464,10 @@ func (u *unimplementedKVStore) SplitRegions(ctx context.Context, splitKeys [][]b
 	panic("unimplemented")
 }
 
+func (u *unimplementedKVStore) SplitTxnFileRegions(ctx context.Context, splitKeys [][]byte) error {
+	panic("unimplemented")
+}
+
 // TxnLatches implements kvstore.
 func (u *unimplementedKVStore) TxnLatches() *latch.LatchesScheduler {
 	panic("unimplemented")
