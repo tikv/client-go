@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -692,6 +693,40 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 	val, err := txn2.Get(bo.GetCtx(), s.key("x"))
 	s.Nil(err)
 	s.True(bytes.Equal(val.Value, []byte("v")))
+}
+
+func (s *testCommitterSuite) TestCommitDoesNotRestoreResolvedRPCError() {
+	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
+	txn := s.begin()
+	key := s.key("resolved_rpc_error")
+	s.Require().NoError(txn.Set(key, []byte("value")))
+	requests := 0
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("commit-ts-expired", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdCommit {
+				return next(target, req)
+			}
+			requests++
+			if requests == 1 {
+				// The commit does not reach TiKV, so the primary remains locked.
+				return nil, context.DeadlineExceeded
+			}
+			s.Require().Equal(2, requests)
+			// Fail the next SendReq before another commit RPC is sent.
+			s.Require().NoError(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `return("timeout")`))
+			commit := req.Commit()
+			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				StartTs: commit.StartVersion, AttemptedCommitTs: commit.CommitVersion, MinCommitTs: commit.CommitVersion + 1, Key: key,
+			}}}}, nil
+		}
+	}))
+
+	err := txn.Commit(context.Background())
+	txn.GetCommitter().WaitCleanup()
+	s.Equal(2, requests)
+	s.ErrorContains(err, "timeout")
+	s.False(tikverr.IsErrorUndetermined(err))
+	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }
 
 func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
@@ -2605,20 +2640,53 @@ func (s *testCommitterSuite) TestFailCommitPrimaryKeyError() {
 	s.False(tikverr.IsErrorUndetermined(err))
 }
 
-// TestFailCommitPrimaryRPCErrorThenKeyError tests KeyError overwrites the undeterminedErr.
+// TestFailCommitPrimaryRPCErrorThenKeyError tests generic KeyErrors preserve an earlier RPC's unknown result.
 func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
-	s.Nil(failpoint.Enable("tikvclient/rpcCommitResult", `1*return("timeout")->return("keyError")`))
-	defer func() {
-		s.Nil(failpoint.Disable("tikvclient/rpcCommitResult"))
-	}()
-	// Ensure it returns the original error without wrapped to ErrResultUndetermined
-	// if it meets KeyError.
-	t3 := s.begin()
-	err := t3.Set(s.key("c"), []byte("c1"))
-	s.Nil(err)
-	err = t3.Commit(context.Background())
-	s.NotNil(err)
-	s.False(tikverr.IsErrorUndetermined(err))
+	for _, test := range []struct {
+		name   string
+		keyErr *kvrpcpb.KeyError
+	}{
+		{name: "unspecified", keyErr: &kvrpcpb.KeyError{}},
+		{name: "storage error", keyErr: &kvrpcpb.KeyError{Abort: "injected storage read failure"}},
+	} {
+		s.Run(test.name, func() {
+			txn := s.begin()
+			key := s.key(test.name)
+			s.Require().NoError(txn.Set(key, []byte("committed")))
+			var cleanupStarted atomic.Bool
+			txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
+				Pre: func() { cleanupStarted.Store(true) },
+			})
+			attempts := 0
+			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("commit-key-error", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					if req.Type != tikvrpc.CmdCommit {
+						return next(target, req)
+					}
+					attempts++
+					if attempts > 1 {
+						// This attempt fails before checking the previous commit's result.
+						return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: test.keyErr}}, nil
+					}
+					resp, err := next(target, req)
+					s.Require().NoError(err)
+					s.Require().Nil(resp.Resp.(*kvrpcpb.CommitResponse).GetError())
+					// The primary commits, but its response is lost.
+					return nil, context.DeadlineExceeded
+				}
+			}))
+			s.Require().ErrorIs(txn.Commit(context.Background()), tikverr.ErrResultUndetermined)
+			txn.GetCommitter().WaitCleanup()
+			s.NotNil(txn.GetCommitter().GetUndeterminedErr())
+			s.False(cleanupStarted.Load())
+			s.Equal(2, attempts)
+			reader := s.begin()
+			defer reader.Rollback()
+			value, err := reader.Get(context.Background(), key)
+			s.Require().NoError(err)
+			s.Equal([]byte("committed"), value.Value)
+		})
+	}
 }
 
 func (s *testCommitterSuite) TestFailCommitTimeout() {
@@ -2906,6 +2974,8 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 }
 
 func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
+	defer failpoint.Disable("tikvclient/rpcPrewriteResult")
+	defer failpoint.Disable("tikvclient/rpcCommitResult")
 	txn := s.begin()
 	s.Nil(txn.Set(s.key("key"), []byte("value")))
 	// prewrite fail for an undetermined result in commit should retry
@@ -2920,7 +2990,10 @@ func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
 	// commit primary fail for an undetermined result should return undetermined error
 	txn = s.begin()
 	s.Nil(txn.Set(s.key("key"), []byte("value")))
-	// prewrite fail for an undetermined result in commit should retry
+	var cleanupStarted atomic.Bool
+	txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
+		Pre: func() { cleanupStarted.Store(true) },
+	})
 	s.Nil(failpoint.Enable(
 		"tikvclient/rpcCommitResult",
 		// prewrite success, but the first commit fail
@@ -2929,4 +3002,7 @@ func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
 	err = txn.Commit(context.Background())
 	s.NotNil(err)
 	s.True(tikverr.IsErrorUndetermined(err))
+	txn.GetCommitter().WaitCleanup()
+	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
+	s.False(cleanupStarted.Load())
 }
