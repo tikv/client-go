@@ -72,7 +72,7 @@ func get(k []byte) (KV, error) {
 	if err != nil {
 		return KV{}, err
 	}
-	return KV{K: k, V: v}, nil
+	return KV{K: k, V: v.Value}, nil
 }
 
 func dels(keys ...[]byte) error {
