@@ -163,6 +163,9 @@ type KVStore struct {
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
 	gP     Pool
+
+	// storeID -> *storeCacheRefreshTask, used to merge in-flight cache refreshes.
+	refreshTasks sync.Map
 }
 
 var _ Storage = (*KVStore)(nil)

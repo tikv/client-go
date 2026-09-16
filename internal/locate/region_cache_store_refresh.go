@@ -80,44 +80,48 @@ func protoCloneEpoch(e *metapb.RegionEpoch) *metapb.RegionEpoch {
 	return &cp
 }
 
+// WorkStoreMatchState is how a cached region currently relates to storeID.
+type WorkStoreMatchState int
+
+const (
+	// WorkStoreOnStore means the region is still cached and works on storeID.
+	WorkStoreOnStore WorkStoreMatchState = iota
+	// WorkStoreMoved means the region is still cached but no longer works on storeID.
+	WorkStoreMoved
+	// WorkStoreGone means the region is missing or its cache TTL has expired.
+	WorkStoreGone
+)
+
+// ClassifyWorkStore reports whether a cached region still works on storeID.
+func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStoreMatchState {
+	r := c.GetCachedRegionWithRLock(id)
+	if r == nil || r.isCacheTTLExpired(time.Now().Unix()) {
+		return WorkStoreGone
+	}
+	if r.GetLeaderStoreID() != storeID {
+		return WorkStoreMoved
+	}
+	return WorkStoreOnStore
+}
+
 // StillWorksOnStore reports whether the cached region still uses storeID as working TiKV.
 func (c *RegionCache) StillWorksOnStore(id RegionVerID, storeID uint64) bool {
-	r := c.GetCachedRegionWithRLock(id)
-	if r == nil {
-		return false
-	}
-	return r.GetLeaderStoreID() == storeID && !r.isCacheTTLExpired(time.Now().Unix())
+	return c.ClassifyWorkStore(id, storeID) == WorkStoreOnStore
 }
 
-// CanSwitchLeader reports whether the cached region contains the given leader peer.
-func (c *RegionCache) CanSwitchLeader(id RegionVerID, leader *metapb.Peer) bool {
+// ApplyLeaderIfOnStore CAS-updates the working TiKV to leader only while the
+// current working store is still oldStoreID. applied means this call changed
+// the leader. moved means the cache already left oldStoreID.
+func (c *RegionCache) ApplyLeaderIfOnStore(id RegionVerID, leader *metapb.Peer, oldStoreID uint64) (applied, moved bool) {
 	if leader == nil {
-		return false
+		return false, false
 	}
 	r := c.GetCachedRegionWithRLock(id)
 	if r == nil {
-		return false
+		return false, false
 	}
-	_, found := r.getPeerStoreIndex(leader)
-	return found
-}
-
-// UpdateLeaderIfStillOnStore updates the working leader only if the region still works on oldStoreID.
-// Returns true if the region no longer works on oldStoreID afterwards (updated or already moved).
-func (c *RegionCache) UpdateLeaderIfStillOnStore(id RegionVerID, leader *metapb.Peer, accessIdx AccessIndex, oldStoreID uint64) bool {
-	if leader == nil {
-		return false
+	if r.isCacheTTLExpired(time.Now().Unix()) {
+		return false, false
 	}
-	r := c.GetCachedRegionWithRLock(id)
-	if r == nil {
-		return true
-	}
-	if r.GetLeaderStoreID() != oldStoreID {
-		return true
-	}
-	if _, found := r.getPeerStoreIndex(leader); !found {
-		return false
-	}
-	c.UpdateLeader(id, leader, accessIdx)
-	return !c.StillWorksOnStore(id, oldStoreID)
+	return r.switchWorkLeaderToPeerIfOnStore(leader, oldStoreID)
 }
