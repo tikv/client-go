@@ -10,11 +10,45 @@ package locate
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
+
+func BenchmarkCountWorkStoreMatches(b *testing.B) {
+	b.ReportAllocs()
+	c := &RegionCache{}
+	c.mu.regions = make(map[RegionVerID]*Region, 10000)
+	now := time.Now().Unix() + 3600
+	for i := 0; i < 10000; i++ {
+		st := &Store{storeID: 1, addr: "127.0.0.1:20160"}
+		rs := &regionStore{
+			stores:      []*Store{st},
+			storeEpochs: []uint32{1},
+			workTiKVIdx: 0,
+		}
+		rs.accessIndex[tiKVOnly] = []int{0}
+		r := &Region{
+			meta: &metapb.Region{
+				Id:          uint64(i + 1),
+				StartKey:    []byte{byte(i >> 8), byte(i)},
+				RegionEpoch: &metapb.RegionEpoch{ConfVer: 1, Version: 1},
+				Peers:       []*metapb.Peer{{Id: uint64(i + 1), StoreId: 1}},
+			},
+			ttl: now,
+		}
+		r.setStore(rs)
+		c.mu.regions[r.VerID()] = r
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if n := c.CountWorkStoreMatches(1); n != 10000 {
+			b.Fatalf("count=%d", n)
+		}
+	}
+}
 
 func TestSwitchWorkLeaderToPeerIfOnStoreUpdatesGlobalEpoch(t *testing.T) {
 	peers := []*metapb.Peer{{Id: 1, StoreId: 1}, {Id: 2, StoreId: 2}, {Id: 3, StoreId: 3}}

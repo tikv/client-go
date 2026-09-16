@@ -285,6 +285,92 @@ func TestStoreCacheRefreshSetsInternalRequestSource(t *testing.T) {
 	require.Equal(t, "internal_store_cache_refresh", got)
 }
 
+func TestStoreCacheRefreshRecoversAfterRegionVersionReplacement(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peers, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	old, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.False(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Ready)
+
+	childPeers := cluster.AllocIDs(3)
+	childID := cluster.AllocID()
+	cluster.Split(regionID, childID, []byte("m"), childPeers, childPeers[1])
+	cluster.ChangeLeader(regionID, peers[1])
+	store.GetRegionCache().InvalidateCachedRegion(old.Region)
+	newer, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.NotEqual(t, old.Region, newer.Region)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("z"))
+	require.NoError(t, err)
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, result.Ready, "all replacement routes valid on new store but old version never resolves: %+v", result)
+}
+
+func TestStoreCacheStatusReadDoesNotCreateTasks(t *testing.T) {
+	client, _, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+	for id := uint64(1); id <= 1000; id++ {
+		store.GetStoreCacheStatus(id)
+	}
+	count := 0
+	store.refreshTasks.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	require.Zero(t, count, "read-only status queries created permanent task entries")
+}
+
+func TestStoreCacheRefreshWaiterGetsOwnRound(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				select {
+				case <-started:
+				default:
+					close(started)
+				}
+				<-release
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	firstCh := make(chan StoreCacheRefreshResult, 1)
+	waitCh := make(chan StoreCacheRefreshResult, 1)
+	go func() { firstCh <- store.RefreshStoreCache(context.Background(), storeIDs[0]) }()
+	<-started
+	go func() { waitCh <- store.RefreshStoreCache(context.Background(), storeIDs[0]) }()
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	first := <-firstCh
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	second := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	waited := <-waitCh
+	require.Equal(t, first.Failed, waited.Failed)
+	require.Equal(t, first.Ready, waited.Ready)
+	require.NotEqual(t, first.Ready, second.Ready)
+}
+
 func TestStoreCacheRefreshRetainsUnrelatedFailure(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
