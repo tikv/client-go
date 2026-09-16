@@ -19,6 +19,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 const (
@@ -68,6 +69,16 @@ func (s *KVStore) getRefreshTask(storeID uint64) *storeCacheRefreshTask {
 	return v.(*storeCacheRefreshTask)
 }
 
+// dropMovedUnresolvedLocked removes failures whose same-version cache entry
+// is still valid but no longer works on storeID. Expired/removed entries stay.
+func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
+	for id := range task.unresolved {
+		if s.regionCache.ClassifyWorkStore(id, storeID) == locate.WorkStoreMoved {
+			delete(task.unresolved, id)
+		}
+	}
+}
+
 func (s *KVStore) stopRefreshTasks() {
 	var waits []chan struct{}
 	s.refreshTasks.Range(func(_, v any) bool {
@@ -103,6 +114,7 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 	n := s.regionCache.CountWorkStoreMatches(storeID)
 	task := s.getRefreshTask(storeID)
 	task.mu.Lock()
+	s.dropMovedUnresolvedLocked(task, storeID)
 	failed := len(task.unresolved)
 	inProgress := task.running
 	task.mu.Unlock()
@@ -152,6 +164,7 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 		parent = context.Background()
 	}
 	jobCtx, cancel := context.WithTimeout(parent, storeCacheRefreshJobTimeout)
+	jobCtx = util.WithInternalSourceType(jobCtx, util.InternalTxnStoreCacheRefresh)
 	if ctx != nil {
 		context.AfterFunc(ctx, cancel)
 	}
@@ -172,6 +185,7 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 			task.unresolved[ev.id] = ev.err
 		}
 	}
+	s.dropMovedUnresolvedLocked(task, storeID)
 	res.Failed = len(task.unresolved)
 	res.Ready = res.Remaining == 0 && res.Failed == 0
 	task.last = res
@@ -311,11 +325,12 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 func (s *KVStore) sendOneShotGet(ctx context.Context, m locate.WorkStoreMatch) (*metapb.Peer, string) {
 	rpcCtx := kvrpcpb.Context{
-		RegionId:    m.Region.GetID(),
-		RegionEpoch: m.Epoch,
-		Peer:        m.Peer,
-		StaleRead:   false,
-		ReplicaRead: false,
+		RegionId:      m.Region.GetID(),
+		RegionEpoch:   m.Epoch,
+		Peer:          m.Peer,
+		StaleRead:     false,
+		ReplicaRead:   false,
+		RequestSource: util.BuildRequestSource(true, util.InternalTxnStoreCacheRefresh, ""),
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: m.StartKey, Version: 0}, rpcCtx)
 	req.StoreTp = tikvrpc.TiKV
