@@ -10,6 +10,7 @@ package tikv
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,10 @@ const (
 	storeCacheRefreshBackoff    = 50 * time.Millisecond
 	storeCacheRefreshJobTimeout = 2 * time.Minute
 )
+
+// ErrStoreCacheRefreshBusy means reset found an in-flight refresh for this store.
+// The running job is left alone; the caller should retry after it finishes.
+var ErrStoreCacheRefreshBusy = errors.New("store cache refresh is in progress")
 
 // StoreCacheStatus is a snapshot of cache entries still working on a store.
 type StoreCacheStatus struct {
@@ -145,17 +150,19 @@ func (s *KVStore) stopRefreshTasks() {
 }
 
 // ResetStoreCacheRefresh drops unresolved failures and the idle task for storeID.
-// It does not mark a refresh successful. Operator fallback is: stop waiting for
-// ready, wait the region-cache TTL, then restart; pass reset=1 on the next
-// rolling's POST so leftover failures from that fallback do not stick.
-func (s *KVStore) ResetStoreCacheRefresh(storeID uint64) {
+// It does not cancel or wait for an in-flight refresh: that returns
+// ErrStoreCacheRefreshBusy so the caller can retry. It does not mark a refresh
+// successful. Operator fallback is: stop waiting for ready, wait the region-cache
+// TTL, then restart; pass reset=1 on the next rolling's POST so leftover failures
+// from that fallback do not stick.
+func (s *KVStore) ResetStoreCacheRefresh(storeID uint64) error {
 	if storeID == 0 {
-		return
+		return nil
 	}
 	for {
 		task := s.getRefreshTaskIfAny(storeID)
 		if task == nil {
-			return
+			return nil
 		}
 		task.mu.Lock()
 		if !s.taskStillLive(storeID, task) {
@@ -163,20 +170,13 @@ func (s *KVStore) ResetStoreCacheRefresh(storeID uint64) {
 			continue
 		}
 		if task.running {
-			if task.cancel != nil {
-				task.cancel()
-			}
-			wait := task.round
 			task.mu.Unlock()
-			if wait != nil {
-				<-wait.done
-			}
-			continue
+			return ErrStoreCacheRefreshBusy
 		}
 		task.unresolved = make(map[locate.RegionVerID]unresolvedFail)
 		s.refreshTasks.CompareAndDelete(storeID, task)
 		task.mu.Unlock()
-		return
+		return nil
 	}
 }
 
