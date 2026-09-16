@@ -87,18 +87,19 @@ func (s *KVStore) getRefreshTaskIfAny(storeID uint64) *storeCacheRefreshTask {
 	return v.(*storeCacheRefreshTask)
 }
 
-// dropMovedUnresolvedLocked removes failures that are no longer on storeID.
-// Same-version cache that already moved is dropped. If the version is gone
-// but a replacement region covering the same start key has also left storeID,
-// the old failure is dropped. Expired keys with no replacement stay.
+// dropMovedUnresolvedLocked removes failures only when the original key range is
+// fully covered by unexpired cached regions that no longer work on storeID.
 func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
+	var idx *locate.WorkSpanIndex
 	for id, u := range task.unresolved {
 		switch s.regionCache.ClassifyWorkStore(id, storeID) {
 		case locate.WorkStoreMoved:
 			delete(task.unresolved, id)
 		case locate.WorkStoreGone:
-			onStore, anyValid := s.regionCache.OverlappingWorkStoreState(u.startKey, u.endKey, storeID)
-			if anyValid && !onStore {
+			if idx == nil {
+				idx = s.regionCache.NewWorkSpanIndex(storeID)
+			}
+			if idx.RangeResolved(u.startKey, u.endKey) {
 				delete(task.unresolved, id)
 			}
 		}
@@ -166,6 +167,9 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 // It does not use RegionRequestSender.SendReq, so it will not retry on the new leader.
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if storeID == 0 {
 		return StoreCacheRefreshResult{Ready: true, ObservedAt: time.Now().Unix()}
 	}
@@ -200,13 +204,17 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	}
 	jobCtx, cancel := context.WithTimeout(parent, storeCacheRefreshJobTimeout)
 	jobCtx = util.WithInternalSourceType(jobCtx, util.InternalTxnStoreCacheRefresh)
+	var stopAfter func() bool
 	if ctx != nil {
-		context.AfterFunc(ctx, cancel)
+		stopAfter = context.AfterFunc(ctx, cancel)
 	}
 	task.cancel = cancel
 	task.mu.Unlock()
 
 	res, events := s.runRefresh(jobCtx, storeID)
+	if stopAfter != nil {
+		stopAfter()
+	}
 
 	task.mu.Lock()
 	if task.unresolved == nil {
@@ -227,6 +235,11 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	s.dropMovedUnresolvedLocked(task, storeID)
 	res.Failed = len(task.unresolved)
 	res.Ready = res.Remaining == 0 && res.Failed == 0
+	for _, u := range task.unresolved {
+		if u.err != "" && len(res.Errors) < 8 {
+			res.Errors = append(res.Errors, u.err)
+		}
+	}
 	round.res = res
 	task.running = false
 	task.cancel = nil

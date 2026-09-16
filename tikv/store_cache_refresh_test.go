@@ -342,6 +342,33 @@ func TestStoreCacheRefreshKeepsFailureIfSplitSiblingStillOnStore(t *testing.T) {
 	require.False(t, result.Ready, "right sibling still on old store but parent failure was cleared: %+v", result)
 }
 
+func TestStoreCacheRefreshKeepsFailureIfRightHalfUncached(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peers, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	old, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.False(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Ready)
+
+	childPeers := cluster.AllocIDs(3)
+	childID := cluster.AllocID()
+	cluster.Split(regionID, childID, []byte("m"), childPeers, childPeers[1])
+	cluster.ChangeLeader(regionID, peers[1])
+	store.GetRegionCache().InvalidateCachedRegion(old.Region)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	status := store.GetStoreCacheStatus(storeIDs[0])
+	require.False(t, status.Ready, "uncached right half must not clear the parent failure: %+v", status)
+	require.Greater(t, status.Failed, 0)
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, result.Ready, "uncached right half must not clear the parent failure: %+v", result)
+}
+
 func TestStoreCacheStatusReadDoesNotCreateTasks(t *testing.T) {
 	client, _, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)

@@ -10,6 +10,7 @@ package locate
 
 import (
 	"bytes"
+	"sort"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -137,35 +138,92 @@ func keyRangesOverlap(aStart, aEnd, bStart, bEnd []byte) bool {
 	return true
 }
 
-// OverlappingWorkStoreState reports whether any unexpired cached region overlapping
-// [startKey, endKey) still works on storeID. It does not renew region TTL.
-func (c *RegionCache) OverlappingWorkStoreState(startKey, endKey []byte, storeID uint64) (anyOnStore, anyValid bool) {
+type workStoreSpan struct {
+	start   []byte
+	end     []byte
+	onStore bool
+}
+
+// WorkSpanIndex is a one-shot snapshot of unexpired cache ranges for storeID.
+type WorkSpanIndex struct {
+	spans []workStoreSpan
+}
+
+func rangeCoveredTo(coveredTo, endKey []byte, toInf bool) bool {
+	if toInf {
+		return true
+	}
+	if len(endKey) == 0 {
+		return false
+	}
+	return bytes.Compare(coveredTo, endKey) >= 0
+}
+
+// NewWorkSpanIndex copies unexpired region ranges and whether they still work
+// on storeID. It does not renew region TTL.
+func (c *RegionCache) NewWorkSpanIndex(storeID uint64) *WorkSpanIndex {
 	now := time.Now().Unix()
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	spans := make([]workStoreSpan, 0, len(c.mu.regions))
 	for _, r := range c.mu.regions {
 		if r == nil || r.meta == nil || r.isCacheTTLExpired(now) {
 			continue
 		}
-		if !keyRangesOverlap(startKey, endKey, r.StartKey(), r.EndKey()) {
-			continue
-		}
-		anyValid = true
+		onStore := false
 		rs := r.getStore()
-		if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
-			continue
+		if rs != nil && int(rs.workTiKVIdx) < rs.accessStoreNum(tiKVOnly) {
+			store, peer, _, _ := r.WorkStorePeer(rs)
+			onStore = store != nil && peer != nil && store.StoreID() == storeID
 		}
-		store, peer, _, _ := r.WorkStorePeer(rs)
-		if store != nil && peer != nil && store.StoreID() == storeID {
-			return true, true
-		}
+		spans = append(spans, workStoreSpan{
+			start:   append([]byte(nil), r.StartKey()...),
+			end:     append([]byte(nil), r.EndKey()...),
+			onStore: onStore,
+		})
 	}
-	return false, anyValid
+	c.mu.RUnlock()
+	sort.Slice(spans, func(i, j int) bool {
+		return bytes.Compare(spans[i].start, spans[j].start) < 0
+	})
+	return &WorkSpanIndex{spans: spans}
 }
 
-// StillWorksOnStore reports whether the cached region still uses storeID as working TiKV.
-func (c *RegionCache) StillWorksOnStore(id RegionVerID, storeID uint64) bool {
-	return c.ClassifyWorkStore(id, storeID) == WorkStoreOnStore
+// RangeResolved reports whether [startKey, endKey) is fully covered by snapshot
+// ranges that no longer work on the target store. Uncached holes are unresolved.
+func (idx *WorkSpanIndex) RangeResolved(startKey, endKey []byte) bool {
+	if idx == nil || len(idx.spans) == 0 {
+		return false
+	}
+	coveredTo := startKey
+	toInf := false
+	started := false
+	for _, sp := range idx.spans {
+		if !keyRangesOverlap(startKey, endKey, sp.start, sp.end) {
+			continue
+		}
+		if sp.onStore {
+			return false
+		}
+		need := startKey
+		if started {
+			need = coveredTo
+		}
+		if bytes.Compare(sp.start, need) > 0 {
+			return false
+		}
+		started = true
+		if len(sp.end) == 0 {
+			toInf = true
+			break
+		}
+		if bytes.Compare(coveredTo, sp.end) < 0 {
+			coveredTo = sp.end
+		}
+		if rangeCoveredTo(coveredTo, endKey, toInf) {
+			return true
+		}
+	}
+	return started && rangeCoveredTo(coveredTo, endKey, toInf)
 }
 
 // ApplyLeaderIfOnStore CAS-updates the working TiKV to leader only while the
