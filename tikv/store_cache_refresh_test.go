@@ -237,6 +237,73 @@ func TestStoreCacheRefreshJobDeadline(t *testing.T) {
 	require.Greater(t, res.Failed, 0)
 }
 
+func TestStoreCacheRefreshRetainsUnrelatedFailure(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, _, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	otherRegionID := cluster.AllocID()
+	otherPeers := cluster.AllocIDs(3)
+	cluster.Split(regionID, otherRegionID, []byte("m"), otherPeers, otherPeers[0])
+
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	oldLoc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	previous := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Greater(t, previous.Failed, 0)
+	require.False(t, previous.Ready)
+
+	store.GetRegionCache().InvalidateCachedRegion(oldLoc.Region)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("z"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(otherRegionID, otherPeers[1])
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, result.Ready, "unresolved prior failure lost: %+v", result)
+	require.Greater(t, result.Failed, 0)
+	status := store.GetStoreCacheStatus(storeIDs[0])
+	require.Greater(t, status.Failed, 0)
+	require.False(t, status.Ready)
+}
+
+func TestStoreCacheRefreshCloseRefusesAndCancels(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				select {
+				case <-started:
+				default:
+					close(started)
+				}
+				time.Sleep(50 * time.Millisecond)
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+
+	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	done := make(chan StoreCacheRefreshResult, 1)
+	go func() {
+		done <- store.RefreshStoreCache(context.Background(), storeIDs[0])
+	}()
+	<-started
+	require.NoError(t, store.Close())
+	res := <-done
+	require.False(t, res.Ready)
+	closed := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Equal(t, []string{"store is closed"}, closed.Errors)
+}
+
 type refreshInterceptClient struct {
 	Client
 	onGet func()
