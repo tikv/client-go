@@ -312,6 +312,36 @@ func TestStoreCacheRefreshRecoversAfterRegionVersionReplacement(t *testing.T) {
 	require.True(t, result.Ready, "all replacement routes valid on new store but old version never resolves: %+v", result)
 }
 
+func TestStoreCacheRefreshKeepsFailureIfSplitSiblingStillOnStore(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peers, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	old, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.False(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Ready)
+
+	childPeers := cluster.AllocIDs(3)
+	childID := cluster.AllocID()
+	// Right sibling keeps a leader on the original store.
+	cluster.Split(regionID, childID, []byte("m"), childPeers, childPeers[0])
+	cluster.ChangeLeader(regionID, peers[1])
+	store.GetRegionCache().InvalidateCachedRegion(old.Region)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	zloc, err := store.GetRegionCache().LocateKey(bo, []byte("z"))
+	require.NoError(t, err)
+	zCached := store.GetRegionCache().GetCachedRegionWithRLock(zloc.Region)
+	require.NotNil(t, zCached)
+	require.Equal(t, storeIDs[0], zCached.GetLeaderStoreID())
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, result.Ready, "right sibling still on old store but parent failure was cleared: %+v", result)
+}
+
 func TestStoreCacheStatusReadDoesNotCreateTasks(t *testing.T) {
 	client, _, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)

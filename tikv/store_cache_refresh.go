@@ -55,6 +55,7 @@ type StoreCacheRefreshResult struct {
 
 type unresolvedFail struct {
 	startKey []byte
+	endKey   []byte
 	err      string
 }
 
@@ -96,16 +97,9 @@ func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID
 		case locate.WorkStoreMoved:
 			delete(task.unresolved, id)
 		case locate.WorkStoreGone:
-			switch s.regionCache.ClassifyKeyWorkStore(u.startKey, storeID) {
-			case locate.WorkStoreMoved:
+			onStore, anyValid := s.regionCache.OverlappingWorkStoreState(u.startKey, u.endKey, storeID)
+			if anyValid && !onStore {
 				delete(task.unresolved, id)
-			case locate.WorkStoreOnStore:
-				if newID, ok := s.regionCache.CachedRegionVerIDByKey(u.startKey); ok && newID != id {
-					delete(task.unresolved, id)
-					if _, exists := task.unresolved[newID]; !exists {
-						task.unresolved[newID] = u
-					}
-				}
 			}
 		}
 	}
@@ -223,8 +217,11 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 		case probeApplied, probeMoved:
 			delete(task.unresolved, ev.id)
 		case probeFailed:
-			start := append([]byte(nil), ev.startKey...)
-			task.unresolved[ev.id] = unresolvedFail{startKey: start, err: ev.err}
+			task.unresolved[ev.id] = unresolvedFail{
+				startKey: append([]byte(nil), ev.startKey...),
+				endKey:   append([]byte(nil), ev.endKey...),
+				err:      ev.err,
+			}
 		}
 	}
 	s.dropMovedUnresolvedLocked(task, storeID)
@@ -242,6 +239,7 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 type probeEvent struct {
 	id       locate.RegionVerID
 	startKey []byte
+	endKey   []byte
 	outcome  probeOutcome
 	err      string
 }
@@ -279,14 +277,14 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 			defer wg.Done()
 			for m := range jobs {
 				if ctx.Err() != nil {
-					events <- probeEvent{id: m.Region, startKey: m.StartKey, outcome: probeFailed, err: ctx.Err().Error()}
+					events <- probeEvent{id: m.Region, startKey: m.StartKey, endKey: m.EndKey, outcome: probeFailed, err: ctx.Err().Error()}
 					continue
 				}
 				outcome, errMsg := s.probeWorkStoreMatch(ctx, storeID, m)
 				if outcome == probeApplied {
 					updated.Add(1)
 				}
-				events <- probeEvent{id: m.Region, startKey: m.StartKey, outcome: outcome, err: errMsg}
+				events <- probeEvent{id: m.Region, startKey: m.StartKey, endKey: m.EndKey, outcome: outcome, err: errMsg}
 			}
 		}()
 	}
