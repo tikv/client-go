@@ -194,10 +194,19 @@ func (idx *WorkSpanIndex) RangeResolved(startKey, endKey []byte) bool {
 	if idx == nil || len(idx.spans) == 0 {
 		return false
 	}
+	spans := idx.spans
+	i := sort.Search(len(spans), func(j int) bool {
+		end := spans[j].end
+		return len(end) == 0 || bytes.Compare(end, startKey) > 0
+	})
 	coveredTo := startKey
 	toInf := false
 	started := false
-	for _, sp := range idx.spans {
+	for ; i < len(spans); i++ {
+		sp := spans[i]
+		if len(endKey) > 0 && bytes.Compare(sp.start, endKey) >= 0 {
+			break
+		}
 		if !keyRangesOverlap(startKey, endKey, sp.start, sp.end) {
 			continue
 		}
