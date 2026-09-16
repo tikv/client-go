@@ -3360,7 +3360,7 @@ func (r *Region) switchWorkLeaderToPeerIfOnStore(peer *metapb.Peer, oldStoreID u
 		}
 		newRegionStore := oldRegionStore.clone()
 		newRegionStore.workTiKVIdx = leaderIdx
-		newRegionStore.storeEpochs[leaderIdx] = atomic.LoadUint32(&newRegionStore.stores[leaderIdx].epoch)
+		newRegionStore.storeEpochs[globalStoreIdx] = atomic.LoadUint32(&newRegionStore.stores[globalStoreIdx].epoch)
 		if r.compareAndSwapStore(oldRegionStore, newRegionStore) {
 			return true, false
 		}

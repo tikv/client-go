@@ -505,6 +505,7 @@ func (s *KVStore) Close() error {
 	defer s.gP.Close()
 	s.close.Store(true)
 	s.cancel()
+	s.stopRefreshTasks()
 	s.wg.Wait()
 
 	s.oracle.Close()
