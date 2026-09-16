@@ -54,6 +54,61 @@ func TestStoreCacheRefreshUpdatesLeaderFromNotLeader(t *testing.T) {
 	require.Greater(t, res.Updated, 0)
 	cached = store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
 	require.Equal(t, newStore, cached.GetLeaderStoreID())
+	n := 0
+	store.refreshTasks.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	require.Zero(t, n, "ready refresh should drop the store task")
+}
+
+func TestStoreCacheRefreshStaleTaskDoesNotStartAfterRecycle(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var inFlight atomic.Int64
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				inFlight.Add(1)
+				defer inFlight.Add(-1)
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+
+	loaded := make(chan struct{})
+	proceed := make(chan struct{})
+	firstLoad := make(chan struct{}, 1)
+	firstLoad <- struct{}{}
+	testRefreshTaskAfterLoad = func() {
+		select {
+		case <-firstLoad:
+			close(loaded)
+			<-proceed
+		default:
+		}
+	}
+	defer func() { testRefreshTaskAfterLoad = nil }()
+
+	firstCh := make(chan StoreCacheRefreshResult, 1)
+	go func() {
+		firstCh <- store.RefreshStoreCache(context.Background(), storeIDs[0])
+	}()
+	<-loaded
+	second := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	close(proceed)
+	first := <-firstCh
+	require.True(t, second.Ready)
+	require.True(t, first.Ready)
+	require.Equal(t, int64(0), inFlight.Load())
 }
 
 func TestStoreCacheRefreshEmptyStoreID(t *testing.T) {

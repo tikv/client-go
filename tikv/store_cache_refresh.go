@@ -87,6 +87,15 @@ func (s *KVStore) getRefreshTaskIfAny(storeID uint64) *storeCacheRefreshTask {
 	return v.(*storeCacheRefreshTask)
 }
 
+func (s *KVStore) taskStillLive(storeID uint64, task *storeCacheRefreshTask) bool {
+	cur, ok := s.refreshTasks.Load(storeID)
+	return ok && cur == task
+}
+
+// testRefreshTaskAfterLoad runs after a task is loaded and before it is locked.
+// Tests use it to create a deterministic recycle interleaving.
+var testRefreshTaskAfterLoad func()
+
 // dropMovedUnresolvedLocked removes failures only when the original key range is
 // fully covered by unexpired cached regions that no longer work on storeID.
 func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
@@ -176,40 +185,55 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	if s.IsClose() {
 		return closedStoreCacheResult(storeID)
 	}
-	task := s.getRefreshTask(storeID)
-	task.mu.Lock()
-	if s.IsClose() {
-		task.mu.Unlock()
-		return closedStoreCacheResult(storeID)
-	}
-	if task.running {
-		round := task.round
-		task.mu.Unlock()
-		if round == nil {
-			return StoreCacheRefreshResult{StoreID: storeID, ObservedAt: time.Now().Unix()}
+	var (
+		task      *storeCacheRefreshTask
+		round     *refreshRound
+		jobCtx    context.Context
+		cancel    context.CancelFunc
+		stopAfter func() bool
+	)
+	for {
+		if s.IsClose() {
+			return closedStoreCacheResult(storeID)
 		}
-		select {
-		case <-ctx.Done():
-			return StoreCacheRefreshResult{StoreID: storeID, Errors: []string{ctx.Err().Error()}, ObservedAt: time.Now().Unix()}
-		case <-round.done:
-			return round.res
+		task = s.getRefreshTask(storeID)
+		if testRefreshTaskAfterLoad != nil {
+			testRefreshTaskAfterLoad()
 		}
+		task.mu.Lock()
+		if s.IsClose() || !s.taskStillLive(storeID, task) {
+			task.mu.Unlock()
+			continue
+		}
+		if task.running {
+			waitRound := task.round
+			task.mu.Unlock()
+			if waitRound == nil {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return StoreCacheRefreshResult{StoreID: storeID, Errors: []string{ctx.Err().Error()}, ObservedAt: time.Now().Unix()}
+			case <-waitRound.done:
+				return waitRound.res
+			}
+		}
+		round = &refreshRound{done: make(chan struct{})}
+		task.running = true
+		task.round = round
+		parent := s.ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		jobCtx, cancel = context.WithTimeout(parent, storeCacheRefreshJobTimeout)
+		jobCtx = util.WithInternalSourceType(jobCtx, util.InternalTxnStoreCacheRefresh)
+		if ctx != nil {
+			stopAfter = context.AfterFunc(ctx, cancel)
+		}
+		task.cancel = cancel
+		task.mu.Unlock()
+		break
 	}
-	round := &refreshRound{done: make(chan struct{})}
-	task.running = true
-	task.round = round
-	parent := s.ctx
-	if parent == nil {
-		parent = context.Background()
-	}
-	jobCtx, cancel := context.WithTimeout(parent, storeCacheRefreshJobTimeout)
-	jobCtx = util.WithInternalSourceType(jobCtx, util.InternalTxnStoreCacheRefresh)
-	var stopAfter func() bool
-	if ctx != nil {
-		stopAfter = context.AfterFunc(ctx, cancel)
-	}
-	task.cancel = cancel
-	task.mu.Unlock()
 
 	res, events := s.runRefresh(jobCtx, storeID)
 	if stopAfter != nil {
@@ -244,6 +268,9 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	task.running = false
 	task.cancel = nil
 	close(round.done)
+	if res.Ready {
+		s.refreshTasks.CompareAndDelete(storeID, task)
+	}
 	task.mu.Unlock()
 	cancel()
 	return res
