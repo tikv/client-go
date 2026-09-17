@@ -411,6 +411,30 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
 	s.NotNil(ctx)
 }
 
+func (s *testRegionRequestToSingleStoreSuite) TestTiDBRequestWithStoreLimit() {
+	defer kv.StoreLimit.Store(kv.StoreLimit.Load())
+	response := &tikvrpc.Response{Resp: &coprocessor.Response{Data: []byte("result")}}
+	cli := &fnClient{fn: func(_ context.Context, addr string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		s.Equal("tidb:10080", addr)
+		s.Equal(tikvrpc.TiDB, req.StoreTp)
+		return response, nil
+	}}
+	sender := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
+	sender.SetStoreAddr("tidb:10080")
+	for _, limit := range []int64{0, 1, 10} {
+		s.Run(fmt.Sprintf("limit=%d", limit), func() {
+			kv.StoreLimit.Store(limit)
+			req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{})
+			req.StoreTp = tikvrpc.TiDB
+			resp, rpcCtx, _, err := sender.SendReqCtx(s.bo, req, RegionVerID{}, time.Second, tikvrpc.TiDB)
+			s.Require().NoError(err)
+			s.Same(response, resp)
+			s.Require().NotNil(rpcCtx)
+			s.Nil(rpcCtx.Store)
+		})
+	}
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestRequestAttemptLimiter() {
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Require().NoError(err)
