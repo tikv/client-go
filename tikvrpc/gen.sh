@@ -58,6 +58,7 @@ cmds=(
   PhysicalScanLock
   Cop
   BatchCop
+  VersionedCop
   MvccGetByKey
   MvccGetByStartTs
   SplitRegion
@@ -68,6 +69,7 @@ cmds=(
   PrepareFlashbackToVersion
   Flush
   BufferBatchGet
+  GetEstimateTiCICount
 )
 
 cat <<EOF >> $output

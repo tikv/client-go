@@ -109,6 +109,7 @@ const (
 	CmdMPPConn   // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdMPPCancel // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdMPPAlive  // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdVersionedCop
 
 	CmdMvccGetByKey CmdType = 1024 + iota
 	CmdMvccGetByStartTs
@@ -117,6 +118,7 @@ const (
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
 	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdGetEstimateTiCICount             // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
 )
@@ -192,6 +194,8 @@ func (t CmdType) String() string {
 		return "CopStream"
 	case CmdBatchCop:
 		return "BatchCop"
+	case CmdVersionedCop:
+		return "VersionedCop"
 	case CmdMPPTask:
 		return "DispatchMPPTask"
 	case CmdMPPConn:
@@ -224,6 +228,8 @@ func (t CmdType) String() string {
 		return "GetHealthFeedback"
 	case CmdBroadcastTxnStatus:
 		return "BroadcastTxnStatus"
+	case CmdGetEstimateTiCICount:
+		return "GetEstimateTiCICount"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
@@ -511,6 +517,11 @@ func (req *Request) Cop() *coprocessor.Request {
 	return req.Req.(*coprocessor.Request)
 }
 
+// VersionedCop returns coprocessor request in request.
+func (req *Request) VersionedCop() *coprocessor.Request {
+	return req.Req.(*coprocessor.Request)
+}
+
 // BatchCop returns BatchCop request in request.
 func (req *Request) BatchCop() *coprocessor.BatchRequest {
 	return req.Req.(*coprocessor.BatchRequest)
@@ -635,6 +646,11 @@ func (req *Request) BufferBatchGet() *kvrpcpb.BufferBatchGetRequest {
 	return req.Req.(*kvrpcpb.BufferBatchGetRequest)
 }
 
+// GetEstimateTiCICount returns TiCIEstimateCountRequest in request.
+func (req *Request) GetEstimateTiCICount() *coprocessor.TiCIEstimateCountRequest {
+	return req.Req.(*coprocessor.TiCIEstimateCountRequest)
+}
+
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
 func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Request {
 	switch req.Type {
@@ -718,6 +734,8 @@ func (req *Request) GetSize() int {
 		size = req.Scan().Size()
 	case CmdCop:
 		size = req.Cop().Size()
+	case CmdVersionedCop:
+		size = req.VersionedCop().Size()
 	case CmdPrewrite:
 		size = req.Prewrite().Size()
 	case CmdCommit:
@@ -740,6 +758,8 @@ func (req *Request) GetSize() int {
 		size = req.CheckTxnStatus().Size()
 	case CmdMPPTask:
 		size = req.DispatchMPPTask().Size()
+	case CmdGetEstimateTiCICount:
+		size = req.GetEstimateTiCICount().Size()
 	default:
 		// ignore others
 	}
@@ -1028,7 +1048,7 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.RawChecksumResponse{
 			RegionError: e,
 		}
-	case CmdCop:
+	case CmdCop, CmdVersionedCop:
 		p = &coprocessor.Response{
 			RegionError: e,
 		}
@@ -1302,6 +1322,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetHealthFeedback(ctx, req.GetHealthFeedback())
 	case CmdBroadcastTxnStatus:
 		resp.Resp, err = client.BroadcastTxnStatus(ctx, req.BroadcastTxnStatus())
+	case CmdGetEstimateTiCICount:
+		resp.Resp, err = client.GetEstimateTiCICount(ctx, req.GetEstimateTiCICount())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1322,6 +1344,22 @@ func CallDebugRPC(ctx context.Context, client debugpb.DebugClient, req *Request)
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
 	return resp, err
+}
+
+// CallVersionedKV launches a versioned kv rpc call.
+func CallVersionedKV(ctx context.Context, client tikvpb.VersionedKvClient, req *Request) (*Response, error) {
+	resp := &Response{}
+	var err error
+	switch req.Type {
+	case CmdVersionedCop:
+		resp.Resp, err = client.VersionedCoprocessor(ctx, req.VersionedCop())
+	default:
+		return nil, errors.Errorf("invalid request type: %v", req.Type)
+	}
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return resp, nil
 }
 
 // Lease is used to implement grpc stream timeout.
@@ -1524,12 +1562,16 @@ func (req *Request) GetStartTS() uint64 {
 		return req.Flush().GetStartTs()
 	case CmdBufferBatchGet:
 		return req.BufferBatchGet().GetVersion()
+	case CmdGetEstimateTiCICount:
+		return req.GetEstimateTiCICount().GetStartTs()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:
 		return req.Cop().GetStartTs()
 	case CmdBatchCop:
 		return req.BatchCop().GetStartTs()
+	case CmdVersionedCop:
+		return req.VersionedCop().GetStartTs()
 	case CmdMvccGetByStartTs:
 		return req.MvccGetByStartTs().GetStartTs()
 	default:

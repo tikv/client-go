@@ -114,6 +114,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	github.com/pingcap/kvproto => github.com/AilinKid/kvproto v0.0.0-20260917025947-d7957dc0b2a8
 
 	github.com/tikv/client-go/v2 => ../
 )

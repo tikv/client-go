@@ -287,6 +287,15 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 			req.Req = &cmd
 		}
 		req.rev++
+	case CmdVersionedCop:
+		if req.rev == 0 {
+			req.VersionedCop().Context = ctx
+		} else {
+			cmd := *req.VersionedCop()
+			cmd.Context = ctx
+			req.Req = &cmd
+		}
+		req.rev++
 	case CmdMvccGetByKey:
 		if req.rev == 0 {
 			req.MvccGetByKey().Context = ctx
@@ -377,6 +386,15 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 			req.Req = &cmd
 		}
 		req.rev++
+	case CmdGetEstimateTiCICount:
+		if req.rev == 0 {
+			req.GetEstimateTiCICount().Context = ctx
+		} else {
+			cmd := *req.GetEstimateTiCICount()
+			cmd.Context = ctx
+			req.Req = &cmd
+		}
+		req.rev++
 	default:
 		return false
 	}
@@ -447,6 +465,8 @@ func isValidReqType(cmd CmdType) bool {
 		return true
 	case CmdBatchCop:
 		return true
+	case CmdVersionedCop:
+		return true
 	case CmdMvccGetByKey:
 		return true
 	case CmdMvccGetByStartTs:
@@ -466,6 +486,8 @@ func isValidReqType(cmd CmdType) bool {
 	case CmdFlush:
 		return true
 	case CmdBufferBatchGet:
+		return true
+	case CmdGetEstimateTiCICount:
 		return true
 	case CmdCopStream, CmdMPPTask, CmdMPPConn, CmdMPPCancel, CmdMPPAlive, CmdEmpty:
 		return true
