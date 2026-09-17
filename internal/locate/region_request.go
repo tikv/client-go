@@ -2155,7 +2155,12 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
-		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
+		// A blamed tenant is excluded: its deadline went on a queue of its own
+		// making, so it takes the backoff path below rather than retrying the
+		// same overloaded leader straight away. The reason carries both
+		// markers, and Contains would otherwise match the deadline one first.
+		if s.replicaSelector != nil && !isNoisyTenantBusy(serverIsBusy) &&
+			strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
 			}
