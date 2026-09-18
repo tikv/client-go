@@ -114,5 +114,6 @@ func readKey(ctx context.Context, client *txnkv.Client, key []byte) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	return txn.Get(ctx, key)
+	value, err := txn.Get(ctx, key)
+	return value.Value, err
 }

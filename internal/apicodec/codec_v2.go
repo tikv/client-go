@@ -55,6 +55,7 @@ func BuildKeyspaceName(name string) string {
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
 	reqPool      sync.Pool
+	apiVersion   kvrpcpb.APIVersion
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
@@ -86,6 +87,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	}
 	codec := &codecV2{
 		// Region keys in CodecV2 are always encoded in memory comparable form.
+		apiVersion:   kvrpcpb.APIVersion_V2,
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
 		keyspaceID:   &kvrpcpb.Context_KeyspaceId{KeyspaceId: keyspaceID},
@@ -127,7 +129,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return KeyspaceID(c.keyspaceMeta.GetId())
+	return KeyspaceID(keyspaceIDFromMeta(c.keyspaceMeta))
 }
 
 func (c *codecV2) getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
@@ -139,7 +141,14 @@ func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
-	return kvrpcpb.APIVersion_V2
+	return c.apiVersion
+}
+
+func keyspaceIDFromMeta(meta *keyspacepb.KeyspaceMeta) uint32 {
+	if identity := meta.GetKeyspaceIdentity(); identity != nil {
+		return identity.GetKeyspaceId()
+	}
+	return meta.GetId()
 }
 
 // EncodeRequest encodes with the given Codec.
@@ -809,6 +818,10 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 // DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
 func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
+	if len(c.prefix) == 0 {
+		return encodedStart, encodedEnd, nil
+	}
+
 	if bytes.Compare(encodedStart, c.endKey) >= 0 ||
 		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.prefix) <= 0) {
 		return nil, nil, errors.WithStack(errKeyOutOfBound)

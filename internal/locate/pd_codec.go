@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
@@ -70,6 +71,16 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 		return nil, err
 	}
 	codec, err := apicodec.NewCodecV2(mode, keyspaceMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CodecPDClient{client.WithCallerComponent(componentName), codec}, nil
+}
+
+// NewCodecPDClientWithKeyspaceIdentity creates a CodecPDClient in API v3 with keyspace identity.
+func NewCodecPDClientWithKeyspaceIdentity(mode apicodec.Mode, client pd.Client, identity *apipb.KeyspaceIdentity, keyspace string) (*CodecPDClient, error) {
+	codec, err := apicodec.NewCodecV3(mode, identity, keyspace)
 	if err != nil {
 		return nil, err
 	}

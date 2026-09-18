@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/pingcap/kvproto/pkg/apipb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util"
+	pd "github.com/tikv/pd/client"
 )
 
 // Client is a txn client.
@@ -34,9 +36,10 @@ type Client struct {
 }
 
 type option struct {
-	apiVersion   kvrpcpb.APIVersion
-	keyspaceName string
-	spKVPrefix   string
+	apiVersion       kvrpcpb.APIVersion
+	keyspaceName     string
+	keyspaceIdentity *apipb.KeyspaceIdentity
+	spKVPrefix       string
 }
 
 // ClientOpt is factory to set the client options.
@@ -46,6 +49,16 @@ type ClientOpt func(*option)
 func WithKeyspace(keyspaceName string) ClientOpt {
 	return func(opt *option) {
 		opt.keyspaceName = keyspaceName
+	}
+}
+
+// WithKeyspaceIdentity is used to set client's API V3 keyspace identity.
+func WithKeyspaceIdentity(namespaceID, keyspaceID uint32) ClientOpt {
+	return func(opt *option) {
+		opt.keyspaceIdentity = &apipb.KeyspaceIdentity{
+			NamespaceId: namespaceID,
+			KeyspaceId:  keyspaceID,
+		}
 	}
 }
 
@@ -71,7 +84,13 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		o(opt)
 	}
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdClient, err := tikv.NewPDClient(pdAddrs)
+	newPDClient := tikv.NewPDClient
+	if opt.apiVersion == kvrpcpb.APIVersion_V3 {
+		newPDClient = func(pdAddrs []string) (pd.Client, error) {
+			return tikv.NewPDClientWithKeyspaceIdentity(pdAddrs, opt.keyspaceIdentity)
+		}
+	}
+	pdClient, err := newPDClient(pdAddrs)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -85,6 +104,11 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		codecCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	case kvrpcpb.APIVersion_V2:
 		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, pdClient, opt.keyspaceName)
+		if err != nil {
+			return nil, err
+		}
+	case kvrpcpb.APIVersion_V3:
+		codecCli, err = tikv.NewCodecPDClientWithKeyspaceIdentity(tikv.ModeTxn, pdClient, opt.keyspaceIdentity, opt.keyspaceName)
 		if err != nil {
 			return nil, err
 		}
