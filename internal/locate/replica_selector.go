@@ -389,6 +389,9 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if s.leaderOnly && !isLeader {
 		return false
 	}
+	if !isLeader && !r.store.isReplicaReadEligible() {
+		return false
+	}
 	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.hasFlag(serverIsBusyFlag) || isLeader) {
 		return false
 	}
