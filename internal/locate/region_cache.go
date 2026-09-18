@@ -3325,6 +3325,48 @@ retry:
 	return
 }
 
+// switchWorkLeaderToPeerIfOnStore CAS-updates the working TiKV to peer only
+// while the current working store is still oldStoreID. applied means this call
+// changed the leader. moved means the cache already left oldStoreID.
+func (r *Region) switchWorkLeaderToPeerIfOnStore(peer *metapb.Peer, oldStoreID uint64) (applied, moved bool) {
+	globalStoreIdx, found := r.getPeerStoreIndex(peer)
+	if !found {
+		return false, false
+	}
+	for {
+		oldRegionStore := r.getStore()
+		if oldRegionStore == nil || int(oldRegionStore.workTiKVIdx) >= oldRegionStore.accessStoreNum(tiKVOnly) {
+			return false, true
+		}
+		_, curStore := oldRegionStore.accessStore(tiKVOnly, oldRegionStore.workTiKVIdx)
+		if curStore == nil || curStore.StoreID() != oldStoreID {
+			return false, true
+		}
+		var leaderIdx AccessIndex
+		foundIdx := false
+		for i, gIdx := range oldRegionStore.accessIndex[tiKVOnly] {
+			if gIdx == globalStoreIdx {
+				leaderIdx = AccessIndex(i)
+				foundIdx = true
+				break
+			}
+		}
+		if !foundIdx {
+			return false, false
+		}
+		if oldRegionStore.workTiKVIdx == leaderIdx {
+			// NotLeader named the current peer; still on oldStoreID, so not moved.
+			return false, false
+		}
+		newRegionStore := oldRegionStore.clone()
+		newRegionStore.workTiKVIdx = leaderIdx
+		newRegionStore.storeEpochs[globalStoreIdx] = atomic.LoadUint32(&newRegionStore.stores[globalStoreIdx].epoch)
+		if r.compareAndSwapStore(oldRegionStore, newRegionStore) {
+			return true, false
+		}
+	}
+}
+
 func (r *regionStore) switchNextFlashPeer(rr *Region, currentPeerIdx AccessIndex) {
 	nextIdx := (currentPeerIdx + 1) % AccessIndex(r.accessStoreNum(tiFlashOnly))
 	newRegionStore := r.clone()
