@@ -336,6 +336,12 @@ type probeEvent struct {
 
 func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRefreshResult, []probeEvent) {
 	matches := s.regionCache.CollectWorkStoreMatches(storeID)
+	have := make(map[locate.RegionVerID]struct{}, len(matches))
+	for _, m := range matches {
+		have[m.Region] = struct{}{}
+	}
+	retryMatches, early := s.recoverGoneUnresolved(ctx, storeID, have)
+	matches = append(matches, retryMatches...)
 	res := StoreCacheRefreshResult{
 		StoreID:    storeID,
 		Scanned:    len(matches),
@@ -343,9 +349,9 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 		ObservedAt: time.Now().Unix(),
 	}
 	if len(matches) == 0 {
-		res.Remaining = 0
+		res.Remaining = s.regionCache.CountWorkStoreMatches(storeID)
 		res.ObservedAt = time.Now().Unix()
-		return res, nil
+		return res, early
 	}
 
 	workers := storeCacheRefreshWorkers
@@ -380,7 +386,7 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 	}
 	wg.Wait()
 	close(events)
-	var evs []probeEvent
+	evs := append([]probeEvent(nil), early...)
 	for ev := range events {
 		evs = append(evs, ev)
 		if ev.outcome == probeFailed && ev.err != "" && len(res.Errors) < 8 {
@@ -391,6 +397,72 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 	res.Remaining = s.regionCache.CountWorkStoreMatches(storeID)
 	res.ObservedAt = time.Now().Unix()
 	return res, evs
+}
+
+// recoverGoneUnresolved re-locates key ranges of failures whose cache is gone
+// and not covered by moved cache. It does not drop failures here: probeMoved
+// events let dropMovedUnresolvedLocked / event apply delete them. LocateKey may
+// hit PD; that is only for stuck leftovers, not the hot B2 path.
+func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, have map[locate.RegionVerID]struct{}) ([]locate.WorkStoreMatch, []probeEvent) {
+	task := s.getRefreshTaskIfAny(storeID)
+	if task == nil {
+		return nil, nil
+	}
+	type gone struct {
+		id locate.RegionVerID
+		u  unresolvedFail
+	}
+	var items []gone
+	task.mu.Lock()
+	for id, u := range task.unresolved {
+		if _, ok := have[id]; ok {
+			continue
+		}
+		if s.regionCache.ClassifyWorkStore(id, storeID) != locate.WorkStoreGone {
+			continue
+		}
+		items = append(items, gone{id: id, u: u})
+	}
+	task.mu.Unlock()
+	if len(items) == 0 {
+		return nil, nil
+	}
+	var evs []probeEvent
+	located := false
+	for _, it := range items {
+		if ctx.Err() != nil {
+			break
+		}
+		idx := s.regionCache.NewWorkSpanIndex(storeID)
+		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
+			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
+			continue
+		}
+		bo := NewBackofferWithVars(ctx, 5000, nil)
+		_, err := s.regionCache.LocateKey(bo, it.u.startKey)
+		if err != nil {
+			continue
+		}
+		located = true
+		// Only retire the stale id when the original range is fully covered by
+		// cache that has left storeID. Holes (split/uncached sibling) stay failed.
+		idx = s.regionCache.NewWorkSpanIndex(storeID)
+		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
+			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
+		}
+	}
+	if !located {
+		return nil, evs
+	}
+	var extra []locate.WorkStoreMatch
+	for _, m := range s.regionCache.CollectWorkStoreMatches(storeID) {
+		if _, ok := have[m.Region]; ok {
+			continue
+		}
+		have[m.Region] = struct{}{}
+		extra = append(extra, m)
+	}
+	return extra, evs
 }
 
 type probeOutcome int
