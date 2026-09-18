@@ -612,6 +612,37 @@ func TestStoreCacheRefreshKeepsFailureAfterCacheTTL(t *testing.T) {
 	require.False(t, status.Ready)
 }
 
+func TestStoreCacheRefreshRetriesAfterCacheTTLAndConverges(t *testing.T) {
+	SetRegionCacheTTLWithJitter(1, 0)
+	t.Cleanup(func() { SetRegionCacheTTLWithJitter(600, 60) })
+
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	first := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, first.Ready)
+	require.Greater(t, first.Failed, 0)
+
+	time.Sleep(1200 * time.Millisecond)
+	status := store.GetStoreCacheStatus(storeIDs[0])
+	require.Greater(t, status.Failed, 0)
+	require.False(t, status.Ready)
+
+	store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	second := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Equal(t, 0, second.Remaining, "errors=%v updated=%d failed=%d scanned=%d", second.Errors, second.Updated, second.Failed, second.Scanned)
+	require.Equal(t, 0, second.Failed)
+	require.True(t, second.Ready, "expired failure must be retried and converge: %+v", second)
+}
+
 func TestStoreCacheRefreshResetClearsFailure(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
