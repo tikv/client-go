@@ -678,6 +678,48 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	return true, nil
 }
 
+// Whether the store this attempt targeted blames the request's own resource
+// group, as last reported in that store's health feedback. That report is the
+// only attribution available when a request times out locally, since no
+// response carrying a reason ever arrives.
+func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
+	if req == nil || s.target == nil || s.target.store == nil {
+		return false
+	}
+	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName())
+}
+
+// onNoisyTenantTimeout backs off a configurable-timeout deadline that the
+// blamed tenant queued for itself, rather than spending the retry on the same
+// store straight away.
+//
+// Only the fast-retry case is intercepted: a request without a configurable
+// timeout already falls through to the send-failure backoff, and diverting it
+// here would skip that path's liveness check.
+//
+// The leader stays pinned: markOverloaded keeps tryOverloadedLeader steering
+// the next read to it, so the retry waits rather than moving to a follower
+// throttled against the same quota.
+//
+// handled is false when the store blames somebody else, or nobody: the caller
+// then takes the immediate-retry path as before.
+func (s *replicaSelector) onNoisyTenantTimeout(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (handled bool, err error) {
+	if !isReadReqConfigurableTimeout(req) || !s.targetBlamesRequestGroup(req) {
+		return false, nil
+	}
+	metrics.TiKVNoisyTenantReadTimeoutCounter.Inc()
+	if ctx != nil && ctx.Store != nil {
+		ctx.Store.healthStatus.markOverloaded(true)
+	}
+	backoffErr := errors.Errorf("read timeout (noisy tenant), ctx: %v", ctx)
+	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Pins every remaining attempt to the leader. busyThreshold must go too, or
 // nextForReplicaReadLeader diverts to a replica whenever the leader is busy.
 func (s *replicaSelector) onServerIsBusy(

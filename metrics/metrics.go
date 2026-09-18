@@ -106,6 +106,7 @@ var (
 	TiKVMinSafeTSGapSeconds                        *prometheus.GaugeVec
 	TiKVReplicaSelectorFailureCounter              *prometheus.CounterVec
 	TiKVNoisyTenantServerBusyCounter               prometheus.Counter
+	TiKVNoisyTenantReadTimeoutCounter              prometheus.Counter
 	TiKVNoisyTenantLeaderPinnedCounter             *prometheus.CounterVec
 	TiKVRequestRetryTimesHistogram                 prometheus.Histogram
 	TiKVTxnCommitBackoffSeconds                    prometheus.Histogram
@@ -775,6 +776,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		})
 
+	TiKVNoisyTenantReadTimeoutCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "noisy_tenant_read_timeout_total",
+			Help:        "Counter of read requests that hit their configurable timeout against a store that blames the request's own resource group, which back off instead of retrying the same store at once.",
+			ConstLabels: constLabels,
+		})
+
 	TiKVNoisyTenantLeaderPinnedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -1210,6 +1220,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVMinSafeTSGapSeconds)
 	prometheus.MustRegister(TiKVReplicaSelectorFailureCounter)
 	prometheus.MustRegister(TiKVNoisyTenantServerBusyCounter)
+	prometheus.MustRegister(TiKVNoisyTenantReadTimeoutCounter)
 	prometheus.MustRegister(TiKVNoisyTenantLeaderPinnedCounter)
 	prometheus.MustRegister(TiKVRequestRetryTimesHistogram)
 	prometheus.MustRegister(TiKVTxnCommitBackoffSeconds)

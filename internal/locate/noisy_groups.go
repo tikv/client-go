@@ -16,18 +16,13 @@ package locate
 
 import "sync/atomic"
 
-// noisyGroups is the set of resource groups one store currently blames for its
-// own overload, as last reported in that store's HealthFeedback.
+// noisyGroups is the set of resource groups a store blames for its own
+// overload, from its last HealthFeedback. A blamed group's read deadlines back
+// off instead of retrying at once, so this is read on the retry path and not
+// only for metrics.
 //
-// A report naming anyone marks the whole store overloaded, which is mirrored
-// onto StoreHealthStatus so the replica selector can consult it the same way it
-// consults IsSlow. This set is kept only to attribute blame in metrics: which
-// group is named changes nothing about how a request is routed.
-//
-// The zero value means nothing is known, which is deliberately not the same as
-// knowing that nobody is noisy: a store running a version that does not report
-// the set leaves this empty forever, and reading that as a clean bill of health
-// would be wrong.
+// The zero value means unknown, not "nobody is noisy": a store too old to
+// report the set leaves it empty forever.
 type noisyGroups struct {
 	// nil until the first report, then replaced wholesale by each one. A read
 	// is a single atomic load, and a group that stops being blamed stops being
