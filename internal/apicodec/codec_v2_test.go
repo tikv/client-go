@@ -427,33 +427,55 @@ func (suite *testCodecV2Suite) TestDecodeKeyError() {
 			name: "LockedSharedLockInfos",
 			err: &kvrpcpb.KeyError{
 				Locked: &kvrpcpb.LockInfo{
-					Key:         append(keyspacePrefix, []byte("outer-key")...),
-					PrimaryLock: append(keyspacePrefix, []byte("outer-primary")...),
-					Secondaries: [][]byte{
-						append(keyspacePrefix, []byte("outer-secondary")...),
-					},
+					// CSE's SharedLocks::into_lock_info leaves the wrapper's
+					// primary and lock version empty: it represents multiple transactions.
+					Key:      append(keyspacePrefix, []byte("shared-key")...),
 					LockType: kvrpcpb.Op_SharedLock,
 					SharedLockInfos: []*kvrpcpb.LockInfo{
 						{
-							Key:         append(keyspacePrefix, []byte("inner-key")...),
-							PrimaryLock: append(keyspacePrefix, []byte("inner-primary")...),
+							Key:         append(keyspacePrefix, []byte("shared-key")...),
+							PrimaryLock: append(keyspacePrefix, []byte("primary-1")...),
+							LockVersion: 101,
+							LockTtl:     3000,
 							Secondaries: [][]byte{
 								append(keyspacePrefix, []byte("inner-secondary")...),
 							},
 							LockType: kvrpcpb.Op_Lock,
 						},
+						{
+							Key:             append(keyspacePrefix, []byte("shared-key")...),
+							PrimaryLock:     append(keyspacePrefix, []byte("primary-2")...),
+							LockVersion:     202,
+							LockTtl:         5000,
+							LockType:        kvrpcpb.Op_PessimisticLock,
+							LockForUpdateTs: 203,
+						},
 					},
 				},
 			},
 			validate: func(re *require.Assertions, decoded *kvrpcpb.KeyError) {
-				re.Equal([]byte("outer-key"), decoded.Locked.Key)
-				re.Equal([]byte("outer-primary"), decoded.Locked.PrimaryLock)
-				re.Equal([][]byte{[]byte("outer-secondary")}, decoded.Locked.Secondaries)
-				re.Len(decoded.Locked.SharedLockInfos, 1)
-				inner := decoded.Locked.SharedLockInfos[0]
-				re.Equal([]byte("inner-key"), inner.Key)
-				re.Equal([]byte("inner-primary"), inner.PrimaryLock)
-				re.Equal([][]byte{[]byte("inner-secondary")}, inner.Secondaries)
+				re.Equal(&kvrpcpb.LockInfo{
+					Key:      []byte("shared-key"),
+					LockType: kvrpcpb.Op_SharedLock,
+					SharedLockInfos: []*kvrpcpb.LockInfo{
+						{
+							Key:         []byte("shared-key"),
+							PrimaryLock: []byte("primary-1"),
+							LockVersion: 101,
+							LockTtl:     3000,
+							Secondaries: [][]byte{[]byte("inner-secondary")},
+							LockType:    kvrpcpb.Op_Lock,
+						},
+						{
+							Key:             []byte("shared-key"),
+							PrimaryLock:     []byte("primary-2"),
+							LockVersion:     202,
+							LockTtl:         5000,
+							LockType:        kvrpcpb.Op_PessimisticLock,
+							LockForUpdateTs: 203,
+						},
+					},
+				}, decoded.Locked)
 			},
 		},
 		{
