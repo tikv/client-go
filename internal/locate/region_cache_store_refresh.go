@@ -235,6 +235,52 @@ func (idx *WorkSpanIndex) RangeResolved(startKey, endKey []byte) bool {
 	return started && rangeCoveredTo(coveredTo, endKey, toInf)
 }
 
+// CoveredTo returns how far [startKey, endKey) is covered by contiguous cached
+// spans, ignoring whether they still work on the target store. A hole or the
+// first span that starts after the covered prefix stops the walk. complete
+// means the original range is fully in cache; the caller still needs
+// RangeResolved before dropping a failure.
+func (idx *WorkSpanIndex) CoveredTo(startKey, endKey []byte) (coveredTo []byte, complete bool) {
+	coveredTo = startKey
+	if idx == nil || len(idx.spans) == 0 {
+		return coveredTo, false
+	}
+	spans := idx.spans
+	i := sort.Search(len(spans), func(j int) bool {
+		end := spans[j].end
+		return len(end) == 0 || bytes.Compare(end, startKey) > 0
+	})
+	toInf := false
+	started := false
+	for ; i < len(spans); i++ {
+		sp := spans[i]
+		if len(endKey) > 0 && bytes.Compare(sp.start, endKey) >= 0 {
+			break
+		}
+		if !keyRangesOverlap(startKey, endKey, sp.start, sp.end) {
+			continue
+		}
+		need := startKey
+		if started {
+			need = coveredTo
+		}
+		if bytes.Compare(sp.start, need) > 0 {
+			return coveredTo, false
+		}
+		started = true
+		if len(sp.end) == 0 {
+			return sp.end, true
+		}
+		if bytes.Compare(coveredTo, sp.end) < 0 {
+			coveredTo = sp.end
+		}
+		if rangeCoveredTo(coveredTo, endKey, toInf) {
+			return coveredTo, true
+		}
+	}
+	return coveredTo, started && rangeCoveredTo(coveredTo, endKey, toInf)
+}
+
 // ApplyLeaderIfOnStore CAS-updates the working TiKV to leader only while the
 // current working store is still oldStoreID. applied means this call changed
 // the leader. moved means the cache already left oldStoreID.

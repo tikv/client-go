@@ -441,7 +441,13 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 			continue
 		}
-		if !s.locateFailedRange(ctx, it.u.startKey, it.u.endKey) {
+		cur, complete := idx.CoveredTo(it.u.startKey, it.u.endKey)
+		if complete {
+			// Fully cached but not resolved: remaining work is on-store
+			// probes, not another prefix walk from startKey.
+			continue
+		}
+		if !s.locateFailedRange(ctx, cur, it.u.endKey) {
 			continue
 		}
 		located = true
@@ -467,7 +473,8 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 }
 
 // locateFailedRange walks [startKey, endKey) so a split sibling after startKey
-// is loaded. LocateKey(startKey) alone would keep hitting the first half.
+// is loaded. The caller should pass the first uncached hole, not the original
+// start, so a later round is not spent re-walking an already cached prefix.
 // Stops on cancel, backoff budget, max spans, or a region that does not advance.
 func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte) bool {
 	if ctx.Err() != nil {
