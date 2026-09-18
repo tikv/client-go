@@ -983,6 +983,10 @@ func (s *sendReqState) next() (done bool) {
 	// check whether the session/query is killed during the Next()
 	if req.IsInterruptible() {
 		if err := bo.CheckKilled(); err != nil {
+			// Preserve a server-reported unknown outcome over cancellation.
+			if s.vars.regionErr != nil && s.vars.regionErr.GetUndeterminedResult() != nil {
+				return true
+			}
 			s.vars.resp, s.vars.err = nil, err
 			return true
 		}
