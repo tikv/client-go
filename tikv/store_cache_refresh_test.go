@@ -17,6 +17,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -458,7 +459,61 @@ func TestStoreCacheRefreshKeepsFailureIfRightHalfUncached(t *testing.T) {
 	require.False(t, status.Ready, "uncached right half must not clear the parent failure: %+v", status)
 	require.Greater(t, status.Failed, 0)
 	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
-	require.False(t, result.Ready, "uncached right half must not clear the parent failure: %+v", result)
+	require.Equal(t, 0, result.Remaining, "errors=%v updated=%d failed=%d scanned=%d", result.Errors, result.Updated, result.Failed, result.Scanned)
+	require.Equal(t, 0, result.Failed)
+	require.True(t, result.Ready, "POST must walk past startKey and converge after both halves left: %+v", result)
+}
+
+func TestStoreCacheRefreshSplitRightHalfStaysThenConverges(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peers, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	old, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.False(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Ready)
+
+	rightPeers := cluster.AllocIDs(3)
+	rightID := cluster.AllocID()
+	cluster.Split(regionID, rightID, []byte("m"), rightPeers, rightPeers[0])
+	cluster.ChangeLeader(regionID, peers[1])
+	store.GetRegionCache().InvalidateCachedRegion(old.Region)
+	stuck := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, stuck.Ready, "right sibling still on old store but parent failure was cleared: %+v", stuck)
+	require.Greater(t, stuck.Failed, 0)
+
+	cluster.ChangeLeader(rightID, rightPeers[1])
+	done := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Equal(t, 0, done.Remaining, "errors=%v updated=%d failed=%d scanned=%d", done.Errors, done.Updated, done.Failed, done.Scanned)
+	require.Equal(t, 0, done.Failed)
+	require.True(t, done.Ready, "after right half leaves the store, failed range must converge: %+v", done)
+}
+
+func TestStoreCacheRefreshRecoverGoneCancelled(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.False(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Ready)
+	store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	extra, _ := store.recoverGoneUnresolved(ctx, storeIDs[0], map[locate.RegionVerID]struct{}{})
+	require.Empty(t, extra)
+	status := store.GetStoreCacheStatus(storeIDs[0])
+	require.Greater(t, status.Failed, 0)
+	require.False(t, status.Ready)
 }
 
 func TestStoreCacheStatusReadDoesNotCreateTasks(t *testing.T) {
