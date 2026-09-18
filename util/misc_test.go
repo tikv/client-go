@@ -103,3 +103,38 @@ func TestTimeDetail(t *testing.T) {
 	}
 	assert.Equal(t, "time_detail: {total_process_time: 2ms, total_suspend_time: 3ms, total_wait_time: 4ms, total_kv_read_wall_time: 5ms, tikv_grpc_process_time: 6ms, tikv_grpc_wait_time: 7ms, tikv_wall_time: 8ms}", detail.String())
 }
+
+func TestGetMaxStartKey(t *testing.T) {
+	assert := assert.New(t)
+
+	cases := []struct {
+		lhs, rhs, expected string
+	}{
+		{"", "", ""},
+		{"", "a", "a"},
+		{"a", "a", "a"},
+	}
+
+	for _, c := range cases {
+		assert.Equal([]byte(c.expected), GetMaxStartKey([]byte(c.lhs), []byte(c.rhs)))
+		assert.Equal([]byte(c.expected), GetMaxStartKey([]byte(c.rhs), []byte(c.lhs)))
+	}
+}
+
+func TestGetMinEndKey(t *testing.T) {
+	assert := assert.New(t)
+
+	cases := []struct {
+		lhs, rhs, expected string
+	}{
+		{"", "", ""},
+		{"a", "", "a"},
+		{"a", "a", "a"},
+		{"a", "b", "a"},
+	}
+
+	for _, c := range cases {
+		assert.Equal([]byte(c.expected), GetMinEndKey([]byte(c.lhs), []byte(c.rhs)))
+		assert.Equal([]byte(c.expected), GetMinEndKey([]byte(c.rhs), []byte(c.lhs)))
+	}
+}

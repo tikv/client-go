@@ -12,9 +12,9 @@ type memCodec interface {
 	decodeKey(encodedKey []byte) ([]byte, error)
 }
 
-// decodeError happens if the region range key is not well-formed.
-// It indicates TiKV has bugs and the client can't handle such a case,
-// so it should report the error to users soon.
+// decodeError marks malformed mem-comparable region metadata returned by TiKV
+// or PD. Such metadata cannot be safely compared with decoded user keys or
+// installed in the region cache.
 type decodeError struct {
 	error
 }

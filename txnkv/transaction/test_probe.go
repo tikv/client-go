@@ -396,7 +396,7 @@ func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []by
 
 // SendTxnHeartBeat renews a txn's ttl.
 func SendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
-	return sendTxnHeartBeat(bo, store, primary, startTS, ttl, 0)
+	return sendTxnHeartBeat(bo, store, primary, startTS, ttl, 0, false)
 }
 
 // ConfigProbe exposes configurations and global variables for testing purpose.

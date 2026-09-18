@@ -104,7 +104,7 @@ func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (ui
 	key := unifiedTxnSafePointPath
 	keyspaceMeta := l.codec.GetKeyspaceMeta()
 	if pd.IsKeyspaceUsingKeyspaceLevelGC(keyspaceMeta) {
-		key = fmt.Sprintf(keyspaceLevelTxnSafePointPath, keyspaceMeta.Id)
+		key = fmt.Sprintf(keyspaceLevelTxnSafePointPath, keyspaceMeta.GetId())
 	}
 
 	// Follow the same implementation as the EtcdSafePointKV by setting the timeout 5 seconds.

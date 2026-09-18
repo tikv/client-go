@@ -35,6 +35,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -174,4 +175,26 @@ func None[T interface{}]() Option[T] {
 
 func (o Option[T]) Inner() *T {
 	return o.inner
+}
+
+// GetMaxStartKey returns the lexicographically larger start key, treating an empty key as unbounded below.
+func GetMaxStartKey(lhs []byte, rhs []byte) []byte {
+	if bytes.Compare(lhs, rhs) > 0 {
+		return lhs
+	}
+	return rhs
+}
+
+// GetMinEndKey returns the lexicographically smaller end key, treating an empty key as unbounded above.
+func GetMinEndKey(lhs []byte, rhs []byte) []byte {
+	if len(rhs) == 0 {
+		return lhs
+	}
+	if len(lhs) == 0 {
+		return rhs
+	}
+	if bytes.Compare(lhs, rhs) < 0 {
+		return lhs
+	}
+	return rhs
 }

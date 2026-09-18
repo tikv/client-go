@@ -179,7 +179,7 @@ func (s *testGCWithTiKVSuite) dropKeyspace(keyspaceMeta *keyspacepb.KeyspaceMeta
 	re := s.Require()
 	// Nil might be used to represent the null keyspace.
 	if keyspaceMeta != nil {
-		_, err := s.globalPDCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.Id, keyspacepb.KeyspaceState_ARCHIVED)
+		_, err := s.globalPDCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.GetId(), keyspacepb.KeyspaceState_ARCHIVED)
 		re.NoError(err)
 	}
 }

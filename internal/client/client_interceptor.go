@@ -174,6 +174,15 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	return resourceGroupName, resourceControlInterceptor, reqInfo
 }
 
+// GetResourceControlInfo applies the normal resource-control selection policy to req.
+func GetResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
+	string,
+	resourceControlClient.ResourceGroupKVInterceptor,
+	*resourcecontrol.RequestInfo,
+) {
+	return getResourceControlInfo(ctx, req)
+}
+
 // buildResourceControlInterceptor builds a resource control interceptor with
 // the given resource group name.
 //

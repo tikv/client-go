@@ -137,6 +137,12 @@ var (
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
 	TiKVTxnLagCommitTSWaitHistogram                *prometheus.HistogramVec
 	TiKVTxnLagCommitTSAttemptHistogram             *prometheus.HistogramVec
+
+	TiKVTxnFileRequestCounter        *prometheus.CounterVec
+	TiKVTxnFileErrorCounter          *prometheus.CounterVec
+	TiKVTxnFileWriteBytes            *prometheus.CounterVec
+	TiKVTxnFileMutationSizeHistogram *prometheus.HistogramVec
+	TiKVTxnFileDuration              *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -1055,6 +1061,53 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
+	TiKVTxnFileRequestCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_requests",
+			Help:        "Counter of file-based transactions requests.",
+			ConstLabels: constLabels,
+		}, []string{LblType})
+
+	TiKVTxnFileErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_errors",
+			Help:        "Counter of file-based transaction errors.",
+			ConstLabels: constLabels,
+		}, []string{LblType})
+
+	TiKVTxnFileWriteBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_write_bytes",
+			Help:        "Counter of file-based transactions write bytes.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
+	TiKVTxnFileMutationSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_mutation_size",
+			Buckets:     prometheus.ExponentialBuckets(1<<20, 2, 17), // 1MB ~ 64GB
+			Help:        "Histogram of file-based transactions mutation bytes.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
+	TiKVTxnFileDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_duration",
+			Buckets:     prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms ~ 524s
+			Help:        "Duration of executing file-based transactions.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -1168,6 +1221,11 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnLagCommitTSWaitHistogram)
 	prometheus.MustRegister(TiKVTxnLagCommitTSAttemptHistogram)
 	prometheus.MustRegister(TiKVStaleBucketFromPDCounter)
+	prometheus.MustRegister(TiKVTxnFileRequestCounter)
+	prometheus.MustRegister(TiKVTxnFileErrorCounter)
+	prometheus.MustRegister(TiKVTxnFileWriteBytes)
+	prometheus.MustRegister(TiKVTxnFileMutationSizeHistogram)
+	prometheus.MustRegister(TiKVTxnFileDuration)
 }
 
 // readCounter reads the value of a prometheus.Counter.

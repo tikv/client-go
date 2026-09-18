@@ -3056,6 +3056,11 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, requestBuckets
 	}
 }
 
+// Codec returns the API codec used by this region cache.
+func (c *RegionCache) Codec() apicodec.Codec {
+	return c.codec
+}
+
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
 const refreshStoreListInterval = 10 * time.Second

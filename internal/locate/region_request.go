@@ -547,59 +547,98 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	var (
-		cancels = make([]context.CancelFunc, 0, 3)
-		ctx     = bo.GetCtx()
-		hookCtx = ctx
-	)
-	if limit := kv.StoreLimit.Load(); limit > 0 {
-		if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
-			cb.Invoke(state.toResponseExt())
-			return
+	runLimiterAsync := req.RequestAttemptLimiter != nil
+	sendFirstAttempt := func() {
+		var (
+			cancels = make([]context.CancelFunc, 0, 4)
+			ctx     = bo.GetCtx()
+			hookCtx = ctx
+			// Keep the historical async timing baseline when no limiter is installed.
+			// When there is a limiter, reset it after the limiter returns so its wait
+			// time is excluded from RPC runtime statistics.
+			rpcStart = startTime
+		)
+		finishBeforeSend := cb.Invoke
+		if runLimiterAsync {
+			finishBeforeSend = cb.Schedule
 		}
-		cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
-	}
-	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
-		cancels = append(cancels, cancel)
-		hookCtx = ctx
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		cancels = append(cancels, cancel)
-	}
-
-	sendToAddr := state.vars.rpcCtx.Addr
-	if state.vars.rpcCtx.ProxyStore == nil {
-		req.ForwardedHost = ""
-	} else {
-		req.ForwardedHost = state.vars.rpcCtx.Addr
-		sendToAddr = state.vars.rpcCtx.ProxyAddr
-	}
-
-	s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
-		state.vars.sendTimes++
-		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
-		var execDetails *util.ExecDetails
-		if val := ctx.Value(util.ExecDetailsKey); val != nil {
-			execDetails = val.(*util.ExecDetails)
-		}
-		if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
-			cb.Invoke(state.toResponseExt())
-			return
-		}
-		// retry
-		cb.Executor().Go(func() {
-			for !state.next() {
-				if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
-					logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
-				}
+		cancelAll := func() {
+			for i := len(cancels) - 1; i >= 0; i-- {
+				cancels[i]()
 			}
-			cb.Schedule(state.toResponseExt())
-		})
-	}))
+		}
+
+		releaseAttempt, err := state.acquireRequestAttemptToken()
+		if err != nil {
+			state.vars.err = err
+			finishBeforeSend(state.toResponseExt())
+			return
+		}
+		if releaseAttempt != nil {
+			cancels = append(cancels, releaseAttempt)
+		}
+		if runLimiterAsync {
+			rpcStart = time.Now()
+		}
+		if limit := kv.StoreLimit.Load(); limit > 0 {
+			if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
+				cancelAll()
+				finishBeforeSend(state.toResponseExt())
+				return
+			}
+			cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
+		}
+		if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
+			var cancel context.CancelFunc
+			ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
+			cancels = append(cancels, cancel)
+			hookCtx = ctx
+		}
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			cancels = append(cancels, cancel)
+		}
+
+		sendToAddr := state.vars.rpcCtx.Addr
+		if state.vars.rpcCtx.ProxyStore == nil {
+			req.ForwardedHost = ""
+		} else {
+			req.ForwardedHost = state.vars.rpcCtx.Addr
+			sendToAddr = state.vars.rpcCtx.ProxyAddr
+		}
+
+		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
+			state.vars.sendTimes++
+			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
+			var execDetails *util.ExecDetails
+			if val := ctx.Value(util.ExecDetailsKey); val != nil {
+				execDetails = val.(*util.ExecDetails)
+			}
+			if state.handleAsyncResponse(rpcStart, canceled, resp, err, execDetails, cancels...) {
+				finishBeforeSend(state.toResponseExt())
+				return
+			}
+			// retry
+			cb.Executor().Go(func() {
+				for !state.next() {
+					if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
+						logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
+					}
+				}
+				cb.Schedule(state.toResponseExt())
+			})
+		}))
+	}
+	if runLimiterAsync {
+		// RequestAttemptLimiter may block. If this executor is backed by a
+		// recycling pool, many blocked limiters can cause it to overflow and
+		// weaken its concurrency bound. Callers should account for that before
+		// enabling a blocking limiter on a high-fan-out async path.
+		cb.Executor().Go(sendFirstAttempt)
+	} else {
+		sendFirstAttempt()
+	}
 }
 
 func (s *RegionRequestSender) recordRPCAccessInfo(req *tikvrpc.Request, rpcCtx *RPCContext, err string) {
@@ -640,7 +679,10 @@ func (r *replica) onUpdateLeader() {
 		r.attempts = maxReplicaAttempt - 1
 		r.attemptedTime = 0
 	}
+	// The replica is confirmed to be the leader by a NotLeader hint, so it is no longer
+	// suspected of having lost leadership.
 	r.deleteFlag(notLeaderFlag)
+	r.deleteFlag(suspectNotLeaderFlag)
 }
 
 const (
@@ -648,6 +690,7 @@ const (
 	dataIsNotReadyFlag                                // dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
 	notLeaderFlag                                     // notLeaderFlag indicates the replica is already tried, but the received not leader error.
 	serverIsBusyFlag                                  // serverIsBusyFlag indicates the replica is already tried, but the received server is busy error.
+	suspectNotLeaderFlag                              // suspectNotLeaderFlag indicates the cached leader keeps rejecting leader reads with ServerIsBusy(0), so it is suspected to have lost leadership (tikv/client-go#2028).
 )
 
 func (r *replica) addFlag(flag uint8) {
@@ -903,6 +946,25 @@ type sendReqState struct {
 	invariants reqInvariants
 }
 
+// acquireRequestAttemptToken invokes the limiter for the store selected for the
+// current RPC attempt. If the limiter returns both a release function and an
+// error, it releases the acquired token immediately because no RPC will be sent.
+func (s *sendReqState) acquireRequestAttemptToken() (release func(), err error) {
+	req := s.args.req
+	if req.RequestAttemptLimiter == nil || s.vars.rpcCtx == nil || s.vars.rpcCtx.Store == nil {
+		return nil, nil
+	}
+
+	release, err = req.RequestAttemptLimiter(s.args.bo.GetCtx(), s.vars.rpcCtx.Store.storeID)
+	if err != nil && release != nil {
+		// Be defensive about callbacks that return both a release function and an
+		// error. No RPC attempt will be made, so release any acquired capacity.
+		release()
+		release = nil
+	}
+	return release, err
+}
+
 // reqInvariants holds the input state of the request.
 // If the tikvrpc.Request is changed during the retries or other operations.
 // the reqInvariants can tell the initial state.
@@ -1021,6 +1083,15 @@ func (s *sendReqState) next() (done bool) {
 			h := hook.(func(*tikvrpc.Request))
 			h(req)
 		}
+	}
+
+	releaseAttempt, err := s.acquireRequestAttemptToken()
+	if err != nil {
+		s.vars.err = err
+		return true
+	}
+	if releaseAttempt != nil {
+		defer releaseAttempt()
 	}
 
 	// judge the store limit switch.
@@ -2076,7 +2147,9 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("request bucket version", ctx.BucketVersion),
 			zap.Stringer("ctx", ctx),
 		)
-		// bucket version is not match, we should split this cop request again.
+		// OnBucketVersionNotMatch stores boundaries that are later compared with
+		// decoded request keys. The API v2 response codec therefore strips their
+		// wire encoding and rejects malformed boundaries before this handler.
 		s.regionCache.OnBucketVersionNotMatch(ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
 		return false, nil
 	}

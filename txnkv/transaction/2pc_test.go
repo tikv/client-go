@@ -35,8 +35,10 @@
 package transaction
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -121,4 +123,59 @@ func TestMinCommitTsManager(t *testing.T) {
 			assert.Equal(t, manager.get(), uint64(1999))
 		},
 	)
+}
+
+func TestMutationsHasDataInRange(t *testing.T) {
+	assert := assert.New(t)
+
+	iToKey := func(i int) []byte {
+		if i < 0 {
+			return nil
+		}
+		return []byte(fmt.Sprintf("%04d", i))
+	}
+
+	muts := NewPlainMutations(10)
+	for i := 10; i < 20; i += 2 {
+		key := iToKey(i)
+		var op kvrpcpb.Op
+		if i%4 == 2 {
+			op = kvrpcpb.Op_CheckNotExists
+		} else {
+			op = kvrpcpb.Op_Put
+		}
+		muts.Push(op, key, key, false, false, false, false)
+	}
+
+	type Case struct {
+		start        int
+		end          int
+		expectd      bool
+		firstKey     int
+		firstDataKey int
+	}
+	cases := []Case{
+		{-1, -1, true, 10, 12},
+		{-1, 5, false, -1, -1},
+		{0, 10, false, -1, -1},
+		{0, 11, true, 10, -1},
+		{0, 30, true, 10, 12},
+		{0, -1, true, 10, 12},
+		{10, 20, true, 10, 12},
+		{15, 16, false, -1, -1},
+		{15, 17, true, 16, 16},
+		{15, -1, true, 16, 16},
+		{20, 30, false, -1, -1},
+		{21, 30, false, -1, -1},
+		{21, -1, false, -1, -1},
+	}
+
+	for _, c := range cases {
+		firstKey, firstDataKey, got := MutationsHasDataInRange(&muts, iToKey(c.start), iToKey(c.end))
+		assert.Equal(c.expectd, got)
+		if got {
+			assert.Equal(iToKey(c.firstKey), firstKey)
+			assert.Equal(iToKey(c.firstDataKey), firstDataKey)
+		}
+	}
 }
