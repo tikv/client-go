@@ -116,6 +116,30 @@ const (
 	WorkStoreGone
 )
 
+// WorkStoreMatchOnStore returns the cached match if id still works on storeID.
+func (c *RegionCache) WorkStoreMatchOnStore(id RegionVerID, storeID uint64) (WorkStoreMatch, bool) {
+	r := c.GetCachedRegionWithRLock(id)
+	if r == nil || r.meta == nil || r.isCacheTTLExpired(time.Now().Unix()) {
+		return WorkStoreMatch{}, false
+	}
+	rs := r.getStore()
+	if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
+		return WorkStoreMatch{}, false
+	}
+	store, peer, _, _ := r.WorkStorePeer(rs)
+	if store == nil || peer == nil || store.StoreID() != storeID {
+		return WorkStoreMatch{}, false
+	}
+	return WorkStoreMatch{
+		Region:   r.VerID(),
+		StartKey: append([]byte(nil), r.StartKey()...),
+		EndKey:   append([]byte(nil), r.EndKey()...),
+		Peer:     protoClonePeer(peer),
+		Addr:     store.GetAddr(),
+		Epoch:    protoCloneEpoch(r.meta.GetRegionEpoch()),
+	}, true
+}
+
 // ClassifyWorkStore reports whether a cached region still works on storeID.
 func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStoreMatchState {
 	r := c.GetCachedRegionWithRLock(id)

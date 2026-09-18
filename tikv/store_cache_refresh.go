@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -522,6 +524,7 @@ func (s *KVStore) probeWorkStoreMatch(ctx context.Context, storeID uint64, m loc
 		return probeFailed, "missing store address or peer"
 	}
 	var last string
+	reloaded := false
 	for attempt := 0; attempt < storeCacheRefreshAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return probeFailed, ctx.Err().Error()
@@ -554,9 +557,61 @@ func (s *KVStore) probeWorkStoreMatch(ctx context.Context, storeID uint64, m loc
 		if moved {
 			return probeMoved, ""
 		}
-		return probeFailed, "new leader peer not in cache"
+		last = s.peerMissDetail(m, storeID, leader, "new_leader_peer_not_in_cache")
+		if reloaded {
+			return probeFailed, s.peerMissDetail(m, storeID, leader, "new_leader_peer_not_in_cache_after_reload")
+		}
+		reloaded = true
+		next, moved, ok := s.reloadOriginalMatch(ctx, m, storeID)
+		if moved {
+			return probeMoved, ""
+		}
+		if !ok {
+			return probeFailed, last
+		}
+		// Drop the stale NotLeader peer. Re-probe only from the new snapshot.
+		m = next
+		continue
 	}
 	return probeFailed, last
+}
+
+func (s *KVStore) reloadOriginalMatch(ctx context.Context, orig locate.WorkStoreMatch, storeID uint64) (locate.WorkStoreMatch, bool, bool) {
+	s.regionCache.InvalidateCachedRegion(orig.Region)
+	bo := NewBackofferWithVars(ctx, storeCacheRefreshRecoverBackoff, nil)
+	loc, err := s.regionCache.LocateKey(bo, orig.StartKey)
+	if err != nil || loc == nil {
+		return locate.WorkStoreMatch{}, false, false
+	}
+	switch s.regionCache.ClassifyWorkStore(loc.Region, storeID) {
+	case locate.WorkStoreMoved:
+		return locate.WorkStoreMatch{}, true, true
+	case locate.WorkStoreGone:
+		return locate.WorkStoreMatch{}, false, false
+	}
+	m, ok := s.regionCache.WorkStoreMatchOnStore(loc.Region, storeID)
+	if !ok {
+		return locate.WorkStoreMatch{}, false, false
+	}
+	return m, false, true
+}
+
+func (s *KVStore) peerMissDetail(m locate.WorkStoreMatch, storeID uint64, leader *metapb.Peer, class string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "class=%s region=%d store=%d", class, m.Region.GetID(), storeID)
+	if r := s.regionCache.GetCachedRegionWithRLock(m.Region); r != nil && r.GetMeta() != nil {
+		b.WriteString(" peers=")
+		for i, p := range r.GetMeta().GetPeers() {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, "%d", p.GetId())
+		}
+	}
+	if leader != nil {
+		fmt.Fprintf(&b, " not_leader_peer=%d", leader.GetId())
+	}
+	return b.String()
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
