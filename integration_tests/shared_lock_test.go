@@ -45,6 +45,9 @@ func TestSharedLock(t *testing.T) {
 type testSharedLockSuite struct {
 	suite.Suite
 	store tikv.StoreProbe
+	// previousTxnProtocolVersion is restored when the suite finishes, so that the
+	// process-wide setting is not left behind for other suites.
+	previousTxnProtocolVersion kvrpcpb.TxnProtocolVersion
 }
 
 type dropUpgradeResponseClient struct {
@@ -93,12 +96,19 @@ func (s *testSharedLockSuite) SetupSuite() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // 3s
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 1000)
 	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("reachable")`))
+	// This suite exercises shared-lock semantics end to end, so it must declare
+	// the process-wide capability the library does not assume on its own. A
+	// production host sets the same value during its initialization once all of
+	// its transaction RPC paths support shared locks.
+	s.previousTxnProtocolVersion = tikvrpc.GetDefaultTxnProtocolVersion()
+	s.Nil(tikvrpc.SetDefaultTxnProtocolVersion(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK))
 }
 
 func (s *testSharedLockSuite) TearDownSuite() {
 	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 40000)
+	s.Nil(tikvrpc.SetDefaultTxnProtocolVersion(s.previousTxnProtocolVersion))
 }
 
 func (s *testSharedLockSuite) SetupTest() {

@@ -1272,7 +1272,23 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		return errors.WithStack(tikverr.ErrBodyMissing)
 	}
 
-	checkResp := resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse)
+	// The concrete type of a response is determined by the request, so this can
+	// only trip on an internal mix-up. Report it as such instead of as a missing
+	// body, which would send anyone debugging it down the wrong path.
+	checkResp, ok := resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse)
+	if !ok {
+		return errors.Errorf("unexpected CheckSecondaryLocks response type %T", resp.Resp)
+	}
+
+	// A response error means TiKV did not report a usable lock state for this
+	// shard, for example a shared-lock invariant violation. It must be surfaced
+	// before the locks are aggregated: inferring a missing lock from an empty
+	// lock list and a zero commit ts would misreport the transaction as rolled
+	// back, and a "resolved" status must never be saved from such a response.
+	if respErr := checkResp.GetError(); respErr != nil {
+		return tikverr.ExtractKeyErr(respErr)
+	}
+
 	return shared.addKeys(checkResp.Locks, len(curKeys), txnID, checkResp.CommitTs)
 }
 

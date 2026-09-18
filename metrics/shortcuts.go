@@ -116,6 +116,14 @@ var (
 	LockResolverCountWithAsyncCheckSecondariesFallback         prometheus.Counter
 	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback prometheus.Counter
 
+	TxnProtocolRejectEventCounterWithLocalRejection  prometheus.Counter
+	TxnProtocolRejectEventCounterWithServerRejection prometheus.Counter
+	TxnProtocolRejectEventCounterWithRecovered       prometheus.Counter
+
+	TxnProtocolStoreReloadCounterWithSuccess    prometheus.Counter
+	TxnProtocolStoreReloadCounterWithFailure    prometheus.Counter
+	TxnProtocolStoreReloadCounterWithSuppressed prometheus.Counter
+
 	LockResolverAsyncRunningTasksForReadResolve              prometheus.Gauge
 	LockResolverAsyncRunningTasksForResolveAsyncCommit       prometheus.Gauge
 	LockResolverAsyncRunningTasksForCheckSecondaries         prometheus.Gauge
@@ -293,6 +301,14 @@ func initShortcuts() {
 	LockResolverCountWithReadAsyncResolveFallback = TiKVLockResolverCounter.WithLabelValues("read_async_resolve_fallback")
 	LockResolverCountWithAsyncCheckSecondariesFallback = TiKVLockResolverCounter.WithLabelValues("async_check_secondaries_fallback")
 	LockResolverCountWithAsyncResolveAsyncCommitRegionFallback = TiKVLockResolverCounter.WithLabelValues("async_resolve_async_commit_region_fallback")
+
+	TxnProtocolRejectEventCounterWithLocalRejection = TiKVTxnProtocolRejectEventCounter.WithLabelValues("local_rejection")
+	TxnProtocolRejectEventCounterWithServerRejection = TiKVTxnProtocolRejectEventCounter.WithLabelValues("server_rejection")
+	TxnProtocolRejectEventCounterWithRecovered = TiKVTxnProtocolRejectEventCounter.WithLabelValues("recovered")
+
+	TxnProtocolStoreReloadCounterWithSuccess = TiKVTxnProtocolStoreReloadCounter.WithLabelValues("success")
+	TxnProtocolStoreReloadCounterWithFailure = TiKVTxnProtocolStoreReloadCounter.WithLabelValues("failure")
+	TxnProtocolStoreReloadCounterWithSuppressed = TiKVTxnProtocolStoreReloadCounter.WithLabelValues("suppressed")
 
 	LockResolverAsyncRunningTasksForReadResolve = TiKVLockResolverAsyncRunningTasks.WithLabelValues("read_resolve")
 	LockResolverAsyncRunningTasksForResolveAsyncCommit = TiKVLockResolverAsyncRunningTasks.WithLabelValues("resolve_async_commit")

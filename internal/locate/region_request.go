@@ -60,6 +60,7 @@ import (
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/txnprotocol"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -542,25 +543,35 @@ func (s *RegionRequestSender) SendReqAsync(
 		return resp, err
 	})
 
-	if !state.initForAsyncRequest() {
+	needReload, ok := state.initForAsyncRequest()
+	if !ok {
 		cb.Invoke(state.toResponseExt())
 		return
 	}
 
-	runLimiterAsync := req.RequestAttemptLimiter != nil
+	sendFirstAttemptInline := req.RequestAttemptLimiter == nil && !needReload
 	sendFirstAttempt := func() {
 		var (
 			cancels = make([]context.CancelFunc, 0, 4)
 			ctx     = bo.GetCtx()
 			hookCtx = ctx
-			// Keep the historical async timing baseline when no limiter is installed.
-			// When there is a limiter, reset it after the limiter returns so its wait
-			// time is excluded from RPC runtime statistics.
+			// Keep the historical baseline for immediate preparation; exclude any
+			// scheduled limiter/reload wait from RPC runtime statistics.
 			rpcStart = startTime
 		)
 		finishBeforeSend := cb.Invoke
-		if runLimiterAsync {
+		if !sendFirstAttemptInline {
 			finishBeforeSend = cb.Schedule
+		}
+		if needReload {
+			if _, err := state.prepareTxnProtocolVersion(); err != nil {
+				state.vars.err = err
+				if isIncompatibleRequestError(err) {
+					metrics.TxnProtocolRejectEventCounterWithLocalRejection.Inc()
+				}
+				finishBeforeSend(state.toResponseExt())
+				return
+			}
 		}
 		cancelAll := func() {
 			for i := len(cancels) - 1; i >= 0; i-- {
@@ -577,7 +588,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		if releaseAttempt != nil {
 			cancels = append(cancels, releaseAttempt)
 		}
-		if runLimiterAsync {
+		if !sendFirstAttemptInline {
 			rpcStart = time.Now()
 		}
 		if limit := kv.StoreLimit.Load(); limit > 0 {
@@ -598,6 +609,9 @@ func (s *RegionRequestSender) SendReqAsync(
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, timeout)
 			cancels = append(cancels, cancel)
+		}
+		if state.vars.txnVersionSelected {
+			ctx = txnprotocol.WithDeclaration(ctx, txnprotocol.Declaration{Version: state.vars.txnVersion})
 		}
 
 		sendToAddr := state.vars.rpcCtx.Addr
@@ -630,7 +644,8 @@ func (s *RegionRequestSender) SendReqAsync(
 			})
 		}))
 	}
-	if runLimiterAsync {
+	if !sendFirstAttemptInline {
+		// Conditional PD reloads must not block the caller's async run loop.
 		// RequestAttemptLimiter may block. If this executor is backed by a
 		// recycling pool, many blocked limiters can cause it to overflow and
 		// weaken its concurrency bound. Callers should account for that before
@@ -941,9 +956,23 @@ type sendReqState struct {
 		err       error
 		msg       string
 		sendTimes int
+
+		// Compatibility state belongs to this send, not the reusable sender.
+		txnVersion           uint32
+		txnVersionSelected   bool
+		txnVersionResendUsed bool
 	}
 
 	invariants reqInvariants
+}
+
+// txnVersionResend records a recovery decision. The retry loop selects again,
+// but must preserve the original rejection if that selection no longer improves
+// on the rejected declaration.
+type txnVersionResend struct {
+	rpcCtx          *RPCContext
+	rejectedVersion uint32
+	originalErr     error
 }
 
 // acquireRequestAttemptToken invokes the limiter for the store selected for the
@@ -963,6 +992,62 @@ func (s *sendReqState) acquireRequestAttemptToken() (release func(), err error) 
 		release = nil
 	}
 	return release, err
+}
+
+// selectTxnProtocolVersion selects from the current payload and execution Store
+// snapshot without I/O. Each physical attempt selects again; forwarding proxies
+// never affect the declaration.
+func (s *sendReqState) selectTxnProtocolVersion() (txnprotocol.Selection, error) {
+	req := s.args.req
+	s.vars.txnVersion = 0
+	s.vars.txnVersionSelected = false
+	var storeID uint64
+	var storeRange txnprotocol.StoreRange
+	store := s.vars.rpcCtx.Store
+	if store != nil {
+		storeID, storeRange = store.StoreID(), store.getTxnProtocolVersionRange()
+	}
+	selection, err := txnprotocol.Prepare(req, storeID, storeRange)
+	if err == nil && selection.Protected {
+		s.vars.txnVersion, s.vars.txnVersionSelected = selection.Selected, true
+	}
+	return selection, err
+}
+
+// prepareTxnProtocolVersion reloads once only when a stale Store maximum could
+// prevent expressing the payload. A canceled caller must not continue sending.
+func (s *sendReqState) prepareTxnProtocolVersion() (txnprotocol.Selection, error) {
+	selection, err := s.selectTxnProtocolVersion()
+	store := s.vars.rpcCtx.Store
+	if err == nil || store == nil || !selection.NeedStoreReload() {
+		return selection, err
+	}
+
+	// The cached range cannot express the payload's required version even though
+	// the process ceiling could, so the cached range may be stale. Refresh it once
+	// and select again.
+	store.reloadTxnProtocolVersionRange(s.args.bo.GetCtx(), s.regionCache.stores, s.regionCache.bg.ctx)
+	if ctxErr := s.args.bo.GetCtx().Err(); ctxErr != nil {
+		return txnprotocol.Selection{}, errors.WithStack(ctxErr)
+	}
+	// Ordinary pre-send selection can use the current cache after a failed or
+	// suppressed refresh. Admission recovery, in contrast, requires a successful
+	// reload and uses its explicit result.
+	reloaded, reloadErr := s.selectTxnProtocolVersion()
+	if reloadErr == nil {
+		if reloaded.Selected != selection.Selected {
+			logutil.Logger(s.args.bo.GetCtx()).Debug(
+				"txn protocol version reselected after store range reload",
+				zap.Stringer("cmd", s.args.req.Type),
+				zap.Uint64("storeID", store.StoreID()),
+				zap.Uint32("previous", selection.Selected),
+				zap.Uint32("selected", reloaded.Selected),
+				zap.Uint32("required", reloaded.Required),
+				zap.Stringer("storeRange", reloaded.StoreRange),
+			)
+		}
+	}
+	return reloaded, reloadErr
 }
 
 // reqInvariants holds the input state of the request.
@@ -998,9 +1083,18 @@ func (s *sendReqState) next() (done bool) {
 		s.vars.err = nil
 	}
 
+	// Keep the compatibility recovery decision local to this attempt.
+	var resend *txnVersionResend
 	// handle region error
 	if s.vars.regionErr != nil {
-		retry, err := s.onRegionError(bo, s.vars.rpcCtx, req, s.vars.regionErr)
+		var retry bool
+		var err error
+		if incompatible := s.vars.regionErr.GetIncompatibleRequest(); incompatible != nil && s.vars.regionErr.GetUndeterminedResult() == nil {
+			resend, err = s.onIncompatibleRequest(bo, s.vars.rpcCtx, req, incompatible)
+			retry = resend != nil
+		} else {
+			retry, err = s.onRegionError(bo, s.vars.rpcCtx, req, s.vars.regionErr)
+		}
 		if err != nil {
 			s.vars.rpcCtx, s.vars.resp = nil, nil
 			s.vars.err = err
@@ -1019,17 +1113,25 @@ func (s *sendReqState) next() (done bool) {
 		req.IsRetryRequest = true
 	}
 
-	s.vars.rpcCtx, s.vars.err = s.getRPCContext(bo, req, s.args.regionID, s.args.et, s.args.opts...)
-	if s.vars.err != nil {
-		return true
-	}
-
-	if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
-		// cooperate with tikvclient/setGcResolveMaxBackoff
-		if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
-			s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
-			s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
+	// A strict upper-bound admission rejection may have decided to resend the
+	// rejected shard to the same execution Store. Reuse the recorded RPC context
+	// instead of entering the replica selector, cache-invalidation and backoff
+	// paths, which must not be involved in that recovery.
+	if resend != nil {
+		s.vars.rpcCtx = resend.rpcCtx
+	} else {
+		s.vars.rpcCtx, s.vars.err = s.getRPCContext(bo, req, s.args.regionID, s.args.et, s.args.opts...)
+		if s.vars.err != nil {
 			return true
+		}
+
+		if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
+			// cooperate with tikvclient/setGcResolveMaxBackoff
+			if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
+				s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+				s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
+				return true
+			}
 		}
 	}
 
@@ -1072,7 +1174,33 @@ func (s *sendReqState) next() (done bool) {
 	if s.vars.err = tikvrpc.SetContextNoAttach(req, s.vars.rpcCtx.Meta, s.vars.rpcCtx.Peer); s.vars.err != nil {
 		return true
 	}
-	if s.replicaSelector != nil {
+	// Select the declaration for this attempt only after the execution Store is
+	// known and the region context is attached, so a local selection failure stops
+	// the attempt before it is sent and without consuming retry/backoff budget.
+	var selection txnprotocol.Selection
+	var err error
+	if resend != nil {
+		// Recovery already refreshed the Store metadata. Recheck the current
+		// selection without starting another reload.
+		selection, err = s.selectTxnProtocolVersion()
+	} else {
+		selection, err = s.prepareTxnProtocolVersion()
+	}
+	if resend != nil && (err != nil || selection.Selected == resend.rejectedVersion) {
+		s.vars.err = resend.originalErr
+		metrics.TxnProtocolRejectEventCounterWithServerRejection.Inc()
+		return true
+	}
+	if err != nil {
+		s.vars.err = err
+		if isIncompatibleRequestError(err) {
+			metrics.TxnProtocolRejectEventCounterWithLocalRejection.Inc()
+		}
+		return true
+	}
+	// The controlled resend must be immediate: it skips the pending region-error
+	// backoff even when an earlier attempt of the same send recorded one.
+	if resend == nil && s.replicaSelector != nil {
 		if s.vars.err = s.replicaSelector.backoffOnRetry(s.vars.rpcCtx.Store, bo); s.vars.err != nil {
 			return true
 		}
@@ -1106,6 +1234,9 @@ func (s *sendReqState) next() (done bool) {
 	s.vars.sendTimes++
 
 	if s.vars.err != nil {
+		if isIncompatibleRequestError(s.vars.err) {
+			return true
+		}
 		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
 		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
@@ -1135,6 +1266,9 @@ func (s *sendReqState) next() (done bool) {
 
 	if s.replicaSelector != nil {
 		s.replicaSelector.onSendSuccess(req)
+	}
+	if resend != nil {
+		metrics.TxnProtocolRejectEventCounterWithRecovered.Inc()
 	}
 
 	return true
@@ -1202,6 +1336,9 @@ func (s *sendReqState) send() (canceled bool) {
 	}
 
 	if !injectFailOnSend {
+		if s.vars.txnVersionSelected {
+			ctx = txnprotocol.WithDeclaration(ctx, txnprotocol.Declaration{Version: s.vars.txnVersion})
+		}
 		// Emit kv.request.send trace event before sending
 		if trace.IsCategoryEnabled(trace.CategoryKVRequest) {
 			var storeID uint64
@@ -1230,6 +1367,11 @@ func (s *sendReqState) send() (canceled bool) {
 
 		start := time.Now()
 		s.vars.resp, s.vars.err = s.client.SendRequest(ctx, sendToAddr, req, s.args.timeout)
+		if isIncompatibleRequestError(s.vars.err) {
+			// A local refusal never reached the wire and must not affect RPC
+			// uncertainty, replica health, or network/runtime accounting.
+			return false
+		}
 		rpcDuration := time.Since(start)
 
 		// Emit kv.request.result trace event after receiving response
@@ -1371,18 +1513,18 @@ func (s *sendReqState) send() (canceled bool) {
 }
 
 // initForAsyncRequest initializes the state for an async request. It should be called once before the first `next`.
-func (s *sendReqState) initForAsyncRequest() (ok bool) {
+func (s *sendReqState) initForAsyncRequest() (needReload, ok bool) {
 	bo, req := s.args.bo, s.args.req
 
 	s.vars.rpcCtx, s.vars.err = s.getRPCContext(bo, req, s.args.regionID, s.args.et, s.args.opts...)
 	if s.vars.err != nil {
-		return false
+		return false, false
 	}
 	if s.vars.rpcCtx == nil {
 		s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 		s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
 		s.vars.msg = "throwing pseudo region error due to no replica available"
-		return false
+		return false, false
 	}
 
 	s.storeAddr = s.vars.rpcCtx.Addr
@@ -1401,7 +1543,18 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}
 	if s.vars.err = tikvrpc.SetContextNoAttach(req, s.vars.rpcCtx.Meta, s.vars.rpcCtx.Peer); s.vars.err != nil {
-		return false
+		return false, false
+	}
+	// Select without I/O first. If a reload is needed, the caller schedules the
+	// remaining preparation through the executor instead of blocking its run loop.
+	selection, err := s.selectTxnProtocolVersion()
+	needReload = err != nil && selection.NeedStoreReload() && s.vars.rpcCtx.Store != nil
+	if err != nil && !needReload {
+		s.vars.err = err
+		if isIncompatibleRequestError(err) {
+			metrics.TxnProtocolRejectEventCounterWithLocalRejection.Inc()
+		}
+		return false, false
 	}
 
 	// Count the replica number as the RU cost factor.
@@ -1416,7 +1569,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 		}
 	}
 
-	return true
+	return needReload, true
 }
 
 // setReqAccessLocation set the AccessLocation value of kv request based on
@@ -1447,6 +1600,9 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		}()
 	}
 	s.vars.resp, s.vars.err = resp, err
+	if isIncompatibleRequestError(err) {
+		return true
+	}
 	req := s.args.req
 	rpcDuration := time.Since(start)
 	if s.replicaSelector != nil {
@@ -1758,8 +1914,12 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 }
 
 func isRPCError(err error) bool {
-	// exclude ErrClientResourceGroupThrottled
-	return err != nil && errs.ErrClientResourceGroupThrottled.NotEqual(err)
+	return err != nil && !isIncompatibleRequestError(err) && errs.ErrClientResourceGroupThrottled.NotEqual(err)
+}
+
+func isIncompatibleRequestError(err error) bool {
+	var incompatible *tikverr.ErrIncompatibleRequest
+	return errors.As(err, &incompatible)
 }
 
 func storeIDLabel(rpcCtx *RPCContext) string {
@@ -1792,6 +1952,9 @@ func (s *RegionRequestSender) releaseStoreToken(st *Store) {
 }
 
 func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, err error) error {
+	if isIncompatibleRequestError(err) {
+		return err
+	}
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.onSendFail", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -1989,7 +2152,96 @@ func isInvalidMaxTsUpdate(e *errorpb.Error) bool {
 	return strings.Contains(e.GetMessage(), "invalid max_ts update")
 }
 
-func (s *RegionRequestSender) onRegionError(
+// onIncompatibleRequest handles a structured compatibility rejection for one
+// physical attempt.
+//
+// A rejection is recoverable only when all of the following hold:
+//
+//   - the reason is TxnProtocolVersionOutOfRange;
+//   - the returned range is valid (min <= max);
+//   - the echoed provided version equals the declaration this attempt actually
+//     sent;
+//   - provided > returned max, i.e. the store's upper bound is the problem.
+//
+// The caller has already ruled out an envelope that also carries
+// UndeterminedResult. In the recoverable case the execution Store range is
+// reloaded from the PD leader and the declaration is recomputed from the current
+// payload. The rejected physical shard is resent only when the new selected
+// version differs from the attempt's and is still valid for the refreshed range
+// and the payload requirement.
+//
+// Everything else is terminal. A reload failure, inconsistent server fields or an
+// unchanged selection must return the original typed rejection, never a
+// replacement error.
+func (s *sendReqState) onIncompatibleRequest(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, incompatible *errorpb.IncompatibleRequest,
+) (resend *txnVersionResend, err error) {
+	originalErr := tikverr.NewErrIncompatibleRequest(incompatible)
+	defer func() {
+		if resend == nil {
+			metrics.TxnProtocolRejectEventCounterWithServerRejection.Inc()
+		}
+	}()
+
+	if ctx == nil || ctx.Store == nil || s.regionCache == nil {
+		return nil, originalErr
+	}
+	if incompatible.GetReason() != errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange {
+		return nil, originalErr
+	}
+	returnedMin := incompatible.GetMinCompatibleTxnProtocolVersion()
+	returnedMax := incompatible.GetMaxCompatibleTxnProtocolVersion()
+	if returnedMin > returnedMax {
+		return nil, originalErr
+	}
+	// The echoed declaration must be exactly what this physical attempt sent. A
+	// mismatch, or a rejection that cannot be attributed to a prepared attempt,
+	// means the response must not be used to update anything.
+	if !s.vars.txnVersionSelected {
+		return nil, originalErr
+	}
+	attemptSelected := s.vars.txnVersion
+	if incompatible.GetProvidedTxnProtocolVersion() != attemptSelected {
+		return nil, originalErr
+	}
+	if attemptSelected <= returnedMax {
+		// Only an upper-bound overflow is recoverable. A provided version below the
+		// range, a feature-specific rejection and an unknown reason stay terminal.
+		return nil, originalErr
+	}
+	if s.vars.txnVersionResendUsed {
+		return nil, originalErr
+	}
+
+	store := ctx.Store
+	refreshed, reloadErr := store.reloadTxnProtocolVersionRange(bo.GetCtx(), s.regionCache.stores, s.regionCache.bg.ctx)
+	if reloadErr != nil {
+		return nil, originalErr
+	}
+
+	reloaded, selectionErr := txnprotocol.Prepare(req, store.StoreID(), refreshed)
+	if selectionErr != nil || reloaded.Selected == attemptSelected {
+		return nil, originalErr
+	}
+
+	// The request was rejected before any side effect, and the refreshed range plus
+	// the current payload make the new declaration valid. Resend the rejected
+	// shard within the existing retry budget, without backoff, cache invalidation
+	// or replica selection.
+	s.vars.txnVersionResendUsed = true
+	logutil.Logger(bo.GetCtx()).Debug(
+		"resend request after txn protocol version admission rejection",
+		zap.Stringer("cmd", req.Type),
+		zap.Uint64("storeID", store.StoreID()),
+		zap.Uint32("previous", attemptSelected),
+		zap.Uint32("selected", reloaded.Selected),
+		zap.Uint32("required", reloaded.Required),
+		zap.Stringer("storeRange", reloaded.StoreRange),
+	)
+	return &txnVersionResend{rpcCtx: ctx, rejectedVersion: attemptSelected, originalErr: originalErr}, nil
+}
+
+func (s *sendReqState) onRegionError(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, regionErr *errorpb.Error,
 ) (shouldRetry bool, err error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
@@ -1998,22 +2250,46 @@ func (s *RegionRequestSender) onRegionError(
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	regionErrLabel := regionErrorToLabel(regionErr)
-	if regionErrLabel == "unknown" {
-		logutil.Logger(bo.GetCtx()).Info(
-			"unknown region error",
-			zap.Stringer("error", regionErr),
-		)
-	}
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, storeIDLabel(ctx)).Inc()
-	if s.Stats != nil {
-		s.Stats.RecordRPCErrorStats(regionErrLabel)
-		s.recordRPCAccessInfo(req, ctx, regionErrorToLogging(regionErr, regionErrLabel))
+	// `UndeterminedResult` and `IncompatibleRequest` are request-level outcomes
+	// that must be handled before anything else: before the region-error label,
+	// the ordinary region-error metrics and statistics, the region/store cache,
+	// the replica selector and every retry or backoff path.
+	//
+	// Within one envelope `UndeterminedResult` has the highest priority. The
+	// outcome of the request is unknown, so neither a declaration reload nor any
+	// resend may happen and the caller must resolve the unknown outcome.
+	//
+	// `IncompatibleRequest` is next. Retrying with the same declaration can only
+	// fail again, and any side effect of the ordinary paths would be wrong. In
+	// particular it must not be mistaken for the legacy ServerIsBusy fallback that
+	// a store attaches for a version-0 declaration, nor for a real overload.
+	//
+	// Incompatibility bypasses ordinary region-error accounting; undetermined
+	// outcomes without incompatibility retain their existing metric label.
+	hasIncompatible := regionErr.GetIncompatibleRequest() != nil
+	if !hasIncompatible {
+		regionErrLabel := regionErrorToLabel(regionErr)
+		if regionErrLabel == "unknown" {
+			logutil.Logger(bo.GetCtx()).Info(
+				"unknown region error",
+				zap.Stringer("error", regionErr),
+			)
+		}
+		metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, storeIDLabel(ctx)).Inc()
+		if s.Stats != nil {
+			s.Stats.RecordRPCErrorStats(regionErrLabel)
+			s.recordRPCAccessInfo(req, ctx, regionErrorToLogging(regionErr, regionErrLabel))
+		}
 	}
 
 	if regionErr.GetUndeterminedResult() != nil {
 		// should not retry for `UndeterminedResult` because this error should be processed by the caller.
 		return false, nil
+	}
+
+	if hasIncompatible {
+		// next handles compatibility recovery before ordinary region errors.
+		return false, tikverr.NewErrIncompatibleRequest(regionErr.GetIncompatibleRequest())
 	}
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.

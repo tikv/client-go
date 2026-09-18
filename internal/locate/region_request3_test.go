@@ -1991,3 +1991,62 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 		}
 	}
 }
+
+// TestSendReqReselectsTxnProtocolVersionAfterNotLeader pins that a physical
+// retry which changes the execution Store re-selects the declaration from that
+// Store's own range instead of reusing the previous attempt's version.
+func (s *testRegionRequestToThreeStoresSuite) TestSendReqReselectsTxnProtocolVersionAfterNotLeader() {
+	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
+
+	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Require().NoError(err)
+	s.Require().NotNil(region)
+
+	stores := make([]*Store, 0, len(s.storeIDs))
+	for _, storeID := range s.storeIDs {
+		store := s.cache.stores.getOrInsertDefault(storeID)
+		_, err := store.initResolve(s.bo, s.cache.stores)
+		s.Require().NoError(err)
+		stores = append(stores, store)
+	}
+
+	// BootstrapWithMultiStores pairs storeIDs and peerIDs by index, and
+	// peerIDs[0] is the initial leader.
+	leader, follower := stores[0], stores[1]
+	leader.publishTxnProtocolVersionRange(storeMetaWithRange(leader.StoreID(), 0, 1), time.Now())
+	follower.publishTxnProtocolVersionRange(storeMetaWithRange(follower.StoreID(), 0, 2), time.Now())
+	leaderAddr, followerAddr := leader.GetAddr(), follower.GetAddr()
+	followerPeer := &metapb.Peer{Id: s.peerIDs[1], StoreId: s.storeIDs[1]}
+
+	var attempts []struct {
+		addr    string
+		version uint32
+	}
+	originalClient := s.regionRequestSender.client
+	s.T().Cleanup(func() { s.regionRequestSender.client = originalClient })
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		attempts = append(attempts, struct {
+			addr    string
+			version uint32
+		}{addr: addr, version: req.GetTxnProtocolVersion()})
+		if addr == leaderAddr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{
+					RegionId: region.Region.id,
+					Leader:   followerPeer,
+				}},
+			}}, nil
+		}
+		s.Equal(followerAddr, addr)
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
+	}}
+
+	bo := retry.NewNoopBackoff(context.Background())
+	_, _, err = s.regionRequestSender.SendReq(bo, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}), region.Region, time.Second)
+	s.Require().NoError(err)
+	s.Require().Len(attempts, 2)
+	s.Equal(leaderAddr, attempts[0].addr)
+	s.Equal(uint32(1), attempts[0].version)
+	s.Equal(followerAddr, attempts[1].addr)
+	s.Equal(uint32(2), attempts[1].version)
+}

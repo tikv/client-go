@@ -58,6 +58,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
@@ -1358,7 +1359,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	r := ctxTiFlash.Meta
 	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
-	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
+	(&sendReqState{RegionRequestSender: reqSend}).onRegionError(s.bo, ctxTiFlash, nil, regionErr)
 
 	// check leader read should not go to tiflash
 	lctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
@@ -2195,14 +2196,14 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	s.NotNil(ctx)
 	s.NoError(err)
 	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
-	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	shouldRetry, err := (&sendReqState{RegionRequestSender: reqSend}).onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
 	s.Error(err)
 	s.False(shouldRetry)
-	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	shouldRetry, err = (&sendReqState{RegionRequestSender: reqSend}).onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
 	s.Error(err)
 	s.False(shouldRetry)
 
-	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{Keys: [][]byte{[]byte("a")}, Version: 1}})
+	shouldRetry, err = (&sendReqState{RegionRequestSender: reqSend}).onRegionError(s.bo, ctx, nil, &errorpb.Error{BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{Keys: [][]byte{[]byte("a")}, Version: 1}})
 	s.Nil(err)
 	s.False(shouldRetry)
 	ctx.Region.GetID()
@@ -2210,6 +2211,118 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	s.Nil(err)
 	s.Equal(key.Buckets.Keys, [][]byte{[]byte("a")})
 	s.Equal(key.Buckets.Version, uint64(1))
+}
+
+func incompatibleRequestError(reason errorpb.IncompatibleRequestReason) *errorpb.Error {
+	return &errorpb.Error{
+		IncompatibleRequest: &errorpb.IncompatibleRequest{
+			Reason:                          reason,
+			Message:                         "the declared transaction protocol version is not compatible",
+			ProvidedTxnProtocolVersion:      uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+			MinCompatibleTxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY),
+			MaxCompatibleTxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING),
+		},
+	}
+}
+
+// TestShouldNotRetryIncompatibleRequest verifies that a structured compatibility
+// rejection is terminal and is handled before any ordinary region-error logic.
+func (s *testRegionCacheSuite) TestShouldNotRetryIncompatibleRequest() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+
+	bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
+
+	for _, tc := range []struct {
+		name string
+		err  *errorpb.Error
+	}{
+		{
+			name: "unknown_reason",
+			err:  incompatibleRequestError(errorpb.IncompatibleRequestReason(42)),
+		},
+		{
+			name: "with_other_region_error_fields",
+			err: func() *errorpb.Error {
+				err := incompatibleRequestError(errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange)
+				err.ServerIsBusy = &errorpb.ServerIsBusy{Reason: "txn_protocol_incompatible"}
+				err.NotLeader = &errorpb.NotLeader{RegionId: s.region1}
+				err.EpochNotMatch = &errorpb.EpochNotMatch{}
+				err.RegionNotFound = &errorpb.RegionNotFound{RegionId: s.region1}
+				err.KeyNotInRegion = &errorpb.KeyNotInRegion{RegionId: s.region1, Key: []byte("a")}
+				return err
+			}(),
+		},
+	} {
+		s.Run(tc.name, func() {
+			ctx, err := s.cache.GetTiKVRPCContext(bo, loc.Region, kv.ReplicaReadLeader, 0)
+			s.NotNil(ctx)
+			s.NoError(err)
+
+			regionBefore := ctx.Region
+			leaderBefore := ctx.Peer.GetStoreId()
+			accessIdxBefore := ctx.AccessIdx
+			storeBefore := ctx.Store
+			cachedBefore := s.cache.GetCachedRegionWithRLock(regionBefore)
+			backoffsBefore := bo.GetTotalBackoffTimes()
+
+			shouldRetry, err := (&sendReqState{RegionRequestSender: reqSend}).onRegionError(bo, ctx, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), tc.err)
+
+			// A non-nil, typed, terminal error.
+			s.False(shouldRetry)
+			s.Error(err)
+			var incompatible *tikverr.ErrIncompatibleRequest
+			s.ErrorAs(err, &incompatible)
+			s.Equal(tc.err.GetIncompatibleRequest(), incompatible.IncompatibleRequest)
+			s.Equal(tc.err.GetIncompatibleRequest().GetReason(), incompatible.GetReason())
+			s.Equal(tc.err.GetIncompatibleRequest().GetProvidedTxnProtocolVersion(), incompatible.GetProvidedTxnProtocolVersion())
+			s.Equal(tc.err.GetIncompatibleRequest().GetMinCompatibleTxnProtocolVersion(), incompatible.GetMinCompatibleTxnProtocolVersion())
+			s.Equal(tc.err.GetIncompatibleRequest().GetMaxCompatibleTxnProtocolVersion(), incompatible.GetMaxCompatibleTxnProtocolVersion())
+
+			// No backoff, no replica switch and no cache update.
+			s.Equal(backoffsBefore, bo.GetTotalBackoffTimes())
+			s.Equal(regionBefore, ctx.Region)
+			s.Equal(leaderBefore, ctx.Peer.GetStoreId())
+			s.Equal(accessIdxBefore, ctx.AccessIdx)
+			s.Same(storeBefore, ctx.Store)
+			s.Same(cachedBefore, s.cache.GetCachedRegionWithRLock(regionBefore))
+		})
+	}
+}
+
+// TestIncompatibleRequestDoesNotUseServerIsBusyReplicaSelector pins the priority
+// of the structured error over the legacy ServerIsBusy fallback: the busy branch
+// would have consumed the request as an overload signal, backed off and probed
+// the replica selector.
+func (s *testRegionCacheSuite) TestIncompatibleRequestDoesNotUseServerIsBusyReplicaSelector() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+
+	bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
+	ctx, err := s.cache.GetTiKVRPCContext(bo, loc.Region, kv.ReplicaReadLeader, 0)
+	s.NotNil(ctx)
+	s.NoError(err)
+
+	store := ctx.Store
+	waitBefore := store.EstimatedWaitTime()
+	cachedBefore := s.cache.GetCachedRegionWithRLock(ctx.Region)
+
+	regionErr := incompatibleRequestError(errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange)
+	regionErr.ServerIsBusy = &errorpb.ServerIsBusy{Reason: "txn_protocol_incompatible", EstimatedWaitMs: 1000}
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
+	shouldRetry, err := (&sendReqState{RegionRequestSender: reqSend}).onRegionError(bo, ctx, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), regionErr)
+
+	s.False(shouldRetry)
+	var incompatible *tikverr.ErrIncompatibleRequest
+	s.ErrorAs(err, &incompatible)
+
+	// Neither the ServerIsBusy backoff nor its store load bookkeeping happened.
+	s.Equal(0, bo.GetTotalBackoffTimes())
+	s.Equal(waitBefore, store.EstimatedWaitTime())
+	s.Same(cachedBefore, s.cache.GetCachedRegionWithRLock(ctx.Region))
 }
 
 func (s *testRegionCacheSuite) TestBackgroundCacheGC() {

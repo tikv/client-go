@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/txnprotocol"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -230,6 +231,28 @@ type Store struct {
 	// (TiKV ServerIsBusy.estimated_wait_ms). It only reflects read-side load and is
 	// used to steer replica reads, so it must never be updated from a write-path
 	// ServerIsBusy. See replicaSelector.onServerIsBusy.
+	// txnProtocolVersionRange publishes the Store's advertised transaction
+	// protocol admission range as an immutable snapshot. The RPC hot path only
+	// does an atomic load; it must never touch metaMu, because that lock is held
+	// by address/label metadata updates that are unrelated to selection.
+	txnProtocolVersionRange atomic.Pointer[txnprotocol.StoreRange]
+	// txnProtocolVersionRangeMu orders publication by fetch start time and guards
+	// warning suppression. Readers only access the immutable atomic snapshot.
+	txnProtocolVersionRangeMu struct {
+		sync.Mutex
+		fetchedAt time.Time
+		warned    bool
+		warnedMin uint32
+		warnedMax uint32
+	}
+	// txnProtocolVersionReloadMu guards the per-Store conditional reload state:
+	// at most one in-flight PD reload and a fixed cooldown between attempts.
+	txnProtocolVersionReloadMu struct {
+		sync.Mutex
+		latest      *txnProtocolVersionReload
+		lastAttempt time.Time
+	}
+
 	loadStats atomic.Pointer[storeLoadStats]
 
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
@@ -300,6 +323,233 @@ func (s *Store) IsTiFlash() bool {
 // StoreID returns storeID.
 func (s *Store) StoreID() uint64 {
 	return s.storeID
+}
+
+// getTxnProtocolVersionRange returns the current transaction protocol version
+// range snapshot of the store.
+//
+// This is on the RPC hot path: it only performs an atomic load, never touches
+// metaMu. A store that never published a range reads as unknown, which selection
+// normalizes to [0, 0].
+func (s *Store) getTxnProtocolVersionRange() txnprotocol.StoreRange {
+	if s == nil {
+		return txnprotocol.StoreRange{}
+	}
+	snapshot := s.txnProtocolVersionRange.Load()
+	if snapshot == nil {
+		return txnprotocol.StoreRange{}
+	}
+	return *snapshot
+}
+
+// publishTxnProtocolVersionRange publishes the transaction protocol version range
+// carried by the given store metadata.
+//
+// It is the single range publish path used by store initialization, id resolve,
+// the periodic full-store updater and the conditional reload, so the semantics
+// cannot diverge:
+//
+//   - A valid range atomically replaces the previous snapshot.
+//   - A missing field is legacy/unknown and is published as unknown, even if it
+//     downgrades a previously known range, so a Store rollback or a legacy node is
+//     reflected instead of being masked by stale metadata.
+//   - min > max is invalid metadata. It is warned about once per distinct invalid
+//     value and never published: the last-known-good snapshot (or unknown when
+//     there was none) is kept.
+//
+// fetchedAt is captured before starting the leader-backed metadata lookup. A
+// response from an older lookup must not overwrite a newer publication.
+// No address, resolve-state, epoch or connection metadata is changed here.
+func (s *Store) publishTxnProtocolVersionRange(store *metapb.Store, fetchedAt time.Time) (txnprotocol.StoreRange, error) {
+	s.txnProtocolVersionRangeMu.Lock()
+	defer s.txnProtocolVersionRangeMu.Unlock()
+	if fetchedAt.Before(s.txnProtocolVersionRangeMu.fetchedAt) {
+		return txnprotocol.StoreRange{}, errors.New("store transaction protocol metadata superseded by a newer lookup")
+	}
+	s.txnProtocolVersionRangeMu.fetchedAt = fetchedAt
+	storeRange := store.GetTxnProtocolVersionRange()
+	r := txnprotocol.StoreRange{}
+	if storeRange != nil {
+		r = txnprotocol.StoreRange{Present: true, Min: storeRange.GetMin(), Max: storeRange.GetMax()}
+		if r.Min > r.Max {
+			warning := &s.txnProtocolVersionRangeMu
+			if !warning.warned || warning.warnedMin != r.Min || warning.warnedMax != r.Max {
+				warning.warned, warning.warnedMin, warning.warnedMax = true, r.Min, r.Max
+				logutil.BgLogger().Warn("ignore invalid store transaction protocol version range",
+					zap.Uint64("storeID", s.storeID), zap.Uint32("min", r.Min), zap.Uint32("max", r.Max),
+					zap.Stringer("cachedRange", s.getTxnProtocolVersionRange()))
+			}
+			return txnprotocol.StoreRange{}, errors.Errorf("invalid store transaction protocol range [%d, %d]", r.Min, r.Max)
+		}
+	}
+	s.txnProtocolVersionRange.Store(&r)
+	s.txnProtocolVersionRangeMu.warned = false
+	return r, nil
+}
+
+var (
+	// txnProtocolVersionReloadCooldown is the fixed interval between the starts of
+	// two conditional transaction protocol version range reloads of the same
+	// Store. A successful and a failed attempt both enter it, so a PD that keeps
+	// failing cannot be hammered by every request that needs a higher version.
+	txnProtocolVersionReloadCooldown = time.Second
+
+	// txnProtocolVersionReloadTimeout bounds one conditional PD GetStore. The
+	// reload runs under the RegionCache lifecycle context rather than a request
+	// context, so one waiter's cancellation cannot abort a reload shared by other
+	// waiters, while closing the client still cancels it.
+	txnProtocolVersionReloadTimeout = 5 * time.Second
+)
+
+// txnProtocolVersionReload is one shared, lifecycle-bound reload task of a Store.
+// The task itself never observes a waiter's context, so one waiter giving up can
+// neither abort the PD request nor affect other waiters.
+type txnProtocolVersionReload struct {
+	done chan struct{}
+	// Published before done closes; all waiters observe the same fetch outcome.
+	rangeResult txnprotocol.StoreRange
+	err         error
+}
+
+// reloadTxnProtocolVersionRange conditionally reloads this Store's transaction
+// protocol version range from PD.
+//
+// Contract:
+//
+//   - Only the range is refreshed, through the shared publish helper. It must not
+//     be extended to a full metadata update, a Store invalidation or a connection
+//     rebuild.
+//   - The request is always handled by the PD leader; the router service is never
+//     allowed to answer it, because a stale router could keep serving the very
+//     range this reload exists to correct.
+//   - Reloads of the same Store are single-flight. A caller that arrives while a
+//     reload is in flight joins it even after the cooldown has elapsed, so at most
+//     one PD request is in flight per Store.
+//   - The cooldown starts when an attempt starts, and both success and failure
+//     enter it. During cooldown callers reuse the completed task's result, so
+//     concurrent admission rejections can share a successful repair even if
+//     they arrive just after its PD lookup finishes.
+//   - The actual PD fetch runs as a shared task bound to lifecycle, not to any
+//     waiter's request. Every caller, including the one that started the task,
+//     waits on the task or on its own request context. The result distinguishes
+//     a successful publication, fetch/publication failure, and waiter cancellation.
+//     A canceled waiter does not cancel the shared task.
+//   - Caller wait duration is observed only when the caller starts or joins an
+//     in-flight reload. Cooldown reuse involves no RPC and is counted separately
+//     as a suppressed reload.
+func (s *Store) reloadTxnProtocolVersionRange(ctx context.Context, c storeCache, lifecycle context.Context) (txnprotocol.StoreRange, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return txnprotocol.StoreRange{}, err
+	}
+
+	startedAt := time.Now()
+	mode := ""
+	s.txnProtocolVersionReloadMu.Lock()
+	inFlight := s.txnProtocolVersionReloadMu.latest
+	if inFlight != nil {
+		select {
+		case <-inFlight.done:
+			if time.Since(s.txnProtocolVersionReloadMu.lastAttempt) < txnProtocolVersionReloadCooldown {
+				metrics.TxnProtocolStoreReloadCounterWithSuppressed.Inc()
+			} else {
+				inFlight = nil
+			}
+		default: // Join the running task even if the cooldown has already elapsed.
+			mode = "joined"
+		}
+	}
+	if inFlight == nil {
+		mode = "started"
+		inFlight = &txnProtocolVersionReload{done: make(chan struct{})}
+		s.txnProtocolVersionReloadMu.latest = inFlight
+		s.txnProtocolVersionReloadMu.lastAttempt = time.Now()
+		go s.runTxnProtocolVersionReload(inFlight, c, lifecycle)
+	}
+	s.txnProtocolVersionReloadMu.Unlock()
+	observeWait := func(result string) {
+		if mode != "" {
+			metrics.TiKVTxnProtocolStoreReloadWaitDuration.WithLabelValues(strconv.FormatUint(s.StoreID(), 10), mode, result).Observe(time.Since(startedAt).Seconds())
+		}
+	}
+
+	select {
+	case <-inFlight.done:
+		// The shared reload finished. If this caller was canceled meanwhile it must
+		// still abandon the attempt instead of using whatever the reload published.
+		if err := ctx.Err(); err != nil {
+			observeWait("canceled")
+			return txnprotocol.StoreRange{}, err
+		}
+		if inFlight.err != nil {
+			observeWait("failure")
+		} else {
+			observeWait("success")
+		}
+		return inFlight.rangeResult, inFlight.err
+	case <-ctx.Done():
+		observeWait("canceled")
+		return txnprotocol.StoreRange{}, ctx.Err()
+	}
+}
+
+// runTxnProtocolVersionReload performs the shared PD lookup of one Store. It runs
+// under the RegionCache lifecycle context, so closing the client cancels it,
+// while no waiter's request cancellation can.
+func (s *Store) runTxnProtocolVersionReload(reload *txnProtocolVersionReload, c storeCache, lifecycle context.Context) {
+	defer func() {
+		if reload.err != nil {
+			metrics.TxnProtocolStoreReloadCounterWithFailure.Inc()
+		} else {
+			metrics.TxnProtocolStoreReloadCounterWithSuccess.Inc()
+		}
+		// Closing done publishes the immutable result to both current waiters
+		// and later callers that reuse this task during cooldown.
+		close(reload.done)
+	}()
+
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	reloadCtx, cancel := context.WithTimeout(lifecycle, txnProtocolVersionReloadTimeout)
+	defer cancel()
+
+	opts := []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()}
+	start := time.Now()
+	store, err := c.fetchStore(reloadCtx, s.storeID, opts...)
+	metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
+	if err != nil {
+		reload.err = err
+		metrics.RegionCacheCounterWithGetStoreError.Inc()
+		// The single-flight owner records the failure once; waiters must not each
+		// repeat it.
+		logutil.BgLogger().Warn(
+			"reload store transaction protocol version range failed",
+			zap.Uint64("storeID", s.storeID),
+			zap.Error(err),
+		)
+		return
+	}
+	metrics.RegionCacheCounterWithGetStoreOK.Inc()
+	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
+		reload.err = errors.New("store transaction protocol reload returned no usable store")
+		logutil.BgLogger().Warn(
+			"reload store transaction protocol version range returned no usable store",
+			zap.Uint64("storeID", s.storeID),
+		)
+		return
+	}
+	reload.rangeResult, reload.err = s.publishTxnProtocolVersionRange(store, start)
+	if reload.err != nil {
+		return
+	}
+	logutil.BgLogger().Debug(
+		"reloaded store transaction protocol version range",
+		zap.Uint64("storeID", s.storeID),
+		zap.Stringer("range", s.getTxnProtocolVersionRange()),
+	)
 }
 
 // GetAddr returns the address of the store
@@ -420,7 +670,7 @@ func (s resolveState) String() string {
 }
 
 // initByStoreMeta initializes the store fields by the given store meta. It should be protected by `resolveMutex`.
-func (s *Store) initByStoreMeta(store *metapb.Store) error {
+func (s *Store) initByStoreMeta(store *metapb.Store, fetchedAt time.Time) error {
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 		// The store is a tombstone.
 		s.setResolveState(tombstone)
@@ -431,6 +681,10 @@ func (s *Store) initByStoreMeta(store *metapb.Store) error {
 		return errors.Errorf("empty store(%d) address", s.storeID)
 	}
 	s.updateMetadataFrom(store)
+	// Publish the transaction protocol version range through the same helper as
+	// every other path. It is deliberately separate from updateMetadataFrom so it
+	// never becomes part of the metaMu-protected hot metadata.
+	s.publishTxnProtocolVersionRange(store, fetchedAt)
 	// Shouldn't have other one changing its state concurrently, but we still use changeResolveStateTo for safety.
 	s.changeResolveStateTo(unresolved, resolved)
 
@@ -438,9 +692,9 @@ func (s *Store) initByStoreMeta(store *metapb.Store) error {
 }
 
 // initResolveLite likes initResolve but initializes the store by the given store meta directly.
-func (s *Store) initResolveLite(store *metapb.Store) error {
+func (s *Store) initResolveLite(store *metapb.Store, fetchedAt time.Time) error {
 	s.resolveMutex.Lock()
-	err := s.initByStoreMeta(store)
+	err := s.initByStoreMeta(store, fetchedAt)
 	s.resolveMutex.Unlock()
 	return err
 }
@@ -458,12 +712,12 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 		return
 	}
 	var store *metapb.Store
-	opts := []opt.GetStoreOption{opt.WithAllowRouterServiceHandleStoreRequest()}
+	// Capability metadata must not regress behind a previous leader refresh.
+	opts := []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()}
 	for {
 		start := time.Now()
 		store, err = c.fetchStore(bo.GetCtx(), s.storeID, opts...)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
-		opts = []opt.GetStoreOption{opt.WithPDLeaderHandleStoreRequestOnly()} // after first attempt, retry via PD leader only
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
@@ -480,7 +734,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 			}
 			continue
 		}
-		if err := s.initByStoreMeta(store); err != nil {
+		if err := s.initByStoreMeta(store, start); err != nil {
 			return "", err
 		}
 		return s.GetAddr(), nil
@@ -495,7 +749,8 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	s.resolveMutex.Lock()
 	defer s.resolveMutex.Unlock()
 	var addr string
-	store, err := c.fetchStore(context.Background(), s.storeID)
+	fetchedAt := time.Now()
+	store, err := c.fetchStore(context.Background(), s.storeID, opt.WithPDLeaderHandleStoreRequestOnly())
 	if err != nil {
 		metrics.RegionCacheCounterWithGetStoreError.Inc()
 	} else {
@@ -523,6 +778,10 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	if addr == "" {
 		return false, errors.Errorf("empty store(%d) address", s.storeID)
 	}
+
+	// Refresh only the transaction protocol version range from this fresh
+	// metadata, independently of whether the address or labels changed.
+	s.publishTxnProtocolVersionRange(store, fetchedAt)
 
 	if s.GetAddr() != addr || !s.IsSameLabels(store.GetLabels()) {
 		logutil.BgLogger().Info("store metadata(address or labels) changed, updating store",
@@ -1152,34 +1411,40 @@ type storeCacheUpdater struct {
 }
 
 func (u *storeCacheUpdater) tick(ctx context.Context, now time.Time) bool {
-	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithAllowRouterServiceHandleStoreRequest())
+	// The list also refreshes transaction protocol admission ranges. Router
+	// snapshots must not undo a successful conditional leader reload.
+	fetchedAt := time.Now()
+	storeList, err := u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithPDLeaderHandleStoreRequestOnly())
 	if err != nil {
 		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
-		storeList, err = u.stores.fetchAllStores(ctx, opt.WithExcludeTombstone(), opt.WithPDLeaderHandleStoreRequestOnly())
-		if err != nil {
-			logutil.Logger(ctx).Info("refresh full store list with PD leader handle request only failed", zap.Error(err))
-			return false
-		}
+		return false
 	}
-	u.insertMissingStores(ctx, storeList)
+	u.refreshStores(ctx, fetchedAt, storeList)
 	u.cleanUpStaleStoreMetrics(ctx, storeList, now)
 	return false
 }
 
-// insertMissingStores adds the stores that are not in the cache.
-func (u *storeCacheUpdater) insertMissingStores(ctx context.Context, storeList []*metapb.Store) {
+// refreshStores inserts stores that are not in the cache yet and refreshes the
+// transaction protocol version range of the ones that already are.
+//
+// Refreshing an existing store must only update the range: address, labels,
+// store type, resolve state, epoch, liveness and connections keep their existing
+// update rules and are driven by store resolve and health check paths instead.
+func (u *storeCacheUpdater) refreshStores(ctx context.Context, fetchedAt time.Time, storeList []*metapb.Store) {
 	for _, store := range storeList {
 		// storeList is supposed to contains only Up and Offline stores.
 		// This check is being defensive and to make it consistent with store resolve code.
 		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 			continue
 		}
-		_, exist := u.stores.get(store.GetId())
-		if exist {
+		if cached, exist := u.stores.get(store.GetId()); exist {
+			if cached.getResolveState() != tombstone {
+				cached.publishTxnProtocolVersionRange(store, fetchedAt)
+			}
 			continue
 		}
 		s := u.stores.getOrInsertDefault(store.GetId())
-		if err := s.initResolveLite(store); err != nil {
+		if err := s.initResolveLite(store, fetchedAt); err != nil {
 			logutil.Logger(ctx).Warn("init resolve store failed", zap.Uint64("storeID", store.GetId()), zap.Error(err))
 			continue
 		}
