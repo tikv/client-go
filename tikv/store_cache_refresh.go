@@ -9,6 +9,7 @@
 package tikv
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -24,11 +25,13 @@ import (
 )
 
 const (
-	storeCacheRefreshWorkers    = 8
-	storeCacheRefreshRPCTimeout = 3 * time.Second
-	storeCacheRefreshAttempts   = 3
-	storeCacheRefreshBackoff    = 50 * time.Millisecond
-	storeCacheRefreshJobTimeout = 2 * time.Minute
+	storeCacheRefreshWorkers         = 8
+	storeCacheRefreshRPCTimeout      = 3 * time.Second
+	storeCacheRefreshAttempts        = 3
+	storeCacheRefreshBackoff         = 50 * time.Millisecond
+	storeCacheRefreshJobTimeout      = 2 * time.Minute
+	storeCacheRefreshRecoverBackoff  = 5000
+	storeCacheRefreshRecoverMaxSpans = 128
 )
 
 // ErrStoreCacheRefreshBusy means reset found an in-flight refresh for this store.
@@ -401,8 +404,8 @@ func (s *KVStore) runRefresh(ctx context.Context, storeID uint64) (StoreCacheRef
 
 // recoverGoneUnresolved re-locates key ranges of failures whose cache is gone
 // and not covered by moved cache. It does not drop failures here: probeMoved
-// events let dropMovedUnresolvedLocked / event apply delete them. LocateKey may
-// hit PD; that is only for stuck leftovers, not the hot B2 path.
+// events let dropMovedUnresolvedLocked / event apply delete them. Range lookup
+// may hit PD; that is only for stuck leftovers, not the hot B2 path.
 func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, have map[locate.RegionVerID]struct{}) ([]locate.WorkStoreMatch, []probeEvent) {
 	task := s.getRefreshTaskIfAny(storeID)
 	if task == nil {
@@ -438,9 +441,7 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 			continue
 		}
-		bo := NewBackofferWithVars(ctx, 5000, nil)
-		_, err := s.regionCache.LocateKey(bo, it.u.startKey)
-		if err != nil {
+		if !s.locateFailedRange(ctx, it.u.startKey, it.u.endKey) {
 			continue
 		}
 		located = true
@@ -463,6 +464,42 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 		extra = append(extra, m)
 	}
 	return extra, evs
+}
+
+// locateFailedRange walks [startKey, endKey) so a split sibling after startKey
+// is loaded. LocateKey(startKey) alone would keep hitting the first half.
+// Stops on cancel, backoff budget, max spans, or a region that does not advance.
+func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	bo := NewBackofferWithVars(ctx, storeCacheRefreshRecoverBackoff, nil)
+	cur := startKey
+	progressed := false
+	for i := 0; i < storeCacheRefreshRecoverMaxSpans; i++ {
+		if ctx.Err() != nil {
+			return progressed
+		}
+		loc, err := s.regionCache.LocateKey(bo, cur)
+		if err != nil || loc == nil {
+			return progressed
+		}
+		progressed = true
+		if len(loc.EndKey) == 0 {
+			return true
+		}
+		if len(endKey) > 0 && bytes.Compare(loc.EndKey, endKey) >= 0 {
+			return true
+		}
+		if bytes.Compare(loc.EndKey, cur) <= 0 {
+			return progressed
+		}
+		cur = loc.EndKey
+		if len(endKey) > 0 && bytes.Compare(cur, endKey) >= 0 {
+			return true
+		}
+	}
+	return progressed
 }
 
 type probeOutcome int
