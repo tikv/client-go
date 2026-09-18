@@ -10,6 +10,7 @@ package tikv
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -491,6 +492,37 @@ func TestStoreCacheRefreshSplitRightHalfStaysThenConverges(t *testing.T) {
 	require.Equal(t, 0, done.Remaining, "errors=%v updated=%d failed=%d scanned=%d", done.Errors, done.Updated, done.Failed, done.Scanned)
 	require.Equal(t, 0, done.Failed)
 	require.True(t, done.Ready, "after right half leaves the store, failed range must converge: %+v", done)
+}
+
+func TestStoreCacheRefreshManySplitsConverges(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.Greater(t, store.RefreshStoreCache(context.Background(), storeIDs[0]).Failed, 0)
+	store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	for i := 0; i < 129; i++ {
+		rightID, peers := cluster.AllocID(), cluster.AllocIDs(3)
+		cluster.Split(regionID, rightID, []byte(fmt.Sprintf("m%03d", i)), peers, peers[1])
+		regionID = rightID
+	}
+	var last StoreCacheRefreshResult
+	for i := 0; i < 3; i++ {
+		last = store.RefreshStoreCache(context.Background(), storeIDs[0])
+		if last.Ready {
+			require.Equal(t, 0, last.Remaining)
+			require.Equal(t, 0, last.Failed)
+			return
+		}
+	}
+	require.True(t, last.Ready, "128-span budget must skip cached prefix and reach suffix: %+v", last)
 }
 
 func TestStoreCacheRefreshRecoverGoneCancelled(t *testing.T) {
