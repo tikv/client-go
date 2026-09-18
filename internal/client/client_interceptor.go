@@ -43,11 +43,17 @@ func NewInterceptedClient(client Client) Client {
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
-	var ruDetails *util.RUDetails
-
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	var ruDetails *util.RUDetails
+	if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
+		ruDetails = val.(*util.RUDetails)
+	}
+	var accountingReqInfo resourceControlClient.RequestInfo = reqInfo
 	if resourceControlInterceptor != nil {
-		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+		accountingReqInfo = WrapRequestInfoWithRUDetails(resourceControlInterceptor, reqInfo, ruDetails)
+		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(
+			ctx, resourceGroupName, accountingReqInfo,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -59,8 +65,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 			req.GetResourceControlContext().OverridePriority = uint64(priority)
 		}
 
-		if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
-			ruDetails = val.(*util.RUDetails)
+		if ruDetails != nil {
 			ruDetails.Update(consumption, waitDuration)
 		}
 	}
@@ -75,7 +80,9 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 
 	if resourceControlInterceptor != nil && resp != nil {
 		respInfo := resourcecontrol.MakeResponseInfo(resp)
-		consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+		consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(
+			ctx, resourceGroupName, accountingReqInfo, respInfo,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -91,8 +98,16 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	// since all async requests processed by one runloop share the same resource group, if the quota is exceeded, all
 	// requests/responses shall wait for the tokens, thus it's ok to call OnRequestWait/OnResponseWait synchronously.
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	var ruDetails *util.RUDetails
+	if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
+		ruDetails = val.(*util.RUDetails)
+	}
+	var accountingReqInfo resourceControlClient.RequestInfo = reqInfo
 	if resourceControlInterceptor != nil {
-		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+		accountingReqInfo = WrapRequestInfoWithRUDetails(resourceControlInterceptor, reqInfo, ruDetails)
+		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(
+			ctx, resourceGroupName, accountingReqInfo,
+		)
 		if err != nil {
 			cb.Invoke(nil, err)
 			return
@@ -105,10 +120,7 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			req.GetResourceControlContext().OverridePriority = uint64(priority)
 		}
 
-		var ruDetails *util.RUDetails
-
-		if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
-			ruDetails = val.(*util.RUDetails)
+		if ruDetails != nil {
 			ruDetails.Update(consumption, waitDuration)
 		}
 
@@ -123,7 +135,9 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 			}
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+				consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(
+					ctx, resourceGroupName, accountingReqInfo, respInfo,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -136,6 +150,28 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	}
 
 	r.Client.SendRequestAsync(ctx, addr, req, cb)
+}
+
+type requestInfoWithRUDetails struct {
+	*resourcecontrol.RequestInfo
+	details *util.RUDetails
+}
+
+func (r *requestInfoWithRUDetails) CollectRUCalculation(calculation resourceControlClient.RUCalculation) {
+	r.details.AddRUCalculation(calculation)
+}
+
+// WrapRequestInfoWithRUDetails enables RU v1 calculation collection without
+// changing the resource-control interceptor API or the request's capabilities.
+func WrapRequestInfoWithRUDetails(
+	interceptor resourceControlClient.ResourceGroupKVInterceptor,
+	reqInfo *resourcecontrol.RequestInfo,
+	details *util.RUDetails,
+) resourceControlClient.RequestInfo {
+	if details == nil || interceptor.GetRUVersion() != resourceControlClient.RUVersionV1 {
+		return reqInfo
+	}
+	return &requestInfoWithRUDetails{RequestInfo: reqInfo, details: details}
 }
 
 var (
