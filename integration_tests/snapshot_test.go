@@ -701,7 +701,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsPointGetLockRetryCoverage() 
 	s.Equal(uint64(len("old-value")), pointStats.PayloadBytes)
 }
 
-func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegionsCoverage() {
+func (s *testSnapshotSuite) TestAsyncBatchGetStats() {
 	restoreConfig := config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableAsyncBatchGet = true
 	})
@@ -716,20 +716,28 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegions
 	s.Nil(txn.Set(rightKey, []byte("right")))
 	s.Nil(txn.Commit(ctx))
 
-	preSplitLoc, err := s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), splitKey)
-	s.Nil(err)
+	regionCache := s.store.GetRegionCache()
+	preSplitLoc, err := regionCache.LocateKey(retry.NewNoopBackoff(ctx), splitKey)
+	s.Require().NoError(err)
 	_, err = s.store.SplitRegions(ctx, [][]byte{splitKey}, false, nil)
-	s.Nil(err)
-	s.store.GetRegionCache().InvalidateCachedRegion(preSplitLoc.Region)
-	var leftLoc, rightLoc *tikv.KeyLocation
-	s.Eventually(func() bool {
-		leftLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), leftKey)
+	s.Require().NoError(err)
+	regionCache.InvalidateCachedRegion(preSplitLoc.Region)
+	s.Require().Eventually(func() bool {
+		leftLoc, err := regionCache.LocateKey(retry.NewNoopBackoff(ctx), leftKey)
 		if err != nil {
 			return false
 		}
-		rightLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), rightKey)
-		return err == nil && leftLoc.Region.GetID() != rightLoc.Region.GetID()
-	}, 5*time.Second, time.Millisecond)
+		rightLoc, err := regionCache.LocateKey(retry.NewNoopBackoff(ctx), rightKey)
+		if err == nil && leftLoc.Region.GetID() != rightLoc.Region.GetID() {
+			return true
+		}
+		// PD may still return pre-split metadata. Reload it on the next attempt.
+		regionCache.InvalidateCachedRegion(leftLoc.Region)
+		if rightLoc != nil {
+			regionCache.InvalidateCachedRegion(rightLoc.Region)
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond)
 
 	originalClient := s.store.GetTiKVClient()
 	detailClient := &pointResponseBatchGetClient{Client: originalClient}
