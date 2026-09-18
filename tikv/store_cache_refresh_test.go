@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -856,10 +858,131 @@ func TestStoreCacheRefreshCancelledWaiterDoesNotReset(t *testing.T) {
 	<-done
 }
 
+func TestStoreCacheRefreshReloadsWhenNotLeaderPeerMissing(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var first atomic.Bool
+	first.Store(true)
+	var newPeer, newStore uint64
+	kvstore, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type != tikvrpc.CmdGet || newPeer == 0 || !first.CompareAndSwap(true, false) {
+					return nil
+				}
+				return notLeaderGetResp(&metapb.Peer{Id: newPeer, StoreId: newStore})
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer kvstore.Close()
+
+	storeIDs, _, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.Equal(t, storeIDs[0], kvstore.GetRegionCache().GetCachedRegionWithRLock(loc.Region).GetLeaderStoreID())
+
+	newStore = cluster.AllocID()
+	cluster.AddStore(newStore, "store-new")
+	newPeer = cluster.AllocID()
+	cluster.AddPeer(regionID, newStore, newPeer)
+	cluster.ChangeLeader(regionID, newPeer)
+
+	res := kvstore.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.Equal(t, 0, res.Remaining, "errors=%v", res.Errors)
+	require.Equal(t, 0, res.Failed)
+	require.True(t, res.Ready)
+	fresh, err := kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.Equal(t, newStore, kvstore.GetRegionCache().GetCachedRegionWithRLock(fresh.Region).GetLeaderStoreID())
+}
+
+func TestStoreCacheRefreshKeepsFailureIfPeerStillMissingAfterReload(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	kvstore, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type != tikvrpc.CmdGet {
+					return nil
+				}
+				return notLeaderGetResp(&metapb.Peer{Id: 99999, StoreId: 99999})
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer kvstore.Close()
+
+	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	res := kvstore.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, res.Ready)
+	require.Greater(t, res.Failed, 0)
+	require.Greater(t, res.Remaining, 0)
+	joined := fmt.Sprintf("%v", res.Errors)
+	require.Contains(t, joined, "class=new_leader_peer_not_in_cache")
+	require.Contains(t, joined, "not_leader_peer=99999")
+	require.Contains(t, joined, "region=")
+	require.Contains(t, joined, "store=")
+	require.Contains(t, joined, "peers=")
+}
+
+func TestStoreCacheRefreshDoesNotApplyStaleNotLeaderAfterReload(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	var kvstore *KVStore
+	kvstore, err = NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				cluster.ChangeLeader(regionID, peerIDs[1])
+				bo := NewBackofferWithVars(context.Background(), 5000, nil)
+				_, _ = kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+			},
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type != tikvrpc.CmdGet {
+					return nil
+				}
+				return notLeaderGetResp(&metapb.Peer{Id: 99999, StoreId: 99999})
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer kvstore.Close()
+
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	require.Equal(t, storeIDs[0], kvstore.GetRegionCache().GetCachedRegionWithRLock(loc.Region).GetLeaderStoreID())
+
+	res := kvstore.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, res.Ready, "errors=%v remaining=%d failed=%d", res.Errors, res.Remaining, res.Failed)
+	fresh, err := kvstore.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cached := kvstore.GetRegionCache().GetCachedRegionWithRLock(fresh.Region)
+	require.NotNil(t, cached)
+	require.Equal(t, storeIDs[1], cached.GetLeaderStoreID())
+	require.NotEqual(t, uint64(99999), cached.GetLeaderPeerID())
+}
+
+func notLeaderGetResp(leader *metapb.Peer) *tikvrpc.Response {
+	return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+		NotLeader: &errorpb.NotLeader{Leader: leader},
+	}}}
+}
+
 type refreshInterceptClient struct {
 	Client
-	onGet func()
-	onReq func(req *tikvrpc.Request)
+	onGet   func()
+	onReq   func(req *tikvrpc.Request)
+	getResp func(req *tikvrpc.Request) *tikvrpc.Response
 }
 
 func (c *refreshInterceptClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -868,6 +991,11 @@ func (c *refreshInterceptClient) SendRequest(ctx context.Context, addr string, r
 	}
 	if req.Type == tikvrpc.CmdGet && c.onGet != nil {
 		c.onGet()
+	}
+	if req.Type == tikvrpc.CmdGet && c.getResp != nil {
+		if resp := c.getResp(req); resp != nil {
+			return resp, nil
+		}
 	}
 	return c.Client.SendRequest(ctx, addr, req, timeout)
 }
