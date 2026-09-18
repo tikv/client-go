@@ -1179,9 +1179,13 @@ func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, err
 	if err != nil {
 		return nil, err
 	}
-	info.PrimaryLock, err = c.DecodeKey(info.PrimaryLock)
-	if err != nil {
-		return nil, err
+	// A shared-lock wrapper represents multiple transactions and has no unique primary.
+	// Still decode nonempty primaries to validate their keyspace.
+	if info.LockType != kvrpcpb.Op_SharedLock || len(info.PrimaryLock) > 0 {
+		info.PrimaryLock, err = c.DecodeKey(info.PrimaryLock)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for i := range info.Secondaries {
 		info.Secondaries[i], err = c.DecodeKey(info.Secondaries[i])
