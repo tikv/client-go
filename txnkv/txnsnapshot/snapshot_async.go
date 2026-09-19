@@ -168,7 +168,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			return
 		}
 
-		lockInfo, err := collectBatchGetResponseData(&resp.Response, collectF, s.mergeExecDetail)
+		lockInfo, err := collectBatchGetResponseData(&resp.Response, collectF, s.pointResponseRecorder())
 		if err != nil {
 			cb.Invoke(struct{}{}, err)
 			metrics.AsyncBatchGetCounterWithOtherError.Inc()
@@ -289,7 +289,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 		if regionErr != nil {
 			continue
 		}
-		lockInfo, err = collectBatchGetResponseData(resp, collectF, s.mergeExecDetail)
+		lockInfo, err = collectBatchGetResponseData(resp, collectF, s.pointResponseRecorder())
 		if err != nil {
 			return err
 		}
