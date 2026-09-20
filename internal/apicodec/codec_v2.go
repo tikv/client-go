@@ -55,12 +55,16 @@ func BuildKeyspaceName(name string) string {
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
 	reqPool      sync.Pool
+	apiVersion   kvrpcpb.APIVersion
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
 	keyspaceMeta *keyspacepb.KeyspaceMeta
 	// keyspaceID is the cached keyspace oneof wrapper shared by all encoded requests.
 	keyspaceID *kvrpcpb.Context_KeyspaceId
+	// API V3 keeps RPC keys logical, but region metadata remains physical.
+	// Use its region codec when decoding metadata in the shared response path.
+	regionResponseCodec Codec
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
@@ -86,6 +90,7 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	}
 	codec := &codecV2{
 		// Region keys in CodecV2 are always encoded in memory comparable form.
+		apiVersion:   kvrpcpb.APIVersion_V2,
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
 		keyspaceID:   &kvrpcpb.Context_KeyspaceId{KeyspaceId: keyspaceID},
@@ -127,7 +132,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return KeyspaceID(c.keyspaceMeta.GetId())
+	return KeyspaceID(keyspaceIDFromMeta(c.keyspaceMeta))
 }
 
 func (c *codecV2) getKeyspaceOneof() *kvrpcpb.Context_KeyspaceId {
@@ -139,7 +144,14 @@ func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
-	return kvrpcpb.APIVersion_V2
+	return c.apiVersion
+}
+
+func keyspaceIDFromMeta(meta *keyspacepb.KeyspaceMeta) uint32 {
+	if identity := meta.GetKeyspaceIdentity(); identity != nil {
+		return identity.GetKeyspaceId()
+	}
+	return meta.GetId()
 }
 
 // EncodeRequest encodes with the given Codec.
@@ -809,6 +821,10 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 // DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
 func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start []byte, end []byte, err error) {
+	if len(c.prefix) == 0 {
+		return encodedStart, encodedEnd, nil
+	}
+
 	if bytes.Compare(encodedStart, c.endKey) >= 0 ||
 		(len(encodedEnd) > 0 && bytes.Compare(encodedEnd, c.prefix) <= 0) {
 		return nil, nil, errors.WithStack(errKeyOutOfBound)
@@ -892,9 +908,10 @@ func (c *codecV2) encodeCopRanges(ranges []*coprocessor.KeyRange) []*coprocessor
 }
 
 func (c *codecV2) decodeRegions(regions []*metapb.Region) ([]*metapb.Region, error) {
+	codec := c.regionResponseDecoder()
 	var err error
 	for _, region := range regions {
-		region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
+		region.StartKey, region.EndKey, err = codec.DecodeRegionRange(region.StartKey, region.EndKey)
 		if err != nil {
 			return nil, err
 		}
@@ -986,17 +1003,25 @@ func (c *codecV2) encodeStoreBatchTasks(tasks []*coprocessor.StoreBatchTask) []*
 	return encodedTasks
 }
 
+func (c *codecV2) regionResponseDecoder() Codec {
+	if c.regionResponseCodec != nil {
+		return c.regionResponseCodec
+	}
+	return c
+}
+
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
 	if regionError == nil {
 		return nil, nil
 	}
+	codec := c.regionResponseDecoder()
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
 		errInfo.Key, err = c.DecodeKey(errInfo.Key)
 		if err != nil {
 			return nil, err
 		}
-		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		errInfo.StartKey, errInfo.EndKey, err = codec.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
 		if err != nil {
 			return nil, err
 		}
@@ -1005,7 +1030,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	if errInfo := regionError.EpochNotMatch; errInfo != nil {
 		decodedRegions := make([]*metapb.Region, 0, len(errInfo.CurrentRegions))
 		for _, meta := range errInfo.CurrentRegions {
-			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
+			meta.StartKey, meta.EndKey, err = codec.DecodeRegionRange(meta.StartKey, meta.EndKey)
 			if err != nil {
 				// skip out of keyspace range's region
 				if errors.Is(err, errKeyOutOfBound) {
@@ -1024,7 +1049,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		// keyspace-prefixed region-key format, so caching it as-is would mix key
 		// representations and produce incorrect cop task boundaries. Decoding also
 		// keeps malformed boundaries out of the cache.
-		errInfo.Keys, err = c.DecodeBucketKeys(errInfo.Keys)
+		errInfo.Keys, err = codec.DecodeBucketKeys(errInfo.Keys)
 		if err != nil {
 			return nil, err
 		}

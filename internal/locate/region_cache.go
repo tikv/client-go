@@ -816,6 +816,18 @@ func (c *RegionCache) Close() {
 	c.bg.shutdown(true)
 }
 
+func (c *RegionCache) allowRouterRegionLookup() bool {
+	return c.codec == nil || c.codec.GetAPIVersion() != kvrpcpb.APIVersion_V3
+}
+
+func (c *RegionCache) followerRegionOptions() []opt.GetRegionOption {
+	opts := []opt.GetRegionOption{opt.WithAllowFollowerHandle()}
+	if c.allowRouterRegionLookup() {
+		opts = append(opts, opt.WithAllowRouterServiceHandle())
+	}
+	return opts
+}
+
 // IsBackgroundRunnerClosed returns whether RegionCache's background runner context has been canceled.
 //
 // It is intended for tests/debugging only.
@@ -1783,7 +1795,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	if r == nil || expired {
 		// load region when it is not exists or expired.
 		observeLoadRegion(tag, r, expired, 0)
-		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
+		lr, err := c.loadRegion(bo, key, isEndKey, c.followerRegionOptions()...)
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -2513,7 +2525,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
-	pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle()}
+	pdOpts := c.followerRegionOptions()
 	var backoffErr error
 	for {
 		if backoffErr != nil {
@@ -2598,7 +2610,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 			opt.WithOutputMustContainAllKeyRange(),
 		}
 		if needFollowerHandle {
-			pdOpts = append(pdOpts, opt.WithAllowFollowerHandle(), opt.WithAllowRouterServiceHandle())
+			pdOpts = append(pdOpts, c.followerRegionOptions()...)
 		}
 		if batchOpt.needBuckets {
 			pdOpts = append(pdOpts, opt.WithBuckets())
