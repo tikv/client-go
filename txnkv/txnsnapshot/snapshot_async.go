@@ -169,7 +169,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, regionErr, nil, opt, collectF)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req, regionErr, nil, opt, collectF)
 				// Finish request-owned processing before scheduling the completion.
 				// Schedule may race with RunLoop cancellation, but it no longer
 				// accesses this request's result collector or snapshot stats.
@@ -190,7 +190,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, nil, lockInfo, opt, collectF)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req, nil, lockInfo, opt, collectF)
 				// See the Region-error retry path above.
 				retryWorkers.Done()
 				cb.Schedule(struct{}{}, err)
@@ -211,7 +211,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	cli *ClientHelper,
 	batch batchKeys,
 	readTier int,
-	readType string,
+	request *tikvrpc.Request,
 	regionErr *errorpb.Error,
 	lockInfo *batchGetLockInfo,
 	opt kv.BatchGetOptions,
@@ -220,6 +220,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	var (
 		resolvingRecordToken  *int
 		readAfterResolveLocks bool
+		readType              = request.ReadType
 	)
 	for {
 		if regionErr != nil {
@@ -239,7 +240,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 				cli.UpdateResolvingLocks(lockInfo.locks, s.version, *resolvingRecordToken)
 			}
 			readAfterResolveLocks = true
-			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli, request); err != nil {
 				return err
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
@@ -296,6 +297,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 		if err != nil {
 			return err
 		}
+		request = req
 		regionErr, err = resp.GetRegionError()
 		if err != nil {
 			return err

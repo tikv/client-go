@@ -437,6 +437,34 @@ type ResolveLocksOptions struct {
 	ForRead                  bool
 	Detail                   *util.ResolveLockDetail
 	PessimisticRegionResolve bool
+	LockHintsInRequest       LockHintsInRequest
+}
+
+// LockHintsInRequest contains the resolved and committed lock transaction IDs
+// carried by a request.
+type LockHintsInRequest struct {
+	Resolved  map[uint64]struct{}
+	Committed map[uint64]struct{}
+}
+
+// NewLockHintsInRequest creates LockHintsInRequest from resolved and committed lock
+// transaction IDs.
+func NewLockHintsInRequest(resolved, committed []uint64) LockHintsInRequest {
+	return LockHintsInRequest{
+		Resolved:  txnIDsToSet(resolved),
+		Committed: txnIDsToSet(committed),
+	}
+}
+
+func txnIDsToSet(txnIDs []uint64) map[uint64]struct{} {
+	if len(txnIDs) == 0 {
+		return nil
+	}
+	result := make(map[uint64]struct{}, len(txnIDs))
+	for _, txnID := range txnIDs {
+		result[txnID] = struct{}{}
+	}
+	return result
 }
 
 // ResolveLockResult is the result struct for resolving lock.
@@ -522,7 +550,32 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Unlock()
 }
 
+func backoffOnLockHintsInRequest(bo *retry.Backoffer, opts ResolveLocksOptions) error {
+	if !opts.ForRead {
+		return nil
+	}
+	for _, lock := range opts.Locks {
+		var lockType string
+		_, resolved := opts.LockHintsInRequest.Resolved[lock.TxnID]
+		_, committed := opts.LockHintsInRequest.Committed[lock.TxnID]
+		switch {
+		case resolved:
+			lockType = "resolved"
+		case committed:
+			lockType = "committed"
+		}
+		if lockType != "" {
+			return bo.Backoff(retry.BoTxnLockFast,
+				errors.Errorf("lock %d was reported despite being included in the request's %s locks", lock.TxnID, lockType))
+		}
+	}
+	return nil
+}
+
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (result ResolveLockResult, err error) {
+	if err = backoffOnLockHintsInRequest(bo, opts); err != nil {
+		return result, err
+	}
 	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve
 	util.EvalFailpoint("tryResolveLock")
 	if lr.testingKnobs.meetLock != nil {
