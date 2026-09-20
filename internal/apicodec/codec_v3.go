@@ -73,7 +73,9 @@ func NewCodecV3(mode Mode, identity *apipb.KeyspaceIdentity, keyspaceName string
 		keyspaceMeta: keyspaceMeta,
 	}
 	base.reqPool.New = func() any { return &tikvrpc.Request{} }
-	return &codecV3{codecV2: base, physicalPrefix: physicalPrefix, physicalEndKey: physicalEndKey}, nil
+	codec := &codecV3{codecV2: base, physicalPrefix: physicalPrefix, physicalEndKey: physicalEndKey}
+	base.regionResponseCodec = codec
+	return codec, nil
 }
 
 func (c *codecV3) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
