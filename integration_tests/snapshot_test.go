@@ -720,6 +720,7 @@ func (s *testSnapshotSuite) TestAsyncBatchGetStats() {
 	preSplitLoc, err := regionCache.LocateKey(retry.NewNoopBackoff(ctx), splitKey)
 	s.Require().NoError(err)
 	_, err = s.store.SplitRegions(ctx, [][]byte{splitKey}, false, nil)
+<<<<<<< HEAD
 	s.Require().NoError(err)
 	regionCache.InvalidateCachedRegion(preSplitLoc.Region)
 	s.Require().Eventually(func() bool {
@@ -738,6 +739,28 @@ func (s *testSnapshotSuite) TestAsyncBatchGetStats() {
 		}
 		return false
 	}, 5*time.Second, 100*time.Millisecond)
+=======
+	s.Nil(err)
+	s.store.GetRegionCache().InvalidateCachedRegion(preSplitLoc.Region)
+	var leftLoc, rightLoc *tikv.KeyLocation
+	s.Require().Eventually(func() bool {
+		leftLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), leftKey)
+		if err != nil {
+			return false
+		}
+		rightLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), rightKey)
+		if err != nil {
+			return false
+		}
+		if leftLoc.Region.GetID() == rightLoc.Region.GetID() {
+			// PD may still return the pre-split region immediately after the split.
+			// Invalidate it again so the next attempt does not reuse stale metadata.
+			s.store.GetRegionCache().InvalidateCachedRegion(leftLoc.Region)
+			return false
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond)
+>>>>>>> 01294c01 (txnkv: wait for async BatchGet retry processing on cancel (#2074))
 
 	originalClient := s.store.GetTiKVClient()
 	detailClient := &pointResponseBatchGetClient{Client: originalClient}
