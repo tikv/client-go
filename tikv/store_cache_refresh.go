@@ -632,6 +632,16 @@ func (s *KVStore) reloadOriginalMatch(ctx context.Context, orig locate.WorkStore
 	if !ok {
 		return locate.WorkStoreMatch{}, false, false
 	}
+	if !resolved {
+		s.locateFailedRange(ctx, orig.StartKey, orig.EndKey)
+		resolved = s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
+	}
+	if !resolved {
+		// The replacement still works on storeID, or a sibling is missing.
+		// Do not return a single match: a later probe could move it and make
+		// the original range look ready while its sibling remains unresolved.
+		return locate.WorkStoreMatch{}, false, false
+	}
 	return m, false, true
 }
 
