@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -598,11 +599,12 @@ func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch *batch
 	return batch.relocate(bo, regionCache)
 }
 
-func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper) error {
+func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper, hints txnlock.LockHintsInRequest) error {
 	resolveLocksOpts := txnlock.ResolveLocksOptions{
-		CallerStartTS: s.version,
-		Locks:         lockInfo.locks,
-		Detail:        s.GetResolveLockDetail(),
+		CallerStartTS:      s.version,
+		Locks:              lockInfo.locks,
+		Detail:             s.GetResolveLockDetail(),
+		LockHintsInRequest: hints,
 	}
 	resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 	msBeforeExpired := resolveLocksRes.TTL
@@ -714,7 +716,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				isStaleness = false
 				busyThresholdMs = 0
 			}
-			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
+			hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli, hints); err != nil {
 				return err
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
@@ -931,10 +934,12 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 					req.BusyThresholdMs = 0
 				}
 				firstLock = lock
-			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID {
-				// If it is an autocommit point get, it needs to be blocked only
-				// by the first lock it meets. During retries, if the encountered
-				// lock is different from the first one, we can omit it.
+			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID &&
+				!slices.Contains(req.ResolvedLocks, lock.TxnID) && !slices.Contains(req.CommittedLocks, lock.TxnID) {
+				// An autocommit point get can ignore locks from transactions other
+				// than the first one it encounters. If TiKV returns such a lock
+				// despite a request hint, fall through to normal lock resolution
+				// and its backoff instead of retrying the ignored hint immediately.
 				cli.resolvedLocks.Put(lock.TxnID)
 				continue
 			}
@@ -947,9 +952,10 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
-				CallerStartTS: s.version,
-				Locks:         locks,
-				Detail:        s.GetResolveLockDetail(),
+				CallerStartTS:      s.version,
+				Locks:              locks,
+				Detail:             s.GetResolveLockDetail(),
+				LockHintsInRequest: txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks),
 			}
 			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			if err != nil {

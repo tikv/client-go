@@ -24,6 +24,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 )
@@ -161,7 +162,16 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 		if regionErr != nil {
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
+<<<<<<< HEAD
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, regionErr, nil, opt, collectF)
+=======
+				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, regionErr, nil, opt, collectF)
+				// Finish request-owned processing before scheduling the completion.
+				// Schedule may race with RunLoop cancellation, but it no longer
+				// accesses this request's result collector or snapshot stats.
+				retryWorkers.Done()
+>>>>>>> 5f38569c (txnkv: back off when TiKV ignores lock hints (#2075))
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithRegionError.Inc()
@@ -177,7 +187,14 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 		if len(lockInfo.lockedKeys) > 0 {
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
+<<<<<<< HEAD
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, nil, lockInfo, opt, collectF)
+=======
+				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
+				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, nil, lockInfo, opt, collectF)
+				// See the Region-error retry path above.
+				retryWorkers.Done()
+>>>>>>> 5f38569c (txnkv: back off when TiKV ignores lock hints (#2075))
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithLockError.Inc()
@@ -197,6 +214,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	batch batchKeys,
 	readTier int,
 	readType string,
+	hints txnlock.LockHintsInRequest,
 	regionErr *errorpb.Error,
 	lockInfo *batchGetLockInfo,
 	opt kv.BatchGetOptions,
@@ -224,7 +242,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 				cli.UpdateResolvingLocks(lockInfo.locks, s.version, *resolvingRecordToken)
 			}
 			readAfterResolveLocks = true
-			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli, hints); err != nil {
 				return err
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
@@ -294,6 +312,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 			return err
 		}
 		if len(lockInfo.lockedKeys) > 0 {
+			hints = txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
 			continue
 		}
 		return nil
