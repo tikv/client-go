@@ -599,12 +599,12 @@ func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch *batch
 	return batch.relocate(bo, regionCache)
 }
 
-func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper, req *tikvrpc.Request) error {
+func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper, hints txnlock.LockHintsInRequest) error {
 	resolveLocksOpts := txnlock.ResolveLocksOptions{
 		CallerStartTS:      s.version,
 		Locks:              lockInfo.locks,
 		Detail:             s.GetResolveLockDetail(),
-		LockHintsInRequest: txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks),
+		LockHintsInRequest: hints,
 	}
 	resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 	msBeforeExpired := resolveLocksRes.TTL
@@ -716,7 +716,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				isStaleness = false
 				busyThresholdMs = 0
 			}
-			if err := s.handleBatchGetLocks(bo, lockInfo, cli, req); err != nil {
+			hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli, hints); err != nil {
 				return err
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
