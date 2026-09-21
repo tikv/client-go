@@ -998,6 +998,77 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.True(req.ReplicaRead)
 }
 
+// TestServerIsBusyOnlyTaintsReadStateForReadRequests verifies that a ServerIsBusy
+// rejected by write flow control (tikv/tikv#20076) does not update the store's
+// read-side load/health state, while read-path rejections still do.
+func (s *testRegionRequestToThreeStoresSuite) TestServerIsBusyOnlyTaintsReadStateForReadRequests() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	// The read-state update in onServerIsBusy happens before any backoff, so use a
+	// noop backoffer to return immediately instead of sleeping for seconds. That
+	// keeps the assertion right next to the update and avoids the async health
+	// check decaying the score in between.
+	noopBo := retry.NewNoopBackoff(context.Background())
+
+	// probe sends the given request through a fresh replica selector, delivers a
+	// ServerIsBusy to the selected store and returns that store. The store's
+	// read-side state is reset before each probe so cases don't leak into each
+	// other.
+	probe := func(req *tikvrpc.Request, busy *errorpb.ServerIsBusy) *Store {
+		selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+		s.Nil(err)
+		s.NotNil(selector)
+		rpcCtx, err := selector.next(bo, req)
+		s.Nil(err)
+		s.NotNil(rpcCtx)
+		store := rpcCtx.Store
+		s.NotNil(store)
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
+		store.healthStatus.updateSlowFlag()
+		store.loadStats.Store(nil)
+		_, _ = selector.onServerIsBusy(noopBo, rpcCtx, req, busy)
+		return store
+	}
+
+	prewrite := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{})
+	get := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
+
+	// A write rejected by write flow control must not be treated as read-side pressure.
+	store := probe(prewrite, &errorpb.ServerIsBusy{})
+	s.False(store.GetHealthStatus().IsSlow())
+	s.Zero(store.EstimatedWaitTime())
+
+	// Raw writes go through the same write flow control, so they must not taint read state either.
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
+	s.False(store.GetHealthStatus().IsSlow())
+	s.Zero(store.EstimatedWaitTime())
+
+	// A read-path rejection still marks the store as read-slow.
+	store = probe(get, &errorpb.ServerIsBusy{})
+	s.True(store.GetHealthStatus().IsSlow())
+
+	// Raw reads go through the read pool as well, so they must keep updating read state.
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
+	s.True(store.GetHealthStatus().IsSlow())
+
+	// BufferBatchGet is served by the read pool too.
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdBufferBatchGet, &kvrpcpb.BufferBatchGetRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
+	s.True(store.GetHealthStatus().IsSlow())
+
+	// An estimated wait carried by a write rejection must not pollute read load stats.
+	store = probe(prewrite, &errorpb.ServerIsBusy{EstimatedWaitMs: 500})
+	s.Zero(store.EstimatedWaitTime())
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{EstimatedWaitMs: 500})
+	s.Zero(store.EstimatedWaitTime())
+
+	// The same wait carried by a read is recorded as before.
+	store = probe(get, &errorpb.ServerIsBusy{EstimatedWaitMs: 500})
+	s.NotZero(store.EstimatedWaitTime())
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadWithFlashbackInProgress() {
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
