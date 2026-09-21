@@ -11,6 +11,7 @@ package tikv
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -379,6 +380,34 @@ func TestStoreCacheRefreshSetsInternalRequestSource(t *testing.T) {
 	cluster.ChangeLeader(regionID, peerIDs[1])
 	_ = store.RefreshStoreCache(context.Background(), storeIDs[0])
 	require.Equal(t, "internal_store_cache_refresh", got)
+}
+
+func TestStoreCacheRefreshUsesMaxTimestamp(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var version uint64
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onReq: func(req *tikvrpc.Request) {
+				if req.Type == tikvrpc.CmdGet {
+					version = req.Get().Version
+				}
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, result.Ready, "errors=%v", result.Errors)
+	require.Equal(t, uint64(math.MaxUint64), version)
 }
 
 func TestStoreCacheRefreshRecoversAfterRegionVersionReplacement(t *testing.T) {
@@ -899,6 +928,54 @@ func TestStoreCacheRefreshReloadsWhenNotLeaderPeerMissing(t *testing.T) {
 	require.Equal(t, newStore, kvstore.GetRegionCache().GetCachedRegionWithRLock(fresh.Region).GetLeaderStoreID())
 }
 
+func TestStoreCacheRefreshReloadsAfterRegionError(t *testing.T) {
+	for name, makeError := range map[string]func() *errorpb.Error{
+		"epoch-not-match": func() *errorpb.Error {
+			return &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+		},
+		"region-not-found": func() *errorpb.Error {
+			return &errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}
+		},
+		"key-not-in-region": func() *errorpb.Error {
+			return &errorpb.Error{KeyNotInRegion: &errorpb.KeyNotInRegion{}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+			require.NoError(t, err)
+			var first atomic.Bool
+			first.Store(true)
+			store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+				return &refreshInterceptClient{
+					Client: c,
+					getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+						if req.Type == tikvrpc.CmdGet && first.CompareAndSwap(true, false) {
+							return regionErrorGetResp(makeError())
+						}
+						return nil
+					},
+				}
+			}, nil, 0)
+			require.NoError(t, err)
+			defer store.Close()
+
+			storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+			bo := NewBackofferWithVars(context.Background(), 5000, nil)
+			loc, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+			require.NoError(t, err)
+			childPeers := cluster.AllocIDs(3)
+			childID := cluster.AllocID()
+			cluster.Split(regionID, childID, []byte("m"), childPeers, childPeers[1])
+			cluster.ChangeLeader(regionID, peerIDs[1])
+
+			result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+			require.True(t, result.Ready, "region=%s errors=%v remaining=%d failed=%d", loc.Region, result.Errors, result.Remaining, result.Failed)
+			require.Equal(t, 0, result.Remaining)
+			require.Equal(t, 0, result.Failed)
+		})
+	}
+}
+
 func TestStoreCacheRefreshKeepsFailureIfPeerStillMissingAfterReload(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
@@ -976,6 +1053,10 @@ func notLeaderGetResp(leader *metapb.Peer) *tikvrpc.Response {
 	return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 		NotLeader: &errorpb.NotLeader{Leader: leader},
 	}}}
+}
+
+func regionErrorGetResp(err *errorpb.Error) *tikvrpc.Response {
+	return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: err}}
 }
 
 type refreshInterceptClient struct {

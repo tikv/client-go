@@ -13,11 +13,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -432,13 +434,18 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 	if len(items) == 0 {
 		return nil, nil
 	}
+	idx := s.regionCache.NewWorkSpanIndex(storeID)
+	type locateCandidate struct {
+		item     gone
+		startKey []byte
+	}
+	var candidates []locateCandidate
 	var evs []probeEvent
 	located := false
 	for _, it := range items {
 		if ctx.Err() != nil {
 			break
 		}
-		idx := s.regionCache.NewWorkSpanIndex(storeID)
 		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 			continue
@@ -449,13 +456,23 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 			// probes, not another prefix walk from startKey.
 			continue
 		}
-		if !s.locateFailedRange(ctx, cur, it.u.endKey) {
-			continue
+		candidates = append(candidates, locateCandidate{item: it, startKey: cur})
+	}
+	for _, candidate := range candidates {
+		if ctx.Err() != nil {
+			break
 		}
-		located = true
-		// Only retire the stale id when the original range is fully covered by
-		// cache that has left storeID. Holes (split/uncached sibling) stay failed.
+		if s.locateFailedRange(ctx, candidate.startKey, candidate.item.u.endKey) {
+			located = true
+		}
+	}
+	if located {
+		// LocateKey updates the cache. Rebuild once after the batch of walks so
+		// split/merge replacements are checked against a consistent snapshot.
 		idx = s.regionCache.NewWorkSpanIndex(storeID)
+	}
+	for _, candidate := range candidates {
+		it := candidate.item
 		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 		}
@@ -535,9 +552,21 @@ func (s *KVStore) probeWorkStoreMatch(ctx context.Context, storeID uint64, m loc
 		case locate.WorkStoreGone:
 			return probeFailed, "cache entry expired or removed"
 		}
-		leader, errMsg := s.sendOneShotGet(ctx, m)
+		leader, reload, errMsg := s.sendOneShotGet(ctx, m)
 		if errMsg != "" {
 			last = errMsg
+			if reload && !reloaded {
+				reloaded = true
+				next, moved, ok := s.reloadOriginalMatch(ctx, m, storeID)
+				if moved {
+					return probeMoved, ""
+				}
+				if !ok {
+					return probeFailed, last
+				}
+				m = next
+				continue
+			}
 			if attempt+1 < storeCacheRefreshAttempts && !sleepCtx(ctx, storeCacheRefreshBackoff) {
 				return probeFailed, ctx.Err().Error()
 			}
@@ -625,7 +654,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (s *KVStore) sendOneShotGet(ctx context.Context, m locate.WorkStoreMatch) (*metapb.Peer, string) {
+func (s *KVStore) sendOneShotGet(ctx context.Context, m locate.WorkStoreMatch) (*metapb.Peer, bool, string) {
 	rpcCtx := kvrpcpb.Context{
 		RegionId:      m.Region.GetID(),
 		RegionEpoch:   m.Epoch,
@@ -634,31 +663,40 @@ func (s *KVStore) sendOneShotGet(ctx context.Context, m locate.WorkStoreMatch) (
 		ReplicaRead:   false,
 		RequestSource: util.BuildRequestSource(true, util.InternalTxnStoreCacheRefresh, ""),
 	}
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: m.StartKey, Version: 0}, rpcCtx)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: m.StartKey, Version: math.MaxUint64}, rpcCtx)
 	req.StoreTp = tikvrpc.TiKV
 	req.ReplicaReadType = kv.ReplicaReadLeader
 	req.ForwardedHost = ""
 
 	cli := s.GetTiKVClient()
 	if cli == nil {
-		return nil, "nil tikv client"
+		return nil, false, "nil tikv client"
 	}
 	cctx, cancel := context.WithTimeout(ctx, storeCacheRefreshRPCTimeout)
 	defer cancel()
 	resp, err := cli.SendRequest(cctx, m.Addr, req, storeCacheRefreshRPCTimeout)
 	if err != nil {
-		return nil, err.Error()
+		return nil, false, err.Error()
 	}
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		return nil, err.Error()
+		return nil, false, err.Error()
 	}
 	if regionErr == nil {
-		return nil, ""
+		return nil, false, ""
 	}
 	nl := regionErr.GetNotLeader()
 	if nl == nil {
-		return nil, regionErr.GetMessage()
+		message := regionErr.GetMessage()
+		if message == "" {
+			message = regionErr.String()
+		}
+		return nil, needsRegionReload(regionErr), message
 	}
-	return nl.GetLeader(), ""
+	return nl.GetLeader(), false, ""
+}
+
+func needsRegionReload(regionErr *errorpb.Error) bool {
+	return regionErr != nil && (regionErr.GetEpochNotMatch() != nil ||
+		regionErr.GetRegionNotFound() != nil || regionErr.GetKeyNotInRegion() != nil)
 }
