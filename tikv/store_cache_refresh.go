@@ -305,8 +305,6 @@ func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLo
 	}
 	for _, ev := range events {
 		switch ev.outcome {
-		case probeApplied, probeMoved:
-			delete(task.unresolved, ev.id)
 		case probeFailed:
 			task.unresolved[ev.id] = unresolvedFail{
 				startKey: append([]byte(nil), ev.startKey...),
@@ -612,9 +610,21 @@ func (s *KVStore) reloadOriginalMatch(ctx context.Context, orig locate.WorkStore
 	if err != nil || loc == nil {
 		return locate.WorkStoreMatch{}, false, false
 	}
+	// A replacement at the original start key is not enough to resolve the
+	// failed range: a split sibling may still be uncached or may still work on
+	// storeID. Walk the original span once when needed, then check the whole
+	// range before reporting it moved.
+	resolved := s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
 	switch s.regionCache.ClassifyWorkStore(loc.Region, storeID) {
 	case locate.WorkStoreMoved:
-		return locate.WorkStoreMatch{}, true, true
+		if !resolved {
+			s.locateFailedRange(ctx, orig.StartKey, orig.EndKey)
+			resolved = s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
+		}
+		if resolved {
+			return locate.WorkStoreMatch{}, true, true
+		}
+		return locate.WorkStoreMatch{}, false, false
 	case locate.WorkStoreGone:
 		return locate.WorkStoreMatch{}, false, false
 	}

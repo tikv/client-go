@@ -496,6 +496,106 @@ func TestStoreCacheRefreshKeepsFailureIfRightHalfUncached(t *testing.T) {
 	require.True(t, result.Ready, "POST must walk past startKey and converge after both halves left: %+v", result)
 }
 
+func TestStoreCacheRefreshKeepsFailureIfUncachedSplitSiblingStaysOnStore(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var first atomic.Bool
+	first.Store(true)
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type == tikvrpc.CmdGet && first.CompareAndSwap(true, false) {
+					return regionErrorGetResp(&errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
+				}
+				return nil
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	rightPeers := cluster.AllocIDs(3)
+	rightID := cluster.AllocID()
+	cluster.Split(regionID, rightID, []byte("m"), rightPeers, rightPeers[0])
+	cluster.ChangeLeader(regionID, peerIDs[1])
+
+	firstResult := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, firstResult.Ready, "uncached sibling must not be hidden by start-key reload: %+v", firstResult)
+	require.Greater(t, firstResult.Failed, 0)
+
+	secondResult := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, secondResult.Ready, "right sibling still works on target store: %+v", secondResult)
+	require.Greater(t, secondResult.Failed, 0)
+	require.Greater(t, secondResult.Remaining, 0)
+
+	cluster.ChangeLeader(rightID, rightPeers[1])
+	done := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, done.Ready, "both split siblings moved off target store: %+v", done)
+	require.Equal(t, 0, done.Remaining)
+	require.Equal(t, 0, done.Failed)
+}
+
+func TestStoreCacheRefreshConvergesAfterMergeReplacesFailedRegion(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var rightID uint64
+	var inject atomic.Bool
+	inject.Store(true)
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type == tikvrpc.CmdGet && req.Context.GetRegionId() == rightID && inject.CompareAndSwap(true, false) {
+					return regionErrorGetResp(&errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{RegionId: rightID}})
+				}
+				return nil
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, leftID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	oldLeft, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	rightPeers := cluster.AllocIDs(3)
+	rightID = cluster.AllocID()
+	cluster.Split(leftID, rightID, []byte("m"), rightPeers, rightPeers[0])
+	cluster.ChangeLeader(leftID, peerIDs[1])
+	store.GetRegionCache().InvalidateCachedRegion(oldLeft.Region)
+	left, err := store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	right, err := store.GetRegionCache().LocateKey(bo, []byte("z"))
+	require.NoError(t, err)
+	require.Equal(t, leftID, left.Region.GetID())
+	require.Equal(t, rightID, right.Region.GetID())
+	require.Equal(t, peerIDs[1], store.GetRegionCache().GetCachedRegionWithRLock(left.Region).GetLeaderPeerID())
+	require.Equal(t, rightPeers[0], store.GetRegionCache().GetCachedRegionWithRLock(right.Region).GetLeaderPeerID())
+
+	failed := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, failed.Ready, "injected RegionNotFound must leave the right region unresolved: %+v", failed)
+	require.Greater(t, failed.Failed, 0)
+
+	cluster.Merge(leftID, rightID)
+	done := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, done.Ready, "deleted region should resolve through merged replacement: %+v", done)
+	require.Equal(t, 0, done.Remaining)
+	require.Equal(t, 0, done.Failed)
+	merged, err := store.GetRegionCache().LocateKey(bo, []byte("z"))
+	require.NoError(t, err)
+	require.Equal(t, leftID, merged.Region.GetID(), "merged range should replace deleted region")
+	require.Empty(t, merged.EndKey, "merged replacement should cover the original tail")
+	require.Equal(t, peerIDs[1], store.GetRegionCache().GetCachedRegionWithRLock(merged.Region).GetLeaderPeerID())
+}
+
 func TestStoreCacheRefreshSplitRightHalfStaysThenConverges(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
