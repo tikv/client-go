@@ -541,6 +541,58 @@ func TestStoreCacheRefreshKeepsFailureIfUncachedSplitSiblingStaysOnStore(t *test
 	require.Equal(t, 0, done.Failed)
 }
 
+func TestStoreCacheRefreshReloadAppliedLeftStillWalksUncachedRightSibling(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var leftRegionID, leftPeerID, leftStoreID uint64
+	var calls atomic.Int32
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
+				if req.Type != tikvrpc.CmdGet || req.Context.GetRegionId() != leftRegionID {
+					return nil
+				}
+				switch calls.Add(1) {
+				case 1:
+					return regionErrorGetResp(&errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
+				case 2:
+					return notLeaderGetResp(&metapb.Peer{Id: leftPeerID, StoreId: leftStoreID})
+				default:
+					return nil
+				}
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	leftRegionID = regionID
+	leftPeerID = peerIDs[1]
+	leftStoreID = storeIDs[1]
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	rightPeers := cluster.AllocIDs(3)
+	rightID := cluster.AllocID()
+	cluster.Split(regionID, rightID, []byte("m"), rightPeers, rightPeers[0])
+
+	result := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.False(t, result.Ready, "moving only the reloaded left half must not hide the uncached right sibling: %+v", result)
+	require.Greater(t, result.Failed, 0)
+	require.Greater(t, result.Remaining, 0)
+	require.Equal(t, int32(1), calls.Load(), "the unresolved split range must not be probed as a single left match")
+
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	cluster.ChangeLeader(rightID, rightPeers[1])
+	done := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, done.Ready, "both split siblings moved off target store: %+v", done)
+	require.Equal(t, 0, done.Remaining)
+	require.Equal(t, 0, done.Failed)
+}
+
 func TestStoreCacheRefreshConvergesAfterMergeReplacesFailedRegion(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
