@@ -706,22 +706,32 @@ func isReadReq(tp tikvrpc.CmdType) bool {
 	}
 }
 
-// isReadReqForBusy reports whether the request is a read request that can be
-// rejected by TiKV's read path, i.e. the read pool
-// (Storage::read_pool_spawn_with_busy_check), the coprocessor read pool, or the
-// raftstore local reader. Only such requests can carry a read-side ServerIsBusy,
-// so only they should update the store's read load/health state in
-// onServerIsBusy.
+// isReadReqForBusy reports whether the request is served by TiKV's read path,
+// i.e. it can be rejected with a read-side ServerIsBusy and therefore reflects
+// the store's read health. Only such requests should update the store's read
+// load/health state in onServerIsBusy; otherwise a write rejected by write flow
+// control would taint a store that serves reads normally (tikv/tikv#20076).
+//
+// The read path covers:
+//   - the storage read pool (Storage::read_pool_spawn_with_busy_check and the
+//     direct ReadPool::spawn_handle users scan_lock / raw_checksum),
+//   - the coprocessor read pool, and
+//   - the raftstore local reader.
 //
 // It is intentionally broader than isReadReq: raw KV reads and BufferBatchGet
-// also go through the read-pool busy check, and their ServerIsBusy must not be
-// mistaken for write-side backpressure (tikv/tikv#20076).
+// also go through the read-pool busy check. Commands that are not served by the
+// read path (writes, txn bookkeeping, admin commands) are excluded even if they
+// are read-only.
+//
+// Keep this in sync with tikvrpc.CmdType: TestIsReadReqForBusyCoversAllCmdTypes
+// fails when a new command type is added without being classified here.
 func isReadReqForBusy(tp tikvrpc.CmdType) bool {
 	switch tp {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdBufferBatchGet,
 		tikvrpc.CmdRawGet, tikvrpc.CmdRawBatchGet, tikvrpc.CmdRawScan,
-		tikvrpc.CmdRawGetKeyTTL,
+		tikvrpc.CmdRawGetKeyTTL, tikvrpc.CmdRawChecksum,
+		tikvrpc.CmdScanLock,
 		tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop:
 		return true
 	default:

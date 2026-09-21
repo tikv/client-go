@@ -1188,6 +1188,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestServerIsBusyOnlyTaintsReadStat
 	store = probe(tikvrpc.NewRequest(tikvrpc.CmdBufferBatchGet, &kvrpcpb.BufferBatchGetRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
 	s.True(store.GetHealthStatus().IsSlow())
 
+	// ScanLock and RawChecksum are served by the read pool directly (without the
+	// busy check), so a read-side ServerIsBusy from them must be honored too.
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
+	s.True(store.GetHealthStatus().IsSlow())
+	store = probe(tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{}, kvrpcpb.Context{}), &errorpb.ServerIsBusy{})
+	s.True(store.GetHealthStatus().IsSlow())
+
 	// An estimated wait carried by a write rejection must not pollute read load stats.
 	store = probe(prewrite, &errorpb.ServerIsBusy{EstimatedWaitMs: 500})
 	s.Zero(store.EstimatedWaitTime())
