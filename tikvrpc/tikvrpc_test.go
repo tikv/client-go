@@ -162,26 +162,6 @@ func TestSetDefaultTxnProtocolVersionRejectsOutOfRangeValues(t *testing.T) {
 	}
 }
 
-// allCmdTypes lists every concrete CmdType this package knows about. Tests that
-// classify commands must cover this list exactly, so adding a new CmdType forces
-// an explicit protected/required decision instead of silently inheriting the
-// unprotected default.
-func allCmdTypes() []CmdType {
-	return []CmdType{
-		CmdGet, CmdScan, CmdPrewrite, CmdCommit, CmdCleanup, CmdBatchGet, CmdBatchRollback,
-		CmdScanLock, CmdResolveLock, CmdGC, CmdDeleteRange, CmdPessimisticLock,
-		CmdPessimisticRollback, CmdTxnHeartBeat, CmdCheckTxnStatus, CmdCheckSecondaryLocks,
-		CmdFlashbackToVersion, CmdPrepareFlashbackToVersion, CmdFlush, CmdBufferBatchGet,
-		CmdRawGet, CmdRawBatchGet, CmdRawPut, CmdRawBatchPut, CmdRawDelete, CmdRawBatchDelete,
-		CmdRawDeleteRange, CmdRawScan, CmdRawGetKeyTTL, CmdRawCompareAndSwap, CmdRawChecksum,
-		CmdUnsafeDestroyRange, CmdRegisterLockObserver, CmdCheckLockObserver, CmdRemoveLockObserver,
-		CmdPhysicalScanLock, CmdStoreSafeTS, CmdLockWaitInfo, CmdGetHealthFeedback,
-		CmdBroadcastTxnStatus, CmdCop, CmdCopStream, CmdBatchCop, CmdMPPTask, CmdMPPConn,
-		CmdMPPCancel, CmdMPPAlive, CmdMvccGetByKey, CmdMvccGetByStartTs, CmdSplitRegion,
-		CmdDebugGetRegionProperties, CmdCompact, CmdGetTiFlashSystemTable, CmdEmpty,
-	}
-}
-
 func TestNewRequestDoesNotInjectTxnProtocolVersion(t *testing.T) {
 	useDefaultTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 
