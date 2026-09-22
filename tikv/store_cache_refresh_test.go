@@ -1091,6 +1091,12 @@ func TestStoreCacheRefreshReloadsAfterRegionError(t *testing.T) {
 		"key-not-in-region": func() *errorpb.Error {
 			return &errorpb.Error{KeyNotInRegion: &errorpb.KeyNotInRegion{}}
 		},
+		"mismatch-peer-id": func() *errorpb.Error {
+			return &errorpb.Error{MismatchPeerId: &errorpb.MismatchPeerId{}}
+		},
+		"is-witness": func() *errorpb.Error {
+			return &errorpb.Error{IsWitness: &errorpb.IsWitness{}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
