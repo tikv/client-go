@@ -427,8 +427,8 @@ type txnProtocolVersionReload struct {
 //     one PD request is in flight per Store.
 //   - The cooldown starts when an attempt starts, and both success and failure
 //     enter it. During cooldown callers reuse the completed task's result, so
-//     concurrent admission rejections can share a successful repair even if
-//     they arrive just after its PD lookup finishes.
+//     concurrent local selection failures can share a successful repair even
+//     if they arrive just after its PD lookup finishes.
 //   - The actual PD fetch runs as a shared task bound to lifecycle, not to any
 //     waiter's request. Every caller, including the one that started the task,
 //     waits on the task or on its own request context. The result distinguishes

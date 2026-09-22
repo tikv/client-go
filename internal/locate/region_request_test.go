@@ -57,7 +57,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -69,7 +68,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/txnprotocol"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -175,98 +173,83 @@ func (s *testRegionRequestToSingleStoreSuite) TestTransportIncompatibilityIsTerm
 	}
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestFailedTxnProtocolReloadCannotAuthorizeResend() {
+func (s *testRegionRequestToSingleStoreSuite) TestTxnProtocolResponseRangeAuthorizesResendWithoutReload() {
 	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Require().NoError(err)
 	control := wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 1)
 	store := s.resolveStoreForTxnVersionTests()
-	s.publishStoreTxnProtocolVersionRange(store, 0, 1, true)
+	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 	rpcCtx, err := s.cache.GetTiKVRPCContext(s.bo, region.Region, kv.ReplicaReadLeader, 0)
 	s.Require().NoError(err)
+	// A PD failure must not affect recovery from the Store's explicit response.
 	control.fail.Store(true)
-	control.onFetch = func() {
-		store.publishTxnProtocolVersionRange(storeMetaWithRange(store.StoreID(), 0, 0), time.Now())
-	}
 	state := &sendReqState{RegionRequestSender: s.regionRequestSender}
-	state.vars.txnVersion, state.vars.txnVersionSelected = 1, true
-	rejection := txnVersionTestStrictRejection(1, 0, 0)
+	state.vars.txnVersion, state.vars.txnVersionSelected = 2, true
+	rejection := txnVersionTestStrictRejection(2, 0, 1)
+	fetches := control.fetchCalls()
 	resend, err := state.onIncompatibleRequest(s.bo, rpcCtx, txnVersionTestGetRequest(), rejection.IncompatibleRequest)
-	s.Nil(resend)
-	var incompatible *tikverr.ErrIncompatibleRequest
-	s.Require().ErrorAs(err, &incompatible)
-	s.Same(rejection.IncompatibleRequest, incompatible.IncompatibleRequest)
+	s.Require().NoError(err)
+	s.Require().NotNil(resend)
+	s.Same(rpcCtx, resend.rpcCtx)
+	s.Equal(uint32(1), resend.version)
+	s.Equal(fetches, control.fetchCalls())
+	s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 2}, store.getTxnProtocolVersionRange())
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestTxnProtocolResendRechecksChangedCache() {
+func (s *testRegionRequestToSingleStoreSuite) TestTxnProtocolResendIgnoresChangedCache() {
 	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Require().NoError(err)
-	wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 1)
 	store := s.resolveStoreForTxnVersionTests()
 	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 	rpcCtx, err := s.cache.GetTiKVRPCContext(s.bo, region.Region, kv.ReplicaReadLeader, 0)
 	s.Require().NoError(err)
+	var sentVersion uint32
+	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		sentVersion = req.GetTxnProtocolVersion()
+		return txnVersionTestSuccessResponse(req), nil
+	}}, oracle.NoopReadTSValidator{})
 	req := txnVersionTestGetRequest()
 	state := &sendReqState{
-		RegionRequestSender: s.regionRequestSender,
+		RegionRequestSender: sender,
 		args:                sendReqArgs{bo: s.bo, req: req, regionID: region.Region, timeout: time.Second},
 	}
 	state.vars.txnVersion, state.vars.txnVersionSelected = 2, true
 	rejection := txnVersionTestStrictRejection(2, 0, 1)
-	// Seed a completed reload whose result remains reusable during cooldown.
-	// A newer cache publication must still be checked before the resend.
-	_, err = store.reloadTxnProtocolVersionRange(s.bo.GetCtx(), s.cache.stores, s.cache.bg.ctx)
-	s.Require().NoError(err)
-	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
+	// A concurrent publication must neither override the response-authorized
+	// resend nor be overwritten by it.
+	s.publishStoreTxnProtocolVersionRange(store, 0, 0, true)
 	state.vars.rpcCtx = rpcCtx
 	state.vars.regionErr = rejection
 	s.True(state.next())
-	var incompatible *tikverr.ErrIncompatibleRequest
-	s.Require().ErrorAs(state.vars.err, &incompatible)
-	s.Same(rejection.IncompatibleRequest, incompatible.IncompatibleRequest)
-	s.Zero(state.vars.sendTimes)
+	s.NoError(state.vars.err)
+	s.Equal(uint32(1), sentVersion)
+	s.Equal(1, state.vars.sendTimes)
+	s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 0}, store.getTxnProtocolVersionRange())
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestTxnProtocolResendDoesNotReloadAgain() {
+func (s *testRegionRequestToSingleStoreSuite) TestTxnProtocolResponseRangeMustSatisfyPayload() {
 	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Require().NoError(err)
-	control := wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 2)
+	control := wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 0)
 	store := s.resolveStoreForTxnVersionTests()
 	rpcCtx, err := s.cache.GetTiKVRPCContext(s.bo, region.Region, kv.ReplicaReadLeader, 0)
 	s.Require().NoError(err)
-	_, err = store.reloadTxnProtocolVersionRange(s.bo.GetCtx(), s.cache.stores, s.cache.bg.ctx)
-	s.Require().NoError(err)
-
-	// Recovery can reuse the successful reload result, but the newer cache
-	// snapshot cannot express the shared-lock payload. It must fail without
-	// entering reload again, even through the cooldown path.
-	s.publishStoreTxnProtocolVersionRange(store, 0, 0, true)
-	suppressedCount := func() float64 {
-		var metric dto.Metric
-		s.Require().NoError(metrics.TxnProtocolStoreReloadCounterWithSuppressed.Write(&metric))
-		return metric.GetCounter().GetValue()
-	}
-	suppressedBefore := suppressedCount()
+	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 	fetchesBefore := control.fetchCalls()
-	req := txnVersionTestSharedPrewriteRequest()
-	state := &sendReqState{
-		RegionRequestSender: s.regionRequestSender,
-		args:                sendReqArgs{bo: s.bo, req: req, regionID: region.Region, timeout: time.Second},
-	}
+	state := &sendReqState{RegionRequestSender: s.regionRequestSender}
 	state.vars.txnVersion, state.vars.txnVersionSelected = 3, true
-	rejection := txnVersionTestStrictRejection(3, 0, 2)
-	state.vars.rpcCtx = rpcCtx
-	state.vars.regionErr = rejection
-	s.True(state.next())
+	rejection := txnVersionTestStrictRejection(3, 0, 1)
+	resend, err := state.onIncompatibleRequest(s.bo, rpcCtx, txnVersionTestSharedPrewriteRequest(), rejection.IncompatibleRequest)
+	s.Nil(resend)
 	var incompatible *tikverr.ErrIncompatibleRequest
-	s.Require().ErrorAs(state.vars.err, &incompatible)
+	s.Require().ErrorAs(err, &incompatible)
 	s.Same(rejection.IncompatibleRequest, incompatible.IncompatibleRequest)
-	s.True(state.vars.txnVersionResendUsed)
-	s.Zero(state.vars.sendTimes)
+	s.False(state.vars.txnVersionResendUsed)
 	s.Equal(fetchesBefore, control.fetchCalls())
-	s.Equal(suppressedBefore+1, suppressedCount())
+	s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 2}, store.getTxnProtocolVersionRange())
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestAsyncTxnProtocolReloadDoesNotBlockCaller() {
@@ -839,9 +822,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqWithoutTrustedStoreFall
 }
 
 // TestSendReqRecoversFromStrictUpperBoundRejection proves the controlled resend:
-// a strict upper-bound admission rejection reloads the range once, reselects a
-// different valid declaration and resends the same shard without re-executing the
-// business action twice.
+// a strict upper-bound admission rejection selects from the returned range and
+// resends the same shard without re-executing the business action twice.
 // noAttachClient models a send implementation that returns before attaching a
 // wire context, for example due to an encode failure.
 type noAttachClient struct {
@@ -1027,8 +1009,10 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqRecoversFromStrictUpper
 	store := s.resolveStoreForTxnVersionTests()
 	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
-	// A Store rollback lowers its admission ceiling; reload and downgrade once.
+	// A Store rollback lowers its admission ceiling. Its response authorizes one
+	// downgrade without waiting for PD metadata to catch up.
 	control.setRange(0, 1)
+	fetches := control.fetchCalls()
 
 	var (
 		attempts []uint32
@@ -1055,6 +1039,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqRecoversFromStrictUpper
 	s.Equal(1, retryTimes)
 	// The rejected attempt had no side effect; the business action ran once.
 	s.Equal(1, applied)
+	s.Equal(fetches, control.fetchCalls())
+	s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 2}, store.getTxnProtocolVersionRange())
 }
 
 // TestOnIncompatibleRequestStrictRecoveryBranches covers every branch that must
@@ -1069,16 +1055,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestStrictRec
 	s.Require().NotNil(rpcCtx)
 
 	type outcome struct {
-		retry bool
+		retry   bool
+		version uint32
 		// terminal reports that a typed incompatible error must be returned.
 		terminal bool
-		// reloaded reports whether the range was refreshed.
-		reloaded bool
 	}
 
 	for _, tc := range []struct {
 		name            string
 		attemptSelected uint32
+		resendUsed      bool
 		prepare         func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error
 		want            outcome
 	}{
@@ -1086,10 +1072,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestStrictRec
 			name:            "valid_upper_bound_resends",
 			attemptSelected: 1,
 			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
-				control.setRange(0, 2)
 				return txnVersionTestStrictRejection(1, 0, 0)
 			},
-			want: outcome{retry: true, reloaded: true},
+			want: outcome{retry: true, version: 0},
 		},
 		{
 			name:            "unknown_reason_is_terminal",
@@ -1113,7 +1098,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestStrictRec
 			name:            "echoed_provided_mismatch_is_terminal",
 			attemptSelected: 1,
 			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
-				control.setRange(0, 2)
 				return txnVersionTestStrictRejection(3, 0, 0)
 			},
 			want: outcome{terminal: true},
@@ -1122,43 +1106,48 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestStrictRec
 			name:            "provided_within_range_is_terminal",
 			attemptSelected: 1,
 			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
-				control.setRange(0, 2)
 				return txnVersionTestStrictRejection(1, 0, 1)
 			},
 			want: outcome{terminal: true},
 		},
 		{
-			name:            "reload_returns_same_range_is_terminal",
-			attemptSelected: 1,
+			name:            "response_range_cannot_satisfy_payload_is_terminal",
+			attemptSelected: 3,
 			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
-				control.setRange(0, 1)
-				return txnVersionTestStrictRejection(1, 0, 0)
+				*req = *txnVersionTestSharedPrewriteRequest()
+				return txnVersionTestStrictRejection(3, 0, 1)
 			},
-			want: outcome{terminal: true, reloaded: true},
+			want: outcome{terminal: true},
 		},
 		{
-			name:            "reload_failure_is_terminal",
+			name:            "unprotected_current_payload_is_terminal",
 			attemptSelected: 1,
 			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
-				control.fail.Store(true)
+				*req = *tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{})
 				return txnVersionTestStrictRejection(1, 0, 0)
 			},
-			want: outcome{terminal: true, reloaded: true},
+			want: outcome{terminal: true},
+		},
+		{
+			name:            "second_resend_is_terminal",
+			attemptSelected: 1,
+			resendUsed:      true,
+			prepare: func(t *testing.T, control *txnVersionPDControl, req *tikvrpc.Request) *errorpb.Error {
+				return txnVersionTestStrictRejection(1, 0, 0)
+			},
+			want: outcome{terminal: true},
 		},
 	} {
 		s.Run(tc.name, func() {
 			control := wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 1)
 			store := s.resolveStoreForTxnVersionTests()
-			s.publishStoreTxnProtocolVersionRange(store, 0, 1, true)
-			// Each branch must be able to reload regardless of a previous branch.
-			store.txnProtocolVersionReloadMu.Lock()
-			store.txnProtocolVersionReloadMu.lastAttempt = time.Time{}
-			store.txnProtocolVersionReloadMu.Unlock()
+			s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 			useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 
 			reqSend := &sendReqState{RegionRequestSender: NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})}
 			reqSend.vars.txnVersion = tc.attemptSelected
 			reqSend.vars.txnVersionSelected = true
+			reqSend.vars.txnVersionResendUsed = tc.resendUsed
 			req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
 			regionErr := tc.prepare(s.T(), control, req)
 			before := control.fetchCalls()
@@ -1175,18 +1164,12 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestStrictRec
 			} else {
 				s.NoError(err)
 			}
-			if tc.want.reloaded {
-				s.Greater(control.fetchCalls(), before)
-			} else {
-				s.Equal(before, control.fetchCalls())
-			}
+			s.Equal(before, control.fetchCalls())
+			s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 2}, store.getTxnProtocolVersionRange())
 			if tc.want.retry {
 				s.Same(rpcCtx, resend.rpcCtx)
+				s.Equal(tc.want.version, resend.version)
 				s.True(reqSend.vars.txnVersionResendUsed)
-				// The handler only validates the reselected declaration; the retry
-				// loop prepares the resend attempt afresh. The refreshed range is
-				// what makes the new selection valid.
-				s.Equal(uint32(2), store.getTxnProtocolVersionRange().Max)
 			} else {
 				s.Nil(resend)
 			}
@@ -1447,30 +1430,15 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqOwnerCanceledDuringRelo
 	}, 2*time.Second, 5*time.Millisecond)
 }
 
-// TestOnIncompatibleRequestCanceledReloadWaiterDoesNotResend covers the
-// server-side recovery path: a caller that gives up while waiting for the
-// reload must not trigger the controlled resend.
-func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestCanceledReloadWaiterDoesNotResend() {
+func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestCanceledContextDoesNotResend() {
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Require().NoError(err)
 	s.Require().NotNil(region)
 
 	control := wrapStoreCacheForTxnProtocolVersionRange(s.cache, 0, 1)
 	store := s.resolveStoreForTxnVersionTests()
-	s.publishStoreTxnProtocolVersionRange(store, 0, 1, true)
+	s.publishStoreTxnProtocolVersionRange(store, 0, 2, true)
 	useTxnProtocolVersionForLocate(s.T(), kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
-
-	started := make(chan struct{})
-	var startedOnce sync.Once
-	control.onFetch = func() { startedOnce.Do(func() { close(started) }) }
-	control.releaseFetch = make(chan struct{})
-
-	ownerDone := make(chan struct{})
-	go func() {
-		defer close(ownerDone)
-		store.reloadTxnProtocolVersionRange(context.Background(), control.cache, context.Background())
-	}()
-	<-started
 
 	rpcCtx, err := s.cache.GetTiKVRPCContext(retry.NewNoopBackoff(context.Background()), region.Region, kv.ReplicaReadLeader, 0)
 	s.Require().NoError(err)
@@ -1478,39 +1446,23 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnIncompatibleRequestCanceledR
 
 	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	state := &sendReqState{RegionRequestSender: reqSend}
-	state.vars.txnVersion = 1
+	state.vars.txnVersion = 2
 	state.vars.txnVersionSelected = true
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
-	regionErr := txnVersionTestStrictRejection(1, 0, 0)
+	regionErr := txnVersionTestStrictRejection(2, 0, 1)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	bo := retry.NewBackofferWithVars(requestCtx, 100, nil)
+	fetches := control.fetchCalls()
+	resend, err := state.onIncompatibleRequest(bo, rpcCtx, req, regionErr.IncompatibleRequest)
 
-	type result struct {
-		retry bool
-		err   error
-	}
-	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
-	resultCh := make(chan result, 1)
-	go func() {
-		bo := retry.NewBackofferWithVars(waiterCtx, 100, nil)
-		resend, err := state.onIncompatibleRequest(bo, rpcCtx, req, regionErr.IncompatibleRequest)
-		resultCh <- result{retry: resend != nil, err: err}
-	}()
-
-	time.Sleep(20 * time.Millisecond)
-	cancelWaiter()
-	select {
-	case res := <-resultCh:
-		s.False(res.retry)
-		s.Require().Error(res.err)
-		var incompatible *tikverr.ErrIncompatibleRequest
-		s.Require().ErrorAs(res.err, &incompatible)
-		s.Equal(regionErr.GetIncompatibleRequest(), incompatible.IncompatibleRequest)
-		s.False(state.vars.txnVersionResendUsed)
-	case <-time.After(2 * time.Second):
-		s.T().Fatal("a canceled recovery waiter must stop waiting")
-	}
-
-	close(control.releaseFetch)
-	<-ownerDone
+	s.Nil(resend)
+	var incompatible *tikverr.ErrIncompatibleRequest
+	s.Require().ErrorAs(err, &incompatible)
+	s.Equal(regionErr.GetIncompatibleRequest(), incompatible.IncompatibleRequest)
+	s.False(state.vars.txnVersionResendUsed)
+	s.Equal(fetches, control.fetchCalls())
+	s.Equal(txnprotocol.StoreRange{Present: true, Min: 0, Max: 2}, store.getTxnProtocolVersionRange())
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrottled() {

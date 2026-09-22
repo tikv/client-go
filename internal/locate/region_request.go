@@ -966,13 +966,11 @@ type sendReqState struct {
 	invariants reqInvariants
 }
 
-// txnVersionResend records a recovery decision. The retry loop selects again,
-// but must preserve the original rejection if that selection no longer improves
-// on the rejected declaration.
+// txnVersionResend records a recovery decision derived from the rejected
+// attempt's response. The retry loop resends that version to the same Store.
 type txnVersionResend struct {
-	rpcCtx          *RPCContext
-	rejectedVersion uint32
-	originalErr     error
+	rpcCtx  *RPCContext
+	version uint32
 }
 
 // acquireRequestAttemptToken invokes the limiter for the store selected for the
@@ -1030,9 +1028,8 @@ func (s *sendReqState) prepareTxnProtocolVersion() (txnprotocol.Selection, error
 	if ctxErr := s.args.bo.GetCtx().Err(); ctxErr != nil {
 		return txnprotocol.Selection{}, errors.WithStack(ctxErr)
 	}
-	// Ordinary pre-send selection can use the current cache after a failed or
-	// suppressed refresh. Admission recovery, in contrast, requires a successful
-	// reload and uses its explicit result.
+	// Pre-send selection uses the current cache after a failed or suppressed
+	// refresh. A successful refresh has already published its result there.
 	reloaded, reloadErr := s.selectTxnProtocolVersion()
 	if reloadErr == nil {
 		if reloaded.Selected != selection.Selected {
@@ -1177,19 +1174,14 @@ func (s *sendReqState) next() (done bool) {
 	// Select the declaration for this attempt only after the execution Store is
 	// known and the region context is attached, so a local selection failure stops
 	// the attempt before it is sent and without consuming retry/backoff budget.
-	var selection txnprotocol.Selection
 	var err error
 	if resend != nil {
-		// Recovery already refreshed the Store metadata. Recheck the current
-		// selection without starting another reload.
-		selection, err = s.selectTxnProtocolVersion()
+		// The rejected Store supplied the range used to select this version. Keep
+		// this recovery independent of the asynchronously refreshed Store cache.
+		s.vars.txnVersion = resend.version
+		s.vars.txnVersionSelected = true
 	} else {
-		selection, err = s.prepareTxnProtocolVersion()
-	}
-	if resend != nil && (err != nil || selection.Selected == resend.rejectedVersion) {
-		s.vars.err = resend.originalErr
-		metrics.TxnProtocolRejectEventCounterWithServerRejection.Inc()
-		return true
+		_, err = s.prepareTxnProtocolVersion()
 	}
 	if err != nil {
 		s.vars.err = err
@@ -2164,14 +2156,12 @@ func isInvalidMaxTsUpdate(e *errorpb.Error) bool {
 //   - provided > returned max, i.e. the store's upper bound is the problem.
 //
 // The caller has already ruled out an envelope that also carries
-// UndeterminedResult. In the recoverable case the execution Store range is
-// reloaded from the PD leader and the declaration is recomputed from the current
-// payload. The rejected physical shard is resent only when the new selected
-// version differs from the attempt's and is still valid for the refreshed range
-// and the payload requirement.
+// UndeterminedResult. In the recoverable case the declaration is recomputed
+// directly from the returned range and current payload. The response is used
+// only for this resend; it does not update the Store capability cache.
 //
-// Everything else is terminal. A reload failure, inconsistent server fields or an
-// unchanged selection must return the original typed rejection, never a
+// Everything else is terminal. Inconsistent server fields or a range that
+// cannot express the payload must return the original typed rejection, never a
 // replacement error.
 func (s *sendReqState) onIncompatibleRequest(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, incompatible *errorpb.IncompatibleRequest,
@@ -2183,7 +2173,7 @@ func (s *sendReqState) onIncompatibleRequest(
 		}
 	}()
 
-	if ctx == nil || ctx.Store == nil || s.regionCache == nil {
+	if ctx == nil || ctx.Store == nil {
 		return nil, originalErr
 	}
 	if incompatible.GetReason() != errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange {
@@ -2212,33 +2202,32 @@ func (s *sendReqState) onIncompatibleRequest(
 	if s.vars.txnVersionResendUsed {
 		return nil, originalErr
 	}
+	if bo.GetCtx().Err() != nil {
+		return nil, originalErr
+	}
 
 	store := ctx.Store
-	refreshed, reloadErr := store.reloadTxnProtocolVersionRange(bo.GetCtx(), s.regionCache.stores, s.regionCache.bg.ctx)
-	if reloadErr != nil {
+	responseRange := txnprotocol.StoreRange{Present: true, Min: returnedMin, Max: returnedMax}
+	selection, selectionErr := txnprotocol.Prepare(req, store.StoreID(), responseRange)
+	if selectionErr != nil || !selection.Protected {
 		return nil, originalErr
 	}
 
-	reloaded, selectionErr := txnprotocol.Prepare(req, store.StoreID(), refreshed)
-	if selectionErr != nil || reloaded.Selected == attemptSelected {
-		return nil, originalErr
-	}
-
-	// The request was rejected before any side effect, and the refreshed range plus
-	// the current payload make the new declaration valid. Resend the rejected
-	// shard within the existing retry budget, without backoff, cache invalidation
-	// or replica selection.
+	// The request was rejected before any side effect, and the returned range plus
+	// the current payload make the new declaration valid. Resend the rejected shard
+	// within the existing retry budget, without backoff, cache invalidation,
+	// replica selection or a Store metadata reload.
 	s.vars.txnVersionResendUsed = true
 	logutil.Logger(bo.GetCtx()).Debug(
 		"resend request after txn protocol version admission rejection",
 		zap.Stringer("cmd", req.Type),
 		zap.Uint64("storeID", store.StoreID()),
 		zap.Uint32("previous", attemptSelected),
-		zap.Uint32("selected", reloaded.Selected),
-		zap.Uint32("required", reloaded.Required),
-		zap.Stringer("storeRange", reloaded.StoreRange),
+		zap.Uint32("selected", selection.Selected),
+		zap.Uint32("required", selection.Required),
+		zap.Stringer("storeRange", selection.StoreRange),
 	)
-	return &txnVersionResend{rpcCtx: ctx, rejectedVersion: attemptSelected, originalErr: originalErr}, nil
+	return &txnVersionResend{rpcCtx: ctx, version: selection.Selected}, nil
 }
 
 func (s *sendReqState) onRegionError(
