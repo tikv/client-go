@@ -143,10 +143,18 @@ func (c *RegionCache) WorkStoreMatchOnStore(id RegionVerID, storeID uint64) (Wor
 // ClassifyWorkStore reports whether a cached region still works on storeID.
 func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStoreMatchState {
 	r := c.GetCachedRegionWithRLock(id)
-	if r == nil || r.isCacheTTLExpired(time.Now().Unix()) {
+	if r == nil || r.meta == nil || r.isCacheTTLExpired(time.Now().Unix()) {
 		return WorkStoreGone
 	}
-	if r.GetLeaderStoreID() != storeID {
+	rs := r.getStore()
+	if rs == nil || int(rs.workTiKVIdx) >= rs.accessStoreNum(tiKVOnly) {
+		return WorkStoreGone
+	}
+	store, peer, _, _ := r.WorkStorePeer(rs)
+	if store == nil || peer == nil {
+		return WorkStoreGone
+	}
+	if store.StoreID() != storeID {
 		return WorkStoreMoved
 	}
 	return WorkStoreOnStore

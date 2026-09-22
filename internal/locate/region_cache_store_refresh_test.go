@@ -50,6 +50,58 @@ func BenchmarkCountWorkStoreMatches(b *testing.B) {
 	}
 }
 
+func TestClassifyWorkStoreNilStoreIsGone(t *testing.T) {
+	c := &RegionCache{}
+	c.mu.regions = make(map[RegionVerID]*Region)
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{ConfVer: 1, Version: 1},
+			Peers:       []*metapb.Peer{{Id: 1, StoreId: 1}},
+		},
+		ttl: time.Now().Unix() + 3600,
+	}
+	c.mu.regions[r.VerID()] = r
+	require.Equal(t, WorkStoreGone, c.ClassifyWorkStore(r.VerID(), 1))
+	require.NotPanics(t, func() { _ = r.GetLeaderStoreID() })
+}
+
+func TestClassifyWorkStoreConcurrentInvalidate(t *testing.T) {
+	c := &RegionCache{}
+	c.mu.regions = make(map[RegionVerID]*Region)
+	st := &Store{storeID: 1, addr: "127.0.0.1:20160"}
+	rs := &regionStore{
+		stores:      []*Store{st},
+		storeEpochs: []uint32{1},
+		workTiKVIdx: 0,
+	}
+	rs.accessIndex[tiKVOnly] = []int{0}
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{ConfVer: 1, Version: 1},
+			Peers:       []*metapb.Peer{{Id: 1, StoreId: 1}},
+		},
+		ttl: time.Now().Unix() + 3600,
+	}
+	r.setStore(rs)
+	c.mu.regions[r.VerID()] = r
+	id := r.VerID()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			_ = c.ClassifyWorkStore(id, 1)
+			_ = r.GetLeaderStoreID()
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		r.setStore(nil)
+		r.setStore(rs)
+	}
+	<-done
+}
+
 func TestSwitchWorkLeaderToPeerIfOnStoreUpdatesGlobalEpoch(t *testing.T) {
 	peers := []*metapb.Peer{{Id: 1, StoreId: 1}, {Id: 2, StoreId: 2}, {Id: 3, StoreId: 3}}
 	r := &Region{meta: &metapb.Region{Id: 1, Peers: peers}}

@@ -316,6 +316,7 @@ func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLo
 	s.dropMovedUnresolvedLocked(task, storeID)
 	res.Failed = len(task.unresolved)
 	res.Ready = res.Remaining == 0 && res.Failed == 0
+	res.Errors = nil
 	for _, u := range task.unresolved {
 		if u.err != "" && len(res.Errors) < 8 {
 			res.Errors = append(res.Errors, u.err)
