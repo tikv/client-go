@@ -35,10 +35,107 @@
 package transaction
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
+
+type cleanupTestStore struct {
+	*recorderStore
+	ctx context.Context
+}
+
+func (s *cleanupTestStore) Ctx() context.Context { return s.ctx }
+func (s *cleanupTestStore) IsClose() bool        { return false }
+
+// TestCommitterCleanupIgnoresKillSignal covers cleanup retries after a failed commit,
+// including preservation of the existing store-context cancellation boundary.
+func TestCommitterCleanupIgnoresKillSignal(t *testing.T) {
+	for _, mode := range []struct {
+		name        string
+		pessimistic bool
+		onePC       bool
+		asyncCommit bool
+	}{
+		{name: "optimistic 2PC"},
+		{name: "pessimistic 2PC", pessimistic: true},
+		{name: "async commit", asyncCommit: true},
+		{name: "pessimistic 1PC", pessimistic: true, onePC: true},
+	} {
+		for _, cancelStore := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cancelStore=%t", mode.name, cancelStore), func(t *testing.T) {
+				txn := newTestTxn(t, 1)
+				storeCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				store := &cleanupTestStore{recorderStore: &recorderStore{mockStore: txn.store}, ctx: storeCtx}
+				txn.KVTxn.store = store
+				txn.SetPessimistic(mode.pessimistic)
+				defer store.WaitGroup().Wait()
+
+				killed := uint32(1)
+				vars := kv.NewVariables(&killed)
+				txn.SetVars(vars)
+
+				key := []byte("key")
+				require.NoError(t, txn.Set(key, []byte("value")))
+				committer, err := newTwoPhaseCommitter(txn.KVTxn, 0)
+				require.NoError(t, err)
+				require.NoError(t, committer.initKeysAndMutations(context.Background()))
+				committer.forUpdateTS = 2
+				committer.setOnePC(mode.onePC)
+				committer.setAsyncCommit(mode.asyncCommit)
+				txn.committer = committer
+
+				rollbackRequests := 0
+				txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+					assert.NoError(t, ctx.Err(), "cleanup must not inherit request cancellation")
+					assert.Equal(t, txn.StartTS(), ctx.Value(retry.TxnStartKey))
+					rollbackRequests++
+					var regionErr *errorpb.Error
+					if rollbackRequests == 1 {
+						regionErr = &errorpb.Error{NotLeader: &errorpb.NotLeader{RegionId: 1}}
+						if cancelStore {
+							cancel()
+						}
+					}
+					if mode.onePC {
+						assert.Equal(t, tikvrpc.CmdPessimisticRollback, req.Type)
+						assert.Equal(t, txn.StartTS(), req.PessimisticRollback().StartVersion)
+						assert.Equal(t, uint64(2), req.PessimisticRollback().ForUpdateTs)
+						assert.Equal(t, [][]byte{key}, req.PessimisticRollback().Keys)
+						return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{RegionError: regionErr}}, nil
+					}
+					assert.Equal(t, tikvrpc.CmdBatchRollback, req.Type)
+					assert.Equal(t, txn.StartTS(), req.BatchRollback().StartVersion)
+					assert.Equal(t, [][]byte{key}, req.BatchRollback().Keys)
+					return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{RegionError: regionErr}}, nil
+				}
+
+				// Commit-failure cleanup already uses the store context. Keep that
+				// behavior even when the original request has been canceled.
+				ctx, cancelRequest := context.WithCancel(context.WithValue(context.Background(), retry.TxnStartKey, txn.StartTS()))
+				cancelRequest()
+				committer.cleanup(ctx)
+				committer.cleanWg.Wait()
+				if cancelStore {
+					require.Equal(t, 1, rollbackRequests, "store cancellation must still stop cleanup retries")
+				} else {
+					require.Equal(t, 2, rollbackRequests, "the kill signal must not stop cleanup retries")
+				}
+				require.Error(t, retry.NewBackofferWithVars(context.Background(), 1, vars).CheckKilled(), "the transaction's kill state must remain intact")
+			})
+		}
+	}
+}
 
 func TestMinCommitTsManager(t *testing.T) {
 	t.Run(

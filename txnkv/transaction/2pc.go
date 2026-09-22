@@ -1666,9 +1666,9 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 				)
 			}
 		} else if !c.isOnePC() {
-			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			err = c.cleanupMutations(newCleanupBackoffer(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 		} else if c.isPessimistic {
-			err = c.pessimisticRollbackMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			err = c.pessimisticRollbackMutations(newCleanupBackoffer(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 		}
 
 		if err != nil {
