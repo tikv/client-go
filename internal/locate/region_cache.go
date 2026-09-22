@@ -3198,7 +3198,7 @@ func (r *Region) GetLeaderPeerID() uint64 {
 // GetLeaderStoreID returns the store ID of the leader region.
 func (r *Region) GetLeaderStoreID() uint64 {
 	store := r.getStore()
-	if int(store.workTiKVIdx) >= store.accessStoreNum(tiKVOnly) {
+	if store == nil || int(store.workTiKVIdx) >= store.accessStoreNum(tiKVOnly) {
 		return 0
 	}
 	storeIdx, _ := store.accessStore(tiKVOnly, store.workTiKVIdx)
