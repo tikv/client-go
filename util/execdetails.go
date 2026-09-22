@@ -1334,13 +1334,14 @@ func (rd *RUDetails) AddRUV2(delta *kvrpcpb.RUV2) {
 }
 
 // DrainRUV2 returns the accumulated raw TiKV RU v2 counters and clears them.
+// The returned counters belong to the caller and are unaffected by later adds.
 func (rd *RUDetails) DrainRUV2() *kvrpcpb.RUV2 {
 	if rd == nil {
 		return nil
 	}
 	rd.rawRUV2Mu.Lock()
 	defer rd.rawRUV2Mu.Unlock()
-	drained := cloneRUV2(rd.rawRUV2)
+	drained := rd.rawRUV2
 	rd.rawRUV2 = nil
 	return drained
 }

@@ -28,7 +28,8 @@ type PointReadScanDetail struct {
 
 // PointResponseStats is a value snapshot of Get, BatchGet, and BufferBatchGet
 // response statistics. Its zero value is valid but has no response coverage.
-// Use RecordResponse and Merge to populate both the values and coverage state.
+// Use RecordResponse, Merge, or NewPointResponseStatsFromAggregate to populate
+// both the values and coverage state.
 // The value may be copied; callers must synchronize concurrent reads and writes.
 type PointResponseStats struct {
 	// ScanDetail is the aggregated storage work from ScanDetailV2 records.
@@ -45,6 +46,20 @@ type PointResponseStats struct {
 	invalid           bool
 }
 
+// NewPointResponseStatsFromAggregate constructs a snapshot from the aggregate of
+// one or more recognized point-read responses whose payloads have all been
+// accounted for. missingScanDetail must be true if any response lacked scan
+// detail. It copies the counters without numeric validation. Use the zero value
+// of PointResponseStats when no response was observed.
+func NewPointResponseStatsFromAggregate(scanDetail PointReadScanDetail, payloadBytes uint64, missingScanDetail bool) PointResponseStats {
+	return PointResponseStats{
+		ScanDetail:        scanDetail,
+		PayloadBytes:      payloadBytes,
+		seenResponse:      true,
+		missingScanDetail: missingScanDetail,
+	}
+}
+
 // IsValid reports whether the snapshot has not been invalidated. Missing scan
 // detail alone does not invalidate it; use ScanDetailComplete to check coverage.
 func (stats PointResponseStats) IsValid() bool {
@@ -57,7 +72,7 @@ func (stats PointResponseStats) IsValid() bool {
 // Complete message coverage does not prove that every protobuf scalar field is
 // supported by the backend because those fields do not carry presence.
 func (stats PointResponseStats) ScanDetailComplete() bool {
-	return stats.IsValid() && stats.seenResponse && !stats.missingScanDetail
+	return !stats.invalid && stats.seenResponse && !stats.missingScanDetail
 }
 
 // PayloadComplete reports whether at least one recognized response was observed
@@ -65,7 +80,7 @@ func (stats PointResponseStats) ScanDetailComplete() bool {
 // zero-byte misses and errors, but does not cover transport failures or
 // unrecognized responses.
 func (stats PointResponseStats) PayloadComplete() bool {
-	return stats.IsValid() && stats.seenResponse
+	return !stats.invalid && stats.seenResponse
 }
 
 // Invalidate marks the snapshot invalid. Recording or merging further responses
@@ -98,18 +113,14 @@ func (stats *PointResponseStats) RecordResponse(scanDetail *kvrpcpb.ScanDetailV2
 // either snapshot is invalid, the receiver becomes invalid without changing its
 // accumulated values. Merging a zero-value snapshot is a no-op.
 func (stats *PointResponseStats) Merge(other PointResponseStats) {
-	if !stats.IsValid() || !other.IsValid() {
+	if stats.invalid || other.invalid {
 		stats.Invalidate()
 		return
 	}
-	*stats = PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         stats.ScanDetail.TotalKeys + other.ScanDetail.TotalKeys,
-			ProcessedKeys:     stats.ScanDetail.ProcessedKeys + other.ScanDetail.ProcessedKeys,
-			ProcessedKeysSize: stats.ScanDetail.ProcessedKeysSize + other.ScanDetail.ProcessedKeysSize,
-		},
-		PayloadBytes:      stats.PayloadBytes + other.PayloadBytes,
-		seenResponse:      stats.seenResponse || other.seenResponse,
-		missingScanDetail: stats.missingScanDetail || other.missingScanDetail,
-	}
+	stats.ScanDetail.TotalKeys += other.ScanDetail.TotalKeys
+	stats.ScanDetail.ProcessedKeys += other.ScanDetail.ProcessedKeys
+	stats.ScanDetail.ProcessedKeysSize += other.ScanDetail.ProcessedKeysSize
+	stats.PayloadBytes += other.PayloadBytes
+	stats.seenResponse = stats.seenResponse || other.seenResponse
+	stats.missingScanDetail = stats.missingScanDetail || other.missingScanDetail
 }

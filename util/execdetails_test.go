@@ -15,6 +15,7 @@
 package util
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pointResponseStatsFromAggregateBeforeProjection preserves the prior snapshot
+// projection path, including its transfer of private coverage via RecordResponse.
+func pointResponseStatsFromAggregateBeforeProjection(scanDetail PointReadScanDetail, payloadBytes uint64, missingScanDetail bool) PointResponseStats {
+	stats := PointResponseStats{ScanDetail: scanDetail, PayloadBytes: payloadBytes}
+	coverageScanDetail := &kvrpcpb.ScanDetailV2{}
+	if missingScanDetail {
+		coverageScanDetail = nil
+	}
+	stats.RecordResponse(coverageScanDetail, 0)
+	return stats
+}
+
 func TestPointResponseStatsRecordResponse(t *testing.T) {
+	t.Run("aggregate construction", func(t *testing.T) {
+		for _, tc := range []struct {
+			name              string
+			scanDetail        PointReadScanDetail
+			payloadBytes      uint64
+			missingScanDetail bool
+		}{
+			{name: "complete zero"},
+			{name: "missing zero", missingScanDetail: true},
+			{name: "complete aggregate", scanDetail: PointReadScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30}, payloadBytes: 7},
+			{name: "missing aggregate", scanDetail: PointReadScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30}, payloadBytes: 7, missingScanDetail: true},
+			{name: "negative counters", scanDetail: PointReadScanDetail{TotalKeys: -1, ProcessedKeys: -2, ProcessedKeysSize: -3}, payloadBytes: 9},
+			{name: "counter limits", scanDetail: PointReadScanDetail{TotalKeys: 1<<63 - 1, ProcessedKeys: -1 << 63, ProcessedKeysSize: -1}, payloadBytes: ^uint64(0)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				scanDetail := tc.scanDetail
+				actual := NewPointResponseStatsFromAggregate(scanDetail, tc.payloadBytes, tc.missingScanDetail)
+				expected := pointResponseStatsFromAggregateBeforeProjection(scanDetail, tc.payloadBytes, tc.missingScanDetail)
+				// Whole-value equality includes all three private coverage fields.
+				require.Equal(t, expected, actual)
+				require.True(t, actual.seenResponse)
+				require.Equal(t, tc.missingScanDetail, actual.missingScanDetail)
+				require.False(t, actual.invalid)
+				require.True(t, actual.IsValid(), "construction does not validate numeric counters")
+				require.True(t, actual.PayloadComplete())
+				require.Equal(t, !tc.missingScanDetail, actual.ScanDetailComplete())
+				require.Equal(t, tc.scanDetail, scanDetail)
+				scanDetail.TotalKeys++
+				require.Equal(t, expected, actual, "the aggregate is copied, not retained")
+			})
+		}
+	})
+
 	var stats PointResponseStats
 	require.True(t, stats.IsValid())
 	require.False(t, stats.ScanDetailComplete())
@@ -54,8 +100,26 @@ func TestPointResponseStatsRecordResponse(t *testing.T) {
 }
 
 func TestPointResponseStatsMerge(t *testing.T) {
+	// Preserve the old whole-value assignment independently of Merge and the
+	// coverage methods, including invalid-state retention and integer wrapping.
+	mergeBeforeInPlace := func(stats *PointResponseStats, other PointResponseStats) {
+		if stats.invalid || other.invalid {
+			stats.invalid = true
+			return
+		}
+		*stats = PointResponseStats{
+			ScanDetail: PointReadScanDetail{
+				TotalKeys:         stats.ScanDetail.TotalKeys + other.ScanDetail.TotalKeys,
+				ProcessedKeys:     stats.ScanDetail.ProcessedKeys + other.ScanDetail.ProcessedKeys,
+				ProcessedKeysSize: stats.ScanDetail.ProcessedKeysSize + other.ScanDetail.ProcessedKeysSize,
+			},
+			PayloadBytes:      stats.PayloadBytes + other.PayloadBytes,
+			seenResponse:      stats.seenResponse || other.seenResponse,
+			missingScanDetail: stats.missingScanDetail || other.missingScanDetail,
+		}
+	}
 	var complete, missing, invalid PointResponseStats
-	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2}, 3)
+	complete.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 2, ProcessedVersions: 3, ProcessedVersionsSize: 5}, 3)
 	missing.RecordResponse(nil, 5)
 	invalid.Invalidate()
 	states := []struct {
@@ -66,15 +130,51 @@ func TestPointResponseStatsMerge(t *testing.T) {
 		missingScanDetail bool
 	}{
 		{name: "empty", valid: true},
+		{
+			name: "uncovered nonzero", valid: true,
+			stats: PointResponseStats{ScanDetail: PointReadScanDetail{TotalKeys: 2, ProcessedKeys: 3, ProcessedKeysSize: 5}, PayloadBytes: 7},
+		},
 		{name: "complete", stats: complete, valid: true, seenResponse: true},
+		{name: "miss", stats: PointResponseStats{seenResponse: true}, valid: true, seenResponse: true},
 		{name: "missing", stats: missing, valid: true, seenResponse: true, missingScanDetail: true},
 		{name: "invalid", stats: invalid},
+		{
+			name: "invalid with values and coverage", seenResponse: true, missingScanDetail: true,
+			stats: PointResponseStats{
+				ScanDetail: PointReadScanDetail{TotalKeys: 7, ProcessedKeys: 11, ProcessedKeysSize: 13}, PayloadBytes: 17,
+				seenResponse: true, missingScanDetail: true, invalid: true,
+			},
+		},
+		{
+			name: "negative counters", valid: true, seenResponse: true,
+			stats: PointResponseStats{
+				ScanDetail: PointReadScanDetail{TotalKeys: -1, ProcessedKeys: -2, ProcessedKeysSize: -3}, PayloadBytes: 11,
+				seenResponse: true,
+			},
+		},
+		{
+			name: "counter maxima", valid: true, seenResponse: true,
+			stats: PointResponseStats{
+				ScanDetail: PointReadScanDetail{TotalKeys: 1<<63 - 1, ProcessedKeys: 1<<63 - 1, ProcessedKeysSize: 1<<63 - 1}, PayloadBytes: ^uint64(0),
+				seenResponse: true,
+			},
+		},
+		{
+			name: "counter minima", valid: true, seenResponse: true,
+			stats: PointResponseStats{
+				ScanDetail:   PointReadScanDetail{TotalKeys: -1 << 63, ProcessedKeys: -1 << 63, ProcessedKeysSize: -1 << 63},
+				seenResponse: true,
+			},
+		},
 	}
 	for _, left := range states {
 		for _, right := range states {
 			t.Run(left.name+"/"+right.name, func(t *testing.T) {
-				stats := left.stats
+				stats, expected := left.stats, left.stats
 				stats.Merge(right.stats)
+				mergeBeforeInPlace(&expected, right.stats)
+				// Whole-value equality includes all private coverage and validity fields.
+				require.Equal(t, expected, stats)
 				valid := left.valid && right.valid
 				seen := left.seenResponse || right.seenResponse
 				missingDetail := left.missingScanDetail || right.missingScanDetail
@@ -88,9 +188,58 @@ func TestPointResponseStatsMerge(t *testing.T) {
 					require.Equal(t, left.stats.ScanDetail, stats.ScanDetail)
 					require.Equal(t, left.stats.PayloadBytes, stats.PayloadBytes)
 				}
+				for range 3 {
+					stats.Merge(right.stats)
+					mergeBeforeInPlace(&expected, right.stats)
+					require.Equal(t, expected, stats, "repeated merge")
+				}
+				stats.Merge(stats)
+				mergeBeforeInPlace(&expected, expected)
+				require.Equal(t, expected, stats, "self merge uses the pre-call value")
 			})
 		}
 	}
+
+	t.Run("aggregate merge copy and invalidation", func(t *testing.T) {
+		scanDetail := PointReadScanDetail{TotalKeys: 1<<63 - 1, ProcessedKeys: -3, ProcessedKeysSize: -5}
+		actual := NewPointResponseStatsFromAggregate(scanDetail, ^uint64(0)-1, false)
+		expected := pointResponseStatsFromAggregateBeforeProjection(scanDetail, ^uint64(0)-1, false)
+		deltaScanDetail := PointReadScanDetail{TotalKeys: 2, ProcessedKeys: 1, ProcessedKeysSize: 2}
+		actual.Merge(NewPointResponseStatsFromAggregate(deltaScanDetail, 5, true))
+		expected.Merge(pointResponseStatsFromAggregateBeforeProjection(deltaScanDetail, 5, true))
+		require.Equal(t, expected, actual)
+		require.Equal(t, int64(-1<<63+1), actual.ScanDetail.TotalKeys)
+		require.Equal(t, uint64(3), actual.PayloadBytes, "payload sums retain uint64 wraparound")
+		require.True(t, actual.PayloadComplete())
+		require.False(t, actual.ScanDetailComplete())
+
+		actual.Merge(NewPointResponseStatsFromAggregate(PointReadScanDetail{}, 0, false))
+		expected.Merge(pointResponseStatsFromAggregateBeforeProjection(PointReadScanDetail{}, 0, false))
+		require.Equal(t, expected, actual)
+		require.True(t, actual.missingScanDetail, "complete aggregates must not hide missing detail")
+		actual.Merge(PointResponseStats{})
+		require.Equal(t, expected, actual)
+
+		actualCopy, expectedCopy := actual, expected
+		actualCopy.ScanDetail.TotalKeys = 17
+		expectedCopy.ScanDetail.TotalKeys = 17
+		actualCopy.Invalidate()
+		expectedCopy.Invalidate()
+		require.Equal(t, expectedCopy, actualCopy)
+		require.Equal(t, expected, actual, "modifying a copy must not alter the original")
+		actualCopy.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1)
+		expectedCopy.RecordResponse(&kvrpcpb.ScanDetailV2{TotalVersions: 1}, 1)
+		actualCopy.Merge(actual)
+		expectedCopy.Merge(expected)
+		require.Equal(t, expectedCopy, actualCopy, "an invalid receiver keeps its prior counters and coverage")
+
+		actual.Merge(actualCopy)
+		expected.Merge(expectedCopy)
+		require.Equal(t, expected, actual, "an invalid source invalidates without merging its counters")
+		require.False(t, actual.IsValid())
+		require.False(t, actual.ScanDetailComplete())
+		require.False(t, actual.PayloadComplete())
+	})
 
 	// Copies are independent and merging an empty snapshot preserves all state.
 	copy := complete
@@ -127,6 +276,8 @@ func TestPointResponseStatsInvalid(t *testing.T) {
 }
 
 func TestRUDetailsDrainRUV2(t *testing.T) {
+	var nilDetails *RUDetails
+	require.Nil(t, nilDetails.DrainRUV2())
 	ruDetails := NewRUDetails()
 	ruDetails.AddRUV2(&kvrpcpb.RUV2{
 		ReadRpcCount:                 1,
@@ -153,6 +304,144 @@ func TestRUDetailsDrainRUV2(t *testing.T) {
 	assert.Equal(t, uint64(6), drained.RaftstoreStoreWriteTriggerWbBytes)
 	assert.Equal(t, uint64(10), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
 	assert.Nil(t, ruDetails.DrainRUV2())
+}
+
+func TestRUDetailsDrainRUV2Ownership(t *testing.T) {
+	delta := &kvrpcpb.RUV2{
+		ReadRpcCount: 1,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
+		},
+	}
+	ruDetails := NewRUDetails()
+	ruDetails.AddRUV2(delta)
+	cloned := ruDetails.Clone()
+	merged := NewRUDetails()
+	merged.Merge(ruDetails)
+
+	// Neither the input nor a non-draining snapshot owns the pending counters.
+	delta.ReadRpcCount = 3
+	delta.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 4
+	raw := ruDetails.getRawRUV2()
+	raw.ReadRpcCount = 5
+	raw.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 6
+	drained := ruDetails.DrainRUV2()
+	require.Equal(t, uint64(1), drained.ReadRpcCount)
+	require.Equal(t, uint64(2), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	require.Nil(t, ruDetails.DrainRUV2())
+
+	// Mutating the transferred counters cannot affect an earlier clone or merge.
+	drained.ReadRpcCount = 7
+	drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 8
+	for _, independent := range []*RUDetails{cloned, merged} {
+		counters := independent.DrainRUV2()
+		require.Equal(t, uint64(1), counters.ReadRpcCount)
+		require.Equal(t, uint64(2), counters.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	}
+
+	// Later adds start a separate batch, including its nested executor counters.
+	ruDetails.AddRUV2(delta)
+	ruDetails.AddRUV2(delta)
+	require.Equal(t, uint64(7), drained.ReadRpcCount)
+	require.Equal(t, uint64(8), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	next := ruDetails.DrainRUV2()
+	require.Equal(t, uint64(6), next.ReadRpcCount)
+	require.Equal(t, uint64(8), next.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	drained.ReadRpcCount = 9
+	drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 10
+	require.Equal(t, uint64(6), next.ReadRpcCount)
+	require.Equal(t, uint64(8), next.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	require.Nil(t, ruDetails.DrainRUV2())
+}
+
+func TestRUDetailsConcurrentAddAndDrainRUV2(t *testing.T) {
+	const writers, addsPerWriter = 4, 250
+	delta := &kvrpcpb.RUV2{
+		KvEngineCacheMiss: 1, CoprocessorExecutorIterations: 2, CoprocessorResponseBytes: 3,
+		RaftstoreStoreWriteTriggerWbBytes: 4, StorageProcessedKeysBatchGet: 5,
+		StorageProcessedKeysGet: 6, ReadRpcCount: 7, WriteRpcCount: 8,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan:    9,
+			TikvCoprocessorExecutorWorkTotalBatchTableScan:    10,
+			TikvCoprocessorExecutorWorkTotalBatchSelection:    11,
+			TikvCoprocessorExecutorWorkTotalBatchTopN:         12,
+			TikvCoprocessorExecutorWorkTotalBatchLimit:        13,
+			TikvCoprocessorExecutorWorkTotalBatchSimpleAggr:   14,
+			TikvCoprocessorExecutorWorkTotalBatchFastHashAggr: 15,
+		},
+	}
+	ruDetails := NewRUDetails()
+	start, done := make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range addsPerWriter {
+				ruDetails.AddRUV2(delta)
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	close(start)
+	total := &kvrpcpb.RUV2{}
+draining:
+	for {
+		mergeRUV2(total, ruDetails.DrainRUV2())
+		select {
+		case <-done:
+			break draining
+		default:
+		}
+	}
+	mergeRUV2(total, ruDetails.DrainRUV2())
+	const count = writers * addsPerWriter
+	require.Equal(t, &kvrpcpb.RUV2{
+		KvEngineCacheMiss: count, CoprocessorExecutorIterations: 2 * count, CoprocessorResponseBytes: 3 * count,
+		RaftstoreStoreWriteTriggerWbBytes: 4 * count, StorageProcessedKeysBatchGet: 5 * count,
+		StorageProcessedKeysGet: 6 * count, ReadRpcCount: 7 * count, WriteRpcCount: 8 * count,
+		ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan:    9 * count,
+			TikvCoprocessorExecutorWorkTotalBatchTableScan:    10 * count,
+			TikvCoprocessorExecutorWorkTotalBatchSelection:    11 * count,
+			TikvCoprocessorExecutorWorkTotalBatchTopN:         12 * count,
+			TikvCoprocessorExecutorWorkTotalBatchLimit:        13 * count,
+			TikvCoprocessorExecutorWorkTotalBatchSimpleAggr:   14 * count,
+			TikvCoprocessorExecutorWorkTotalBatchFastHashAggr: 15 * count,
+		},
+	}, total)
+	require.Nil(t, ruDetails.DrainRUV2())
+}
+
+func BenchmarkRUDetailsDrainRUV2(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		delta *kvrpcpb.RUV2
+	}{
+		{name: "empty"},
+		{name: "scalar", delta: &kvrpcpb.RUV2{ReadRpcCount: 1}},
+		{name: "executor", delta: &kvrpcpb.RUV2{ReadRpcCount: 1, ExecutorInputs: &kvrpcpb.ExecutorInputs{
+			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
+		}}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			ruDetails := NewRUDetails()
+			var drained *kvrpcpb.RUV2
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				// Include the clone needed to own each newly accumulated batch.
+				ruDetails.AddRUV2(tc.delta)
+				drained = ruDetails.DrainRUV2()
+			}
+			b.StopTimer()
+			require.Equal(b, tc.delta, drained)
+		})
+	}
 }
 
 func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {

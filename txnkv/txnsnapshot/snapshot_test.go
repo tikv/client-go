@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func newSnapshotWithRuntimeStats(stats *SnapshotRuntimeStats) *KVSnapshot {
@@ -31,6 +32,67 @@ func newSnapshotWithRuntimeStats(stats *SnapshotRuntimeStats) *KVSnapshot {
 }
 
 func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {
+	t.Run("aggregate projection", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			scanDetail util.ScanDetail
+			extra      pointReadResponseExtraStats
+		}{
+			{
+				name:       "no response with nonzero scan detail",
+				scanDetail: util.ScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30},
+			},
+			{
+				name:  "complete zero response",
+				extra: pointReadResponseExtraStats{seenResponse: true},
+			},
+			{
+				name:       "complete aggregate",
+				scanDetail: util.ScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30},
+				extra:      pointReadResponseExtraStats{payloadBytes: 7, seenResponse: true},
+			},
+			{
+				name:       "missing scan detail aggregate",
+				scanDetail: util.ScanDetail{TotalKeys: 5, ProcessedKeys: 3, ProcessedKeysSize: 30},
+				extra:      pointReadResponseExtraStats{payloadBytes: 7, seenResponse: true, missingScanDetail: true},
+			},
+			{
+				name:       "negative counters and limits",
+				scanDetail: util.ScanDetail{TotalKeys: -1, ProcessedKeys: -1 << 63, ProcessedKeysSize: 1<<63 - 1},
+				extra:      pointReadResponseExtraStats{payloadBytes: ^uint64(0), seenResponse: true},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				stats := &SnapshotRuntimeStats{scanDetail: tc.scanDetail, pointResponseExtra: tc.extra}
+				expected := getPointResponseStatsBeforeProjection(stats)
+				actual := stats.GetPointResponseStats()
+				require.Equal(t, expected, actual)
+				if !tc.extra.seenResponse {
+					require.Equal(t, PointResponseStats{}, actual)
+				}
+				require.Equal(t, tc.scanDetail, stats.scanDetail)
+				require.Equal(t, tc.extra, stats.pointResponseExtra)
+				actual.Invalidate()
+				actual.ScanDetail.TotalKeys++
+				require.Equal(t, expected, stats.GetPointResponseStats(), "the projected value is independent")
+			})
+		}
+	})
+
+	t.Run("payload sum overflow", func(t *testing.T) {
+		stats := &SnapshotRuntimeStats{}
+		snapshot := newSnapshotWithRuntimeStats(stats)
+		snapshot.mergePointResponse(&kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+			TotalVersions: 5, ProcessedVersions: 3, ProcessedVersionsSize: 30,
+		}}, ^uint64(0)-1)
+		snapshot.mergePointResponse(nil, 5)
+		actual := stats.GetPointResponseStats()
+		require.Equal(t, getPointResponseStatsBeforeProjection(stats), actual)
+		require.Equal(t, uint64(3), actual.PayloadBytes)
+		require.True(t, actual.PayloadComplete())
+		require.False(t, actual.ScanDetailComplete())
+	})
+
 	stats := &SnapshotRuntimeStats{}
 	snapshot := newSnapshotWithRuntimeStats(stats)
 
@@ -66,6 +128,158 @@ func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {
 	// The getter returns an independent value snapshot.
 	pointStats.ScanDetail.TotalKeys = 1000
 	require.Equal(t, int64(11), stats.GetPointResponseStats().ScanDetail.TotalKeys)
+}
+
+func TestSnapshotRuntimeStatsGetResponse(t *testing.T) {
+	detail := &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+		TotalVersions: 2, ProcessedVersions: 1, ProcessedVersionsSize: 5,
+	}}
+	for _, mode := range []struct {
+		name    string
+		enabled bool
+	}{{name: "enabled", enabled: true}, {name: "disabled"}} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name         string
+				response     *kvrpcpb.GetResponse
+				payloadBytes uint64
+			}{
+				{name: "value", response: &kvrpcpb.GetResponse{Value: []byte("value"), ExecDetailsV2: detail}, payloadBytes: 5},
+				{name: "not found", response: &kvrpcpb.GetResponse{ExecDetailsV2: detail}},
+				{name: "response error", response: &kvrpcpb.GetResponse{
+					Value: []byte("ignored"), Error: &kvrpcpb.KeyError{Abort: "error"}, ExecDetailsV2: detail,
+				}},
+				{name: "missing execution detail", response: &kvrpcpb.GetResponse{Value: []byte("value")}, payloadBytes: 5},
+				{name: "missing scan detail", response: &kvrpcpb.GetResponse{ExecDetailsV2: &kvrpcpb.ExecDetailsV2{}}},
+				{name: "zero scan detail", response: &kvrpcpb.GetResponse{ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+					ScanDetailV2: &kvrpcpb.ScanDetailV2{},
+				}}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var stats *SnapshotRuntimeStats
+					if mode.enabled {
+						stats = &SnapshotRuntimeStats{}
+					}
+					snapshot := newSnapshotWithRuntimeStats(stats)
+					snapshot.mergeGetResponse(tc.response)
+					if !mode.enabled {
+						require.Nil(t, snapshot.mu.stats)
+						return
+					}
+					var expected PointResponseStats
+					expected.RecordResponse(tc.response.ExecDetailsV2.GetScanDetailV2(), tc.payloadBytes)
+					require.Equal(t, expected, stats.GetPointResponseStats())
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkSnapshotGetResponseRecording(b *testing.B) {
+	response := &kvrpcpb.GetResponse{
+		Value: make([]byte, 128),
+		ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
+			ScanDetailV2: &kvrpcpb.ScanDetailV2{TotalVersions: 1, ProcessedVersions: 1, ProcessedVersionsSize: 128},
+		},
+	}
+	for _, mode := range []struct {
+		name    string
+		enabled bool
+	}{{name: "enabled", enabled: true}, {name: "disabled"}} {
+		b.Run(mode.name, func(b *testing.B) {
+			var stats *SnapshotRuntimeStats
+			if mode.enabled {
+				stats = &SnapshotRuntimeStats{}
+			}
+			snapshot := newSnapshotWithRuntimeStats(stats)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				snapshot.mergeGetResponse(response)
+			}
+			b.StopTimer()
+			if mode.enabled {
+				pointStats := stats.GetPointResponseStats()
+				require.Equal(b, uint64(b.N)*128, pointStats.PayloadBytes)
+				require.Equal(b, int64(b.N), pointStats.ScanDetail.TotalKeys)
+			}
+		})
+	}
+}
+
+// Keep the old getter and projection separate, as in the production baseline,
+// so the benchmark compares the same entry point without indirect function calls.
+func getPointResponseStatsBeforeProjection(rs *SnapshotRuntimeStats) PointResponseStats {
+	if rs == nil {
+		var stats PointResponseStats
+		stats.Invalidate()
+		return stats
+	}
+	return buildPointResponseStatsBeforeProjection(rs.pointResponseExtra, &rs.scanDetail)
+}
+
+func buildPointResponseStatsBeforeProjection(s pointReadResponseExtraStats, scanDetail *util.ScanDetail) PointResponseStats {
+	if !s.seenResponse {
+		return PointResponseStats{}
+	}
+	stats := PointResponseStats{
+		ScanDetail: PointReadScanDetail{
+			TotalKeys:         scanDetail.TotalKeys,
+			ProcessedKeys:     scanDetail.ProcessedKeys,
+			ProcessedKeysSize: scanDetail.ProcessedKeysSize,
+		},
+		PayloadBytes: s.payloadBytes,
+	}
+	coverageScanDetail := &kvrpcpb.ScanDetailV2{}
+	if s.missingScanDetail {
+		coverageScanDetail = nil
+	}
+	stats.RecordResponse(coverageScanDetail, 0)
+	return stats
+}
+
+var benchmarkPointResponseStatsSink PointResponseStats
+
+func BenchmarkSnapshotPointResponseStatsProjection(b *testing.B) {
+	complete := &SnapshotRuntimeStats{}
+	newSnapshotWithRuntimeStats(complete).mergePointResponse(&kvrpcpb.ExecDetailsV2{
+		ScanDetailV2: &kvrpcpb.ScanDetailV2{TotalVersions: 11, ProcessedVersions: 7, ProcessedVersionsSize: 70},
+	}, 128)
+	missing := complete.Clone()
+	newSnapshotWithRuntimeStats(missing).mergePointResponse(nil, 17)
+	for _, tc := range []struct {
+		name  string
+		stats *SnapshotRuntimeStats
+	}{
+		{name: "complete", stats: complete},
+		{name: "missing", stats: missing},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			expected := getPointResponseStatsBeforeProjection(tc.stats)
+			b.Run("before", func(b *testing.B) {
+				var result PointResponseStats
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					result = getPointResponseStatsBeforeProjection(tc.stats)
+				}
+				b.StopTimer()
+				benchmarkPointResponseStatsSink = result
+				require.Equal(b, expected, result)
+			})
+			b.Run("aggregate", func(b *testing.B) {
+				var result PointResponseStats
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					result = tc.stats.GetPointResponseStats()
+				}
+				b.StopTimer()
+				benchmarkPointResponseStatsSink = result
+				require.Equal(b, expected, result)
+			})
+		})
+	}
 }
 
 func TestSnapshotRuntimeStatsStandaloneScanDetailDoesNotEstablishPointCoverage(t *testing.T) {
@@ -137,6 +351,7 @@ func TestSnapshotRuntimeStatsPointResponseCloneAndMerge(t *testing.T) {
 
 func TestSnapshotRuntimeStatsPointResponseInvalid(t *testing.T) {
 	var nilStats *SnapshotRuntimeStats
+	require.Equal(t, getPointResponseStatsBeforeProjection(nilStats), nilStats.GetPointResponseStats())
 	require.False(t, nilStats.GetPointResponseStats().IsValid())
 	require.False(t, nilStats.GetPointResponseStats().ScanDetailComplete())
 	require.False(t, nilStats.GetPointResponseStats().PayloadComplete())

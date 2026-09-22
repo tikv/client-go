@@ -903,13 +903,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte, opt
 		}
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		val := cmdGetResp.GetValue()
-		if onResponse := s.pointResponseRecorder(); onResponse != nil {
-			payloadBytes := uint64(len(val))
-			if cmdGetResp.GetError() != nil {
-				payloadBytes = 0
-			}
-			onResponse(cmdGetResp.ExecDetailsV2, payloadBytes)
-		}
+		s.mergeGetResponse(cmdGetResp)
 		if cmdGetResp.ExecDetailsV2 != nil {
 			readKeys := len(cmdGetResp.Value)
 			var readTime float64
@@ -1004,6 +998,14 @@ func (s *KVSnapshot) pointResponseRecorder() func(*kvrpcpb.ExecDetailsV2, uint64
 		return nil
 	}
 	return s.mergePointResponse
+}
+
+func (s *KVSnapshot) mergeGetResponse(response *kvrpcpb.GetResponse) {
+	payloadBytes := uint64(len(response.Value))
+	if response.Error != nil {
+		payloadBytes = 0
+	}
+	s.mergePointResponse(response.ExecDetailsV2, payloadBytes)
 }
 
 func (s *KVSnapshot) mergePointResponse(detail *kvrpcpb.ExecDetailsV2, payloadBytes uint64) {
@@ -1375,26 +1377,15 @@ func (s *pointReadResponseExtraStats) merge(other pointReadResponseExtraStats) {
 	s.missingScanDetail = s.missingScanDetail || other.missingScanDetail
 }
 
-func (s pointReadResponseExtraStats) buildPointResponseStats(scanDetail util.ScanDetail) PointResponseStats {
+func (s pointReadResponseExtraStats) buildPointResponseStats(scanDetail *util.ScanDetail) PointResponseStats {
 	if !s.seenResponse {
 		return PointResponseStats{}
 	}
-	stats := PointResponseStats{
-		ScanDetail: PointReadScanDetail{
-			TotalKeys:         scanDetail.TotalKeys,
-			ProcessedKeys:     scanDetail.ProcessedKeys,
-			ProcessedKeysSize: scanDetail.ProcessedKeysSize,
-		},
-		PayloadBytes: s.payloadBytes,
-	}
-	// PointResponseStats keeps coverage private. Record a zero-valued response
-	// here only to transfer that coverage into the returned value.
-	coverageScanDetail := &kvrpcpb.ScanDetailV2{}
-	if s.missingScanDetail {
-		coverageScanDetail = nil
-	}
-	stats.RecordResponse(coverageScanDetail, 0)
-	return stats
+	return util.NewPointResponseStatsFromAggregate(PointReadScanDetail{
+		TotalKeys:         scanDetail.TotalKeys,
+		ProcessedKeys:     scanDetail.ProcessedKeys,
+		ProcessedKeysSize: scanDetail.ProcessedKeysSize,
+	}, s.payloadBytes, s.missingScanDetail)
 }
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.
@@ -1529,7 +1520,7 @@ func (rs *SnapshotRuntimeStats) GetPointResponseStats() PointResponseStats {
 		stats.Invalidate()
 		return stats
 	}
-	return rs.pointResponseExtra.buildPointResponseStats(rs.scanDetail)
+	return rs.pointResponseExtra.buildPointResponseStats(&rs.scanDetail)
 }
 
 // GetTimeDetail returns the timeDetail
