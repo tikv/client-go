@@ -1050,8 +1050,20 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
 	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
 	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
+	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 
 	cloned := rd.Clone()
 	assert.InDelta(t, rd.RRU(), cloned.RRU(), 1e-9)
 	assert.InDelta(t, rd.WRU(), cloned.WRU(), 1e-9)
+	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
+
+	merged := NewRUDetails()
+	merged.Merge(rd)
+	assert.InDelta(t, rd.TiflashRU(), merged.TiflashRU(), 1e-9)
+}
+
+func TestRUDetailsTiKVRUV2CompatibilityIsNoop(t *testing.T) {
+	rd := NewRUDetails()
+	rd.AddTiKVRUV2(42)
+	assert.Zero(t, rd.TiKVRUV2())
 }

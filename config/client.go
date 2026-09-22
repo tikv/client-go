@@ -121,6 +121,10 @@ type TiKVClient struct {
 	// TODO(crazycs520): remove this config in 8.6 LTS version.
 	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 
+	// RUV2 is retained for configuration compatibility and is no longer used.
+	// Deprecated: TiKV RU v2 weight-based accounting has been removed.
+	RUV2 RUV2TiKVConfig `toml:"ru-v2" json:"ru-v2"`
+
 	// TxnChunkWriterAddr is the address of the txn chunk writer for file-based txn.
 	TxnChunkWriterAddr string `toml:"txn-chunk-writer-addr" json:"txn-chunk-writer-addr"`
 	// TxnChunkWriterConcurrency is the concurrency to request the txn chunk writer for file-based txn.
@@ -210,6 +214,7 @@ func DefaultTiKVClient() TiKVClient {
 		ResolveLockLiteThreshold:   512,
 		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
 		EnableReplicaSelectorV2:    true,
+		RUV2:                       DefaultRUV2TiKVConfig(),
 
 		TxnChunkWriterConcurrency:     4,
 		TxnChunkMaxSize:               128 * 1024 * 1024,

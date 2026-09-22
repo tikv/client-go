@@ -1170,6 +1170,8 @@ type RUDetails struct {
 	readRU         *uatomic.Float64
 	writeRU        *uatomic.Float64
 	ruWaitDuration *uatomic.Duration
+	// tiflashRU stores RRU+WRU reported by TiFlash.
+	tiflashRU *uatomic.Float64
 	// coprocessorResponseBytes stores the pending TiKV coprocessor response bytes
 	// for TiDB to drain incrementally into statement-level RU metrics.
 	coprocessorResponseBytes atomic.Uint64
@@ -1181,6 +1183,7 @@ func NewRUDetails() *RUDetails {
 		readRU:         uatomic.NewFloat64(0),
 		writeRU:        uatomic.NewFloat64(0),
 		ruWaitDuration: uatomic.NewDuration(0),
+		tiflashRU:      uatomic.NewFloat64(0),
 	}
 }
 
@@ -1191,6 +1194,7 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 		readRU:         uatomic.NewFloat64(rru),
 		writeRU:        uatomic.NewFloat64(wru),
 		ruWaitDuration: uatomic.NewDuration(waitDur),
+		tiflashRU:      uatomic.NewFloat64(0),
 	}
 }
 
@@ -1200,6 +1204,7 @@ func (rd *RUDetails) Clone() *RUDetails {
 		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
 		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
 		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
+		tiflashRU:      uatomic.NewFloat64(rd.tiflashRU.Load()),
 	}
 	cloned.coprocessorResponseBytes.Store(rd.coprocessorResponseBytes.Load())
 	return cloned
@@ -1210,6 +1215,7 @@ func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.readRU.Add(other.readRU.Load())
 	rd.writeRU.Add(other.writeRU.Load())
 	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
+	rd.tiflashRU.Add(other.tiflashRU.Load())
 	rd.coprocessorResponseBytes.Add(other.coprocessorResponseBytes.Load())
 }
 
@@ -1237,6 +1243,23 @@ func (rd *RUDetails) WRU() float64 {
 func (rd *RUDetails) RUWaitDuration() time.Duration {
 	return rd.ruWaitDuration.Load()
 }
+
+// TiflashRU returns the TiFlash RU (RRU+WRU) accumulated in the client.
+func (rd *RUDetails) TiflashRU() float64 {
+	return rd.tiflashRU.Load()
+}
+
+// TiKVRUV2 returns zero because client-side TiKV RU v2 calculation has been removed.
+//
+// Deprecated: TiKV RU v2 is no longer calculated by client-go.
+func (rd *RUDetails) TiKVRUV2() float64 {
+	return 0
+}
+
+// AddTiKVRUV2 is retained as a no-op for source compatibility.
+//
+// Deprecated: TiKV RU v2 is no longer calculated by client-go.
+func (rd *RUDetails) AddTiKVRUV2(float64) {}
 
 // AddRUV2 accumulates the RU v2 fields needed by TiDB in RUDetails.
 func (rd *RUDetails) AddRUV2(delta *kvrpcpb.RUV2) {
@@ -1275,4 +1298,5 @@ func (rd *RUDetails) UpdateTiFlash(consumption *rmpb.Consumption) {
 	}
 	rd.readRU.Add(consumption.RRU)
 	rd.writeRU.Add(consumption.WRU)
+	rd.tiflashRU.Add(consumption.RRU + consumption.WRU)
 }
