@@ -39,6 +39,13 @@ func TestSharedLock(t *testing.T) {
 		t.Skip("skipping TestSharedLock because with-tikv is not enabled")
 		return
 	}
+	if !config.NextGen {
+		// TODO: Enable this suite for legacy TiKV after it supports transaction RPC
+		// protection. Shared lock requests currently fail closed before they reach
+		// the store.
+		t.Skip("skipping TestSharedLock because transaction RPC protection is only supported by next-gen TiKV")
+		return
+	}
 	suite.Run(t, new(testSharedLockSuite))
 }
 
