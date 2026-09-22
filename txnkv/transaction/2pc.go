@@ -1714,7 +1714,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 				)
 			}
 		} else if !c.isOnePC() {
-			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			err = c.cleanupMutations(newCleanupBackoffer(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 			if err != nil {
 				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
 				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
@@ -1724,7 +1724,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 					zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic))
 			}
 		} else if c.isPessimistic {
-			err = c.pessimisticRollbackMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
+			err = c.pessimisticRollbackMutations(newCleanupBackoffer(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 			if err != nil {
 				metrics.SecondaryLockCleanupFailureCounterRollback.Inc()
 				logutil.Logger(ctx).Info("2PC cleanup failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS),
