@@ -719,5 +719,6 @@ func (s *KVStore) sendOneShotGet(ctx context.Context, m locate.WorkStoreMatch) (
 
 func needsRegionReload(regionErr *errorpb.Error) bool {
 	return regionErr != nil && (regionErr.GetEpochNotMatch() != nil ||
-		regionErr.GetRegionNotFound() != nil || regionErr.GetKeyNotInRegion() != nil)
+		regionErr.GetRegionNotFound() != nil || regionErr.GetKeyNotInRegion() != nil ||
+		regionErr.GetMismatchPeerId() != nil || regionErr.GetIsWitness() != nil)
 }
