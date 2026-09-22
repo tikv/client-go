@@ -54,7 +54,7 @@ func TestUpdateTiKVRUV2FromExecDetailsV2Compatibility(t *testing.T) {
 	// The compatibility wrapper does not patch RPC counts or calculate TiKV RU.
 	require.Equal(t, uint64(7), details.RuV2.ReadRpcCount)
 	require.Equal(t, uint64(11), details.RuV2.WriteRpcCount)
-	require.Zero(t, ruDetails.TiKVRUV2())
+	require.Zero(t, ruDetails.TiKVRUV2()) //nolint:staticcheck // Verify the deprecated compatibility API.
 	drained := ruDetails.DrainRUV2()
 	require.Equal(t, uint64(17), drained.CoprocessorResponseBytes)
 	require.Zero(t, drained.ReadRpcCount)
