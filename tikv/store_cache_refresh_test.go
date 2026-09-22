@@ -550,7 +550,7 @@ func TestStoreCacheRefreshReloadAppliedLeftStillWalksUncachedRightSibling(t *tes
 		return &refreshInterceptClient{
 			Client: c,
 			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
-				if req.Type != tikvrpc.CmdGet || req.Context.GetRegionId() != leftRegionID {
+				if req.Type != tikvrpc.CmdGet || req.GetRegionId() != leftRegionID {
 					return nil
 				}
 				switch calls.Add(1) {
@@ -603,7 +603,7 @@ func TestStoreCacheRefreshConvergesAfterMergeReplacesFailedRegion(t *testing.T) 
 		return &refreshInterceptClient{
 			Client: c,
 			getResp: func(req *tikvrpc.Request) *tikvrpc.Response {
-				if req.Type == tikvrpc.CmdGet && req.Context.GetRegionId() == rightID && inject.CompareAndSwap(true, false) {
+				if req.Type == tikvrpc.CmdGet && req.GetRegionId() == rightID && inject.CompareAndSwap(true, false) {
 					return regionErrorGetResp(&errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{RegionId: rightID}})
 				}
 				return nil
