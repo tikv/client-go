@@ -563,8 +563,18 @@ func (s *replicaSelector) onServerIsBusy(
 	var store *Store
 	if ctx != nil && ctx.Store != nil {
 		store = ctx.Store
+		// A ServerIsBusy can be produced by either the read path (read pool,
+		// coprocessor, raftstore local reader) or the write path (write flow
+		// control, e.g. pending compaction bytes exceeding the soft limit).
+		// Only a read-path rejection reflects the store's read health, so a
+		// write-path rejection must not update the shared read load/health
+		// state. Otherwise write backpressure would divert non-leader reads
+		// away from a store that serves reads normally, collapse its measured
+		// read load and turn it into a hot-read destination (tikv/tikv#20076).
 		if serverIsBusy.EstimatedWaitMs != 0 {
-			ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+			if isReadReqForBusy(req.Type) {
+				ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+			}
 			if s.busyThreshold != 0 && isReadReq(req.Type) {
 				// do not retry with batched coprocessor requests.
 				// it'll be region misses if we send the tasks to replica.
@@ -576,8 +586,10 @@ func (s *replicaSelector) onServerIsBusy(
 				}
 			}
 		} else {
-			// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
-			ctx.Store.healthStatus.markAlreadySlow()
+			if isReadReqForBusy(req.Type) {
+				// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
+				ctx.Store.healthStatus.markAlreadySlow()
+			}
 			// Workaround for tikv/client-go#2028: if the store's read pool is wedged, leader
 			// reads are rejected with ServerIsBusy(0) at the pool entrance, so the request
 			// never reaches the raft layer and no NotLeader error is returned even if PD has
@@ -654,6 +666,39 @@ func isReadReq(tp tikvrpc.CmdType) bool {
 	switch tp {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
+}
+
+// isReadReqForBusy reports whether the request is served by TiKV's read path,
+// i.e. it can be rejected with a read-side ServerIsBusy and therefore reflects
+// the store's read health. Only such requests should update the store's read
+// load/health state in onServerIsBusy; otherwise a write rejected by write flow
+// control would taint a store that serves reads normally (tikv/tikv#20076).
+//
+// The read path covers:
+//   - the storage read pool (Storage::read_pool_spawn_with_busy_check and the
+//     direct ReadPool::spawn_handle users scan_lock / raw_checksum),
+//   - the coprocessor read pool, and
+//   - the raftstore local reader.
+//
+// It is intentionally broader than isReadReq: raw KV reads and BufferBatchGet
+// also go through the read-pool busy check. Commands that are not served by the
+// read path (writes, txn bookkeeping, admin commands) are excluded even if they
+// are read-only.
+//
+// Keep this in sync with tikvrpc.CmdType: TestIsReadReqForBusyCoversAllCmdTypes
+// fails when a new command type is added without being classified here.
+func isReadReqForBusy(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdBufferBatchGet,
+		tikvrpc.CmdRawGet, tikvrpc.CmdRawBatchGet, tikvrpc.CmdRawScan,
+		tikvrpc.CmdRawGetKeyTTL, tikvrpc.CmdRawChecksum,
+		tikvrpc.CmdScanLock,
+		tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop:
 		return true
 	default:
 		return false

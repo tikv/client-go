@@ -2367,6 +2367,82 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
+// TestIsReadReqForBusyCoversAllCmdTypes guards isReadReqForBusy against drifting
+// from tikvrpc: it enumerates every command type known to tikvrpc and requires
+// each to be explicitly classified as read or non-read below. Adding a new
+// command type to tikvrpc makes this test fail until it is classified, so
+// onServerIsBusy never silently stops (or starts) updating the store read state
+// for it.
+func TestIsReadReqForBusyCoversAllCmdTypes(t *testing.T) {
+	// readCmds are served by TiKV's read path and must return true.
+	readCmds := []tikvrpc.CmdType{
+		tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdBufferBatchGet,
+		tikvrpc.CmdRawGet, tikvrpc.CmdRawBatchGet, tikvrpc.CmdRawScan,
+		tikvrpc.CmdRawGetKeyTTL, tikvrpc.CmdRawChecksum,
+		tikvrpc.CmdScanLock,
+		tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop,
+	}
+	// nonReadCmds lists every other command type known to tikvrpc. It only exists
+	// to make the classification exhaustive.
+	nonReadCmds := []tikvrpc.CmdType{
+		tikvrpc.CmdPrewrite, tikvrpc.CmdCommit, tikvrpc.CmdCleanup,
+		tikvrpc.CmdBatchRollback, tikvrpc.CmdResolveLock, tikvrpc.CmdGC,
+		tikvrpc.CmdDeleteRange, tikvrpc.CmdPessimisticLock,
+		tikvrpc.CmdPessimisticRollback, tikvrpc.CmdTxnHeartBeat,
+		tikvrpc.CmdCheckTxnStatus, tikvrpc.CmdCheckSecondaryLocks,
+		tikvrpc.CmdFlashbackToVersion, tikvrpc.CmdPrepareFlashbackToVersion,
+		tikvrpc.CmdFlush,
+		tikvrpc.CmdRawPut, tikvrpc.CmdRawBatchPut, tikvrpc.CmdRawDelete,
+		tikvrpc.CmdRawBatchDelete, tikvrpc.CmdRawDeleteRange,
+		tikvrpc.CmdRawCompareAndSwap,
+		tikvrpc.CmdUnsafeDestroyRange, tikvrpc.CmdRegisterLockObserver,
+		tikvrpc.CmdCheckLockObserver, tikvrpc.CmdRemoveLockObserver,
+		tikvrpc.CmdPhysicalScanLock, tikvrpc.CmdStoreSafeTS,
+		tikvrpc.CmdLockWaitInfo, tikvrpc.CmdGetHealthFeedback,
+		tikvrpc.CmdBroadcastTxnStatus,
+		tikvrpc.CmdMPPTask, tikvrpc.CmdMPPConn, tikvrpc.CmdMPPCancel,
+		tikvrpc.CmdMPPAlive,
+		tikvrpc.CmdMvccGetByKey, tikvrpc.CmdMvccGetByStartTs,
+		tikvrpc.CmdSplitRegion, tikvrpc.CmdDebugGetRegionProperties,
+		tikvrpc.CmdCompact, tikvrpc.CmdGetTiFlashSystemTable,
+	}
+
+	readSet := make(map[tikvrpc.CmdType]struct{}, len(readCmds))
+	for _, c := range readCmds {
+		readSet[c] = struct{}{}
+	}
+	nonReadSet := make(map[tikvrpc.CmdType]struct{}, len(nonReadCmds))
+	for _, c := range nonReadCmds {
+		nonReadSet[c] = struct{}{}
+	}
+
+	// tikvrpc.CmdType.String() enumerates every known command type; unknown
+	// values fall back to "Unknown".
+	visited := make(map[tikvrpc.CmdType]struct{}, len(readCmds)+len(nonReadCmds))
+	for i := 0; i <= 4096; i++ {
+		c := tikvrpc.CmdType(i)
+		name := c.String()
+		if name == "Unknown" {
+			continue
+		}
+		visited[c] = struct{}{}
+		_, expectRead := readSet[c]
+		_, expectNonRead := nonReadSet[c]
+		require.Truef(t, expectRead != expectNonRead,
+			"command %s (%d) is not classified in this test", name, c)
+		require.Equalf(t, expectRead, isReadReqForBusy(c),
+			"isReadReqForBusy(%s) = %v, want %v", name, !expectRead, expectRead)
+	}
+	// Make sure every listed command was actually checked, so a typo in the
+	// tables above cannot silently drop a case.
+	for _, cmds := range [][]tikvrpc.CmdType{readCmds, nonReadCmds} {
+		for _, c := range cmds {
+			require.Containsf(t, visited, c, "command %s is not known to tikvrpc.CmdType.String()", c.String())
+		}
+	}
+}
+
 // TestReplicaSelectorLeaderBusyProbe covers the workaround for tikv/client-go#2028: when a
 // half-dead store keeps rejecting leader reads with ServerIsBusy(0) at the read-pool
 // entrance, the request never reaches the raft layer and no NotLeader error is returned,
