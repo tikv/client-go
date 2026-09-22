@@ -1064,6 +1064,6 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 
 func TestRUDetailsTiKVRUV2CompatibilityIsNoop(t *testing.T) {
 	rd := NewRUDetails()
-	rd.AddTiKVRUV2(42)            //nolint:staticcheck // Verify the deprecated compatibility API.
-	assert.Zero(t, rd.TiKVRUV2()) //nolint:staticcheck // Verify the deprecated compatibility API.
+	rd.AddTiKVRUV2(42)
+	assert.Zero(t, rd.TiKVRUV2())
 }
