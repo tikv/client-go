@@ -1062,7 +1062,7 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 		return nil
 	}
 	ctx := context.WithValue(context.Background(), util.RequestSourceKey, *txn.RequestSource)
-	bo := retry.NewBackofferWithVars(ctx, cleanupMaxBackoff, txn.vars)
+	bo := newCleanupBackoffer(ctx, cleanupMaxBackoff, txn.vars)
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -2123,6 +2123,19 @@ func deduplicateKeys(keys [][]byte) [][]byte {
 
 const pessimisticRollbackMaxBackoff = 20000
 
+// newCleanupBackoffer preserves the transaction's retry settings while preventing
+// a query kill signal from aborting compensating cleanup such as pessimistic lock
+// rollback. Cleanup is still bounded by the backoff limit and context.
+func newCleanupBackoffer(ctx context.Context, maxSleep int, vars *tikv.Variables) *retry.Backoffer {
+	if vars == nil {
+		return retry.NewBackofferWithVars(ctx, maxSleep, nil)
+	}
+	cleanupVars := *vars
+	cleanupVars.Killed = nil
+	cleanupVars.KillSignalHandler = nil
+	return retry.NewBackofferWithVars(ctx, maxSleep, &cleanupVars)
+}
+
 // asyncPessimisticRollback rollbacks pessimistic locks of the current transaction on the specified keys asynchronously.
 // Pessimistic locks on specified keys with its forUpdateTS <= specifiedForUpdateTS will be unlocked. If 0 is passed
 // to specifiedForUpdateTS, the current forUpdateTS of the current transaction will be used.
@@ -2161,7 +2174,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 			}
 		}
 
-		err := committer.pessimisticRollbackMutations(retry.NewBackofferWithVars(ctx, pessimisticRollbackMaxBackoff, txn.vars), &PlainMutations{keys: keys})
+		err := committer.pessimisticRollbackMutations(newCleanupBackoffer(ctx, pessimisticRollbackMaxBackoff, txn.vars), &PlainMutations{keys: keys})
 		if err != nil {
 			logutil.Logger(ctx).Warn("[kv] pessimisticRollback failed.", zap.Error(err))
 		}
