@@ -201,11 +201,11 @@ func NewClient(ctx context.Context, pdAddrs []string, security config.Security, 
 
 // NewClientWithOpts creates a client with PD cluster addrs and client options.
 //
-// Note: the ctx passed here is stored by the Client and used for for
-// long-running background operations (e.g. re-establishing the PD leader
-// during a failover).  DO NOT pass a context whose lifetime is shorter than
-// the client.  A cancelled context will abort these long running background
-// operations and prevent things like PD leader failover from succeeding.
+// Note: the ctx passed here is stored by the Client and used for long-running
+// background operations (e.g. re-establishing the PD leader during a
+// failover).  DO NOT pass a context whose lifetime is shorter than the client.
+// A cancelled context will abort these long running background operations and
+// prevent things like PD leader failover from succeeding.
 func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	opt := &option{}
 	for _, o := range opts {
