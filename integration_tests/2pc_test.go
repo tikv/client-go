@@ -677,7 +677,7 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 func (s *testCommitterSuite) TestCommitDoesNotRestoreResolvedRPCError() {
 	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
 	txn := s.begin()
-	key := s.key("resolved_rpc_error")
+	key := []byte("resolved_rpc_error")
 	s.Require().NoError(txn.Set(key, []byte("value")))
 	requests := 0
 	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("commit-ts-expired", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
@@ -2612,20 +2612,6 @@ func (s *testCommitterSuite) TestFailCommitPrimaryKeyError() {
 
 // TestFailCommitPrimaryRPCErrorThenKeyError tests generic KeyErrors preserve an earlier RPC's unknown result.
 func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
-<<<<<<< HEAD
-	s.Nil(failpoint.Enable("tikvclient/rpcCommitResult", `1*return("timeout")->return("keyError")`))
-	defer func() {
-		s.Nil(failpoint.Disable("tikvclient/rpcCommitResult"))
-	}()
-	// Ensure it returns the original error without wrapped to ErrResultUndetermined
-	// if it meets KeyError.
-	t3 := s.begin()
-	err := t3.Set([]byte("c"), []byte("c1"))
-	s.Nil(err)
-	err = t3.Commit(context.Background())
-	s.NotNil(err)
-	s.False(tikverr.IsErrorUndetermined(err))
-=======
 	for _, test := range []struct {
 		name   string
 		keyErr *kvrpcpb.KeyError
@@ -2635,7 +2621,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
 	} {
 		s.Run(test.name, func() {
 			txn := s.begin()
-			key := s.key(test.name)
+			key := []byte(test.name)
 			s.Require().NoError(txn.Set(key, []byte("committed")))
 			var cleanupStarted atomic.Bool
 			txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
@@ -2671,7 +2657,6 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
 			s.Equal([]byte("committed"), value.Value)
 		})
 	}
->>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))
 }
 
 func (s *testCommitterSuite) TestFailCommitTimeout() {
@@ -2958,40 +2943,3 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
-<<<<<<< HEAD
-=======
-
-func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
-	defer failpoint.Disable("tikvclient/rpcPrewriteResult")
-	defer failpoint.Disable("tikvclient/rpcCommitResult")
-	txn := s.begin()
-	s.Nil(txn.Set(s.key("key"), []byte("value")))
-	// prewrite fail for an undetermined result in commit should retry
-	s.Nil(failpoint.Enable(
-		"tikvclient/rpcPrewriteResult",
-		// prewrite fail, but retry success
-		`1*return("undeterminedResult")->return("")`,
-	))
-	err := txn.Commit(context.Background())
-	s.Nil(err)
-
-	// commit primary fail for an undetermined result should return undetermined error
-	txn = s.begin()
-	s.Nil(txn.Set(s.key("key"), []byte("value")))
-	var cleanupStarted atomic.Bool
-	txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
-		Pre: func() { cleanupStarted.Store(true) },
-	})
-	s.Nil(failpoint.Enable(
-		"tikvclient/rpcCommitResult",
-		// prewrite success, but the first commit fail
-		`1*return("undeterminedResult")->return("")`,
-	))
-	err = txn.Commit(context.Background())
-	s.NotNil(err)
-	s.True(tikverr.IsErrorUndetermined(err))
-	txn.GetCommitter().WaitCleanup()
-	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
-	s.False(cleanupStarted.Load())
-}
->>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))
