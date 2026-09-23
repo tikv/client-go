@@ -148,10 +148,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
-		// Here we can make sure tikv has processed the commit primary key request. So
-		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {
-			c.setUndeterminedErr(nil)
 			reqDuration := time.Since(reqBegin)
 			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
@@ -169,6 +166,11 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 						zap.String("primary", redact.Key(c.primary())),
 						zap.Bool("batchIsPrimary", batch.isPrimary))
 					return errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
+				}
+				if !c.isAsyncCommit() {
+					// The primary lock proves that earlier commit attempts did not succeed.
+					c.setUndeterminedErr(nil)
+					sender.SetRPCError(nil)
 				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
@@ -220,6 +222,9 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				zap.Error(err),
 				zap.Uint64("txnStartTS", c.startTS))
 			return err
+		}
+		if batch.isPrimary && !c.isAsyncCommit() {
+			c.setUndeterminedErr(nil)
 		}
 		break
 	}
