@@ -481,7 +481,7 @@ func (s *RegionRequestSender) SendReqAsync(
 	}
 	disableReadFeaturesForNextGen(req)
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
-		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
+		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", redact.Stringer(req.Req.(fmt.Stringer))), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
 		return
 	}
@@ -1581,7 +1581,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 	disableReadFeaturesForNextGen(req)
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
-		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
+		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", redact.Stringer(req.Req.(fmt.Stringer))), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		return nil, nil, 0, err
 	}
 
@@ -2134,7 +2134,7 @@ func (s *RegionRequestSender) onRegionError(
 	if epochNotMatch := regionErr.GetEpochNotMatch(); epochNotMatch != nil {
 		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `EpochNotMatch` retry later",
-			zap.Stringer("EpochNotMatch", epochNotMatch),
+			zap.Stringer("EpochNotMatch", redact.EpochNotMatch(epochNotMatch)),
 			zap.Stringer("ctx", ctx),
 		)
 		retry, err := s.regionCache.OnRegionEpochNotMatch(bo, ctx, epochNotMatch.CurrentRegions)
@@ -2317,7 +2317,7 @@ func (s *RegionRequestSender) onRegionError(
 
 	logutil.Logger(bo.GetCtx()).Debug(
 		"tikv reports region failed",
-		zap.Stringer("regionErr", regionErr),
+		zap.Stringer("regionErr", redact.RegionError(regionErr)),
 		zap.Stringer("ctx", ctx),
 	)
 

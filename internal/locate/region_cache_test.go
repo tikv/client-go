@@ -51,6 +51,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	pingcaperrors "github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -59,6 +60,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -67,6 +69,8 @@ import (
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 	uatomic "go.uber.org/atomic"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type inspectedPDClient struct {
@@ -1331,6 +1335,89 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	_, err = cache.OnRegionEpochNotMatch(bo, &RPCContext{Region: region.VerID()}, []*metapb.Region{&r2})
 	s.Nil(err)
 	s.Equal(bo.ErrorsNum(), 2)
+}
+
+func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKVRedact() {
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	cache := NewRegionCache(pdCli)
+	defer cache.Close()
+
+	region := createSampleRegion([]byte("secret-start"), []byte("secret-end"))
+	region.meta.Id = 1
+	region.meta.RegionEpoch = &metapb.RegionEpoch{Version: 10, ConfVer: 10}
+	cache.insertRegionToCache(region, true, true)
+	current := &metapb.Region{Id: 1, StartKey: []byte("secret-start"), EndKey: []byte("secret-end"), RegionEpoch: &metapb.RegionEpoch{Version: 9, ConfVer: 10}}
+
+	for _, redacted := range []bool{false, true} {
+		mode := pingcaperrors.RedactLogDisable
+		if redacted {
+			mode = pingcaperrors.RedactLogEnable
+		}
+		old := pingcaperrors.RedactLogEnabled.Load()
+		pingcaperrors.RedactLogEnabled.Store(mode)
+
+		core, logs := observer.New(zap.InfoLevel)
+		ctx := context.WithValue(context.Background(), logutil.CtxLogKey, zap.New(core))
+		bo := retry.NewBackofferWithVars(ctx, 2000000, nil)
+		rpcCtx := &RPCContext{Region: region.VerID(), Meta: region.GetMeta()}
+		needRetry, err := cache.OnRegionEpochNotMatch(bo, rpcCtx, []*metapb.Region{current})
+		pingcaperrors.RedactLogEnabled.Store(old)
+		s.True(needRetry)
+		s.Nil(err)
+
+		entries := logs.FilterMessage("region epoch is ahead of tikv").All()
+		s.Len(entries, 1)
+		msg := fmt.Sprint(entries[0].ContextMap()["error"])
+		s.Contains(msg, "region epoch is ahead of tikv")
+		if redacted {
+			s.NotContains(msg, "secret")
+		} else {
+			s.Contains(msg, "secret-start")
+		}
+	}
+}
+
+func TestRPCContextStringRedact(t *testing.T) {
+	old := pingcaperrors.RedactLogEnabled.Load()
+	defer pingcaperrors.RedactLogEnabled.Store(old)
+
+	meta := &metapb.Region{
+		Id:          1,
+		StartKey:    []byte("secret-start"),
+		EndKey:      []byte("secret-end"),
+		RegionEpoch: &metapb.RegionEpoch{ConfVer: 2, Version: 3},
+		Peers:       []*metapb.Peer{{Id: 11, StoreId: 101}},
+	}
+	rpcCtx := &RPCContext{
+		Region: RegionVerID{id: 1, confVer: 2, ver: 3},
+		Meta:   meta,
+		Peer:   meta.Peers[0],
+		Addr:   "store1",
+	}
+
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogDisable)
+	plain := rpcCtx.String()
+	require.Contains(t, plain, "secret-start")
+	require.Contains(t, plain, "secret-end")
+
+	for _, mode := range []string{pingcaperrors.RedactLogEnable, pingcaperrors.RedactLogMarker} {
+		pingcaperrors.RedactLogEnabled.Store(mode)
+		for _, str := range []string{rpcCtx.String(), fmt.Sprintf("ctx: %v", rpcCtx), fmt.Sprintf("%+v", rpcCtx)} {
+			require.NotContains(t, str, "secret")
+			require.Contains(t, str, "region ID: 1")
+			require.Contains(t, str, "store_id:101")
+			require.Contains(t, str, "addr: store1")
+		}
+		// The region meta itself must not be modified.
+		require.Equal(t, []byte("secret-start"), meta.StartKey)
+	}
+
+	// A nil meta is rendered the same way with and without redaction.
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogEnable)
+	nilMeta := &RPCContext{Region: RegionVerID{id: 1}}
+	redacted := nilMeta.String()
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogDisable)
+	require.Equal(t, nilMeta.String(), redacted)
 }
 
 func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
