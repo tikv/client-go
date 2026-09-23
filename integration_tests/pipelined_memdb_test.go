@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
@@ -34,6 +36,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -287,6 +290,89 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		val, err := txn.Get(context.Background(), key)
 		s.Nil(err)
 		s.Equal(key, val.Value)
+	}
+}
+
+type rollbackBroadcastClient struct {
+	tikv.Client
+	rollbacks atomic.Int32
+}
+
+func (c *rollbackBroadcastClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdBroadcastTxnStatus {
+		for _, status := range req.BroadcastTxnStatus().TxnStatus {
+			if status.RolledBack {
+				c.rollbacks.Add(1)
+			}
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.BroadcastTxnStatusResponse{}}, nil
+	}
+	return c.Client.SendRequest(ctx, addr, req, timeout)
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
+	for _, test := range []struct {
+		name          string
+		committed     bool
+		serverUnknown bool
+	}{
+		{name: "lost response", committed: true},
+		{name: "server unknown", committed: true, serverUnknown: true},
+		{name: "definitive failure"},
+	} {
+		s.Run(test.name, func() {
+			originalClient := s.store.GetTiKVClient()
+			client := &rollbackBroadcastClient{Client: originalClient}
+			s.store.SetTiKVClient(client)
+			defer s.store.SetTiKVClient(originalClient)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+			s.Require().NoError(err)
+			var background sync.WaitGroup
+			txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
+				Pre:  func() { background.Add(1) },
+				Post: background.Done,
+			})
+			key, value := s.key(test.name), []byte("value")
+			s.Require().NoError(txn.Set(key, value))
+			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("pipelined-commit-error", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					if req.Type != tikvrpc.CmdCommit {
+						return next(target, req)
+					}
+					if !test.committed {
+						return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{Abort: "injected abort"}}}, nil
+					}
+					resp, err := next(target, req)
+					s.Require().NoError(err)
+					s.Require().Nil(resp.Resp.(*kvrpcpb.CommitResponse).GetError())
+					if test.serverUnknown {
+						return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{RegionError: &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}}}}, nil
+					}
+					// Lose the response after the primary has actually committed.
+					cancel()
+					return nil, context.Canceled
+				}
+			}))
+
+			err = txn.Commit(ctx)
+			background.Wait()
+			if !test.committed {
+				s.Require().ErrorContains(err, "injected abort")
+				s.False(tikverr.IsErrorUndetermined(err))
+				return
+			}
+			s.Require().ErrorIs(err, tikverr.ErrResultUndetermined)
+			s.NotNil(transaction.TxnProbe{KVTxn: txn}.GetCommitter().GetUndeterminedErr())
+			s.Zero(client.rollbacks.Load())
+			reader, err := s.store.Begin()
+			s.Require().NoError(err)
+			defer reader.Rollback()
+			result, err := reader.Get(context.Background(), key)
+			s.Require().NoError(err)
+			s.Equal(value, result.Value)
+		})
 	}
 }
 

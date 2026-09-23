@@ -112,6 +112,46 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 	s.NoError(failpoint.Disable("tikvclient/doNotRecoverStoreHealthCheckPanic"))
 }
 
+func (s *testRegionRequestToSingleStoreSuite) TestUndeterminedResultWithKill() {
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Require().NoError(err)
+	for _, tt := range []struct {
+		name      string
+		regionErr *errorpb.Error
+		kill      bool
+	}{
+		{"undetermined", &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}}, false},
+		{"undetermined and killed", &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}}, true},
+		{"epoch not match and killed", &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}, true},
+	} {
+		s.Run(tt.name, func() {
+			var killed uint32
+			response := &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{RegionError: tt.regionErr}}
+			attempts := 0
+			client := &fnClient{fn: func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+				attempts++
+				if tt.kill {
+					atomic.StoreUint32(&killed, 1)
+				}
+				return response, nil
+			}}
+			sender := NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
+			bo := retry.NewBackofferWithVars(context.Background(), 10, kv.NewVariables(&killed))
+			req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+			resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
+			s.Equal(1, attempts)
+			s.Nil(sender.GetRPCError())
+			if tt.regionErr.GetUndeterminedResult() != nil {
+				s.NoError(err)
+				s.Same(response, resp)
+			} else {
+				s.Equal(tikverr.ErrQueryInterruptedWithSignal{Signal: 1}, errors.Cause(err))
+				s.Nil(resp)
+			}
+		})
+	}
+}
+
 type fnClient struct {
 	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 	closedAddr string
