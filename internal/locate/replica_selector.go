@@ -49,6 +49,10 @@ type replicaSelector struct {
 	leaderBusyCount  int
 	leaderBusyPeerID uint64
 	leaderBusyProbed bool
+	// Whether tryOverloadedLeader chose this attempt's target. Re-decided per
+	// attempt, since the overload mark, the candidacy and the noisy-group set
+	// all are.
+	pinnedToOverloadedLeader bool
 }
 
 // disableReadFeaturesForNextGen disables replica-read and stale-read feature
@@ -136,6 +140,7 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	s.attempts++
 	s.target = nil
 	s.proxy = nil
+	s.pinnedToOverloadedLeader = false
 	if !s.isStaleRead {
 		s.tryOverloadedLeader(req)
 	}
@@ -173,6 +178,7 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 		return
 	}
 	s.target = leader
+	s.pinnedToOverloadedLeader = true
 	metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
 	// A plain leader read: no ReplicaRead, and no busy threshold, because the
 	// threshold's own fallback is to an idle follower and that is a ReadIndex.
@@ -690,16 +696,16 @@ func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
 	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName())
 }
 
-// pinRetryToLeader keeps every remaining attempt on the leader. The busy
-// threshold has to go too, or nextForReplicaReadLeader diverts to a replica
-// whenever the leader looks busy -- which is the case being retried.
+// pinRetryToLeader keeps the remaining attempts on the leader for as long as it
+// stays a candidate. The busy threshold has to go too, or
+// nextForReplicaReadLeader diverts to a replica whenever the leader looks busy
+// -- which is the case being retried.
 func (s *replicaSelector) pinRetryToLeader(req *tikvrpc.Request) {
 	req.SetReplicaReadType(kv.ReplicaReadLeader)
 	req.BusyThresholdMs = 0
 	req.StaleRead = false
 	s.replicaReadType = kv.ReplicaReadLeader
 	s.busyThreshold = 0
-	s.option.leaderOnly = true
 }
 
 // onNoisyTenantTimeout backs off a configurable-timeout deadline that the

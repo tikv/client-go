@@ -1244,6 +1244,82 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	s.Equal(uint32(50), after.BusyThresholdMs)
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowScore() {
+	const group = "uds_006"
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	newReq := func(g string) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadPreferLeader, nil)
+		if g != "" {
+			req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: g}
+		}
+		return req
+	}
+
+	// Find the leader's store the way a request does, so the feedback below can
+	// be given to the store the sends will land on.
+	selector, err := newReplicaSelector(s.cache, regionLoc.Region, newReq(group))
+	s.Nil(err)
+	probeCtx, err := selector.next(retry.NewBackoffer(context.Background(), -1), newReq(group))
+	s.Nil(err)
+	leaderStore := probeCtx.Store
+	s.Equal(s.leaderPeer, probeCtx.Peer.Id)
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
+
+	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(
+		ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration,
+	) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
+	}}, oracle.NoopReadTSValidator{})
+	// Sends one request to the leader and reports whether that attempt's latency
+	// was added to the store's client-side slow score.
+	send := func(g string) bool {
+		before := atomic.LoadUint64(&leaderStore.healthStatus.clientSideSlowScore.intervalUpdCount)
+		bo := retry.NewBackoffer(context.Background(), -1)
+		resp, rpcCtx, _, err := sender.SendReqCtx(bo, newReq(g), regionLoc.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(err)
+		s.NotNil(resp)
+		if rpcCtx != nil { // the async path does not hand one back
+			s.Equal(leaderStore, rpcCtx.Store)
+		}
+		return atomic.LoadUint64(&leaderStore.healthStatus.clientSideSlowScore.intervalUpdCount) > before
+	}
+
+	// The sync and async send paths each carry their own copy of the condition.
+	for _, async := range []bool{false, true} {
+		if async {
+			s.Nil(failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`))
+		}
+
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+		s.True(send(group), "normal routing is ordinary traffic, async=%v", async)
+
+		leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+			StoreId:     leaderStore.storeID,
+			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+		})
+		s.True(leaderStore.healthStatus.IsOverloaded())
+
+		// The blamed group is pinned here now. Its latency is this group's own
+		// throttling, and the slow score is store-wide with no group dimension
+		// to keep it out of, so the attempt is not measured.
+		s.False(send(group), "a pinned attempt is not measured, async=%v", async)
+		// A bystander reaching the same store was routed normally, and is.
+		s.True(send("uds_007"), "a bystander is still measured, async=%v", async)
+
+		if async {
+			s.Nil(failpoint.Disable("tikvclient/useSendReqAsync"))
+		}
+	}
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	if config.NextGen {
 		s.T().Skip("NextGen does not support replica read")
