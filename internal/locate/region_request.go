@@ -906,9 +906,21 @@ func (s *sendReqState) next() (done bool) {
 	bo, req := s.args.bo, s.args.req
 
 	// check whether the session/query is killed during the Next()
+<<<<<<< HEAD
 	if err := bo.CheckKilled(); err != nil {
 		s.vars.resp, s.vars.err = nil, err
 		return true
+=======
+	if req.IsInterruptible() {
+		if err := bo.CheckKilled(); err != nil {
+			// Preserve a server-reported unknown outcome over cancellation.
+			if s.vars.regionErr != nil && s.vars.regionErr.GetUndeterminedResult() != nil {
+				return true
+			}
+			s.vars.resp, s.vars.err = nil, err
+			return true
+		}
+>>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))
 	}
 
 	// handle send error

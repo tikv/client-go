@@ -306,3 +306,24 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 	s.Equal(diff.AsyncCommit, int64(1))
 	s.Equal(diff.OnePC, int64(1))
 }
+<<<<<<< HEAD
+=======
+
+func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
+	txn := s.begin1PC()
+	s.Nil(txn.Set(s.key("undetermined_key"), []byte("value")))
+	s.Nil(failpoint.Enable(
+		"tikvclient/rpcPrewriteResult",
+		// it will make the prewrite in 1pc fail.
+		`1*return("undeterminedResult")->return("")`,
+	))
+	defer func() { s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult")) }()
+	err := txn.Commit(context.Background())
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
+	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
+}
+>>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))

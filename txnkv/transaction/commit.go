@@ -125,6 +125,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return err
 		}
 		if regionErr != nil {
+<<<<<<< HEAD
 			// For other region error and the fake region error, backoff because
 			// there's something wrong.
 			// For the real EpochNotMatch error, don't backoff.
@@ -133,6 +134,16 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				if err != nil {
 					return err
 				}
+=======
+			if regionErr.GetUndeterminedResult() != nil && !c.isAsyncCommit() && batch.isPrimary {
+				// Record the unknown outcome so failure handling does not roll back the transaction.
+				c.setUndeterminedErr(errors.New(regionErr.String()))
+				return errors.WithStack(tikverr.ErrResultUndetermined)
+			}
+
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return err
+>>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
@@ -148,10 +159,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
-		// Here we can make sure tikv has processed the commit primary key request. So
-		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {
-			c.setUndeterminedErr(nil)
 			reqDuration := time.Since(reqBegin)
 			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
@@ -169,6 +177,11 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 						zap.String("primary", redact.Key(c.primary())),
 						zap.Bool("batchIsPrimary", batch.isPrimary))
 					return errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
+				}
+				if !c.isAsyncCommit() {
+					// The primary lock proves that earlier commit attempts did not succeed.
+					c.setUndeterminedErr(nil)
+					sender.SetRPCError(nil)
 				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
@@ -220,6 +233,9 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				zap.Error(err),
 				zap.Uint64("txnStartTS", c.startTS))
 			return err
+		}
+		if batch.isPrimary && !c.isAsyncCommit() {
+			c.setUndeterminedErr(nil)
 		}
 		break
 	}

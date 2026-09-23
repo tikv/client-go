@@ -1675,6 +1675,15 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	c.minCommitTSMgr.elevateWriteAccess(twoPCAccess)
 	var binlogSkipped bool
 	defer func() {
+		if err != nil {
+			if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
+				logutil.Logger(ctx).Warn("transaction commit result undetermined",
+					zap.Error(err),
+					zap.NamedError("rpcErr", undeterminedErr),
+					zap.Uint64("txnStartTS", c.startTS))
+				err = errors.WithStack(tikverr.ErrResultUndetermined)
+			}
+		}
 		if c.isOnePC() {
 			// The error means the 1PC transaction failed.
 			if err != nil {
@@ -1819,17 +1828,6 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if err != nil {
 		if assertionFailed, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
 			err = c.checkSchemaOnAssertionFail(ctx, assertionFailed)
-		}
-
-		// TODO: Now we return an undetermined error as long as one of the prewrite
-		// RPCs fails. However, if there are multiple errors and some of the errors
-		// are not RPC failures, we can return the actual error instead of undetermined.
-		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Warn("Async commit/1PC result undetermined",
-				zap.Error(err),
-				zap.NamedError("rpcErr", undeterminedErr),
-				zap.Uint64("txnStartTS", c.startTS))
-			return errors.WithStack(tikverr.ErrResultUndetermined)
 		}
 	}
 
@@ -2016,13 +2014,6 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 		commitDetail.Mu.Unlock()
 	}
 	if err != nil {
-		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Warn("2PC commit result undetermined",
-				zap.Error(err),
-				zap.NamedError("rpcErr", undeterminedErr),
-				zap.Uint64("txnStartTS", c.startTS))
-			err = errors.WithStack(tikverr.ErrResultUndetermined)
-		}
 		if !c.mu.committed {
 			logutil.Logger(ctx).Debug("2PC failed on commit",
 				zap.Error(err),
