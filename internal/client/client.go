@@ -347,12 +347,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		elapsed := time.Since(start)
 		storeMetrics.updateRPCMetrics(req, resp, elapsed)
 		if resp != nil && !bypass {
-			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
 			switch resp.Resp.(type) {
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
+				collectRUV2FromExecDetails(ctx, resp.GetExecDetailsV2())
 			}
 		}
 
@@ -406,14 +405,14 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
-func completedTiKVRUV2RPCCount(req *tikvrpc.Request) (readRPCCount, writeRPCCount int64) {
-	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
-		return 0, 0
+func collectRUV2FromExecDetails(ctx context.Context, details *kvrpcpb.ExecDetailsV2) {
+	if ctx == nil || details == nil {
+		return
 	}
-	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
-		return 0, 1
+	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
+	if ruDetails != nil {
+		ruDetails.AddRUV2(details.RuV2)
 	}
-	return 1, 0
 }
 
 // SendRequest sends a Request to server and receives Response.
@@ -454,7 +453,6 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
 	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
-	copStream.CountRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -491,8 +489,6 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
-	copStream.Ctx = ctx
-	copStream.CountRPC = true
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
