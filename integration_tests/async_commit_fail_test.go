@@ -267,23 +267,6 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermin
 	s.NotNil(err)
 	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
 }
-<<<<<<< HEAD
-=======
-
-func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
-	if *withTiKV {
-		s.T().Skip("not supported in real TiKV")
-	}
-	txn := s.beginAsyncCommit()
-	s.Nil(txn.Set(s.key("key"), []byte("value")))
-	// prewrite fail for an undetermined result in async commit should return undetermined error.
-	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("undeterminedResult")->return("")`))
-	defer func() { s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult")) }()
-	err := txn.Commit(context.Background())
-	s.NotNil(err)
-	s.True(tikverr.IsErrorUndetermined(err))
-	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
-}
 
 func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 	if *withTiKV {
@@ -294,15 +277,15 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	bo := tikv.NewBackofferWithVars(ctx, 5000, nil)
-	loc, err := s.store.GetRegionCache().LocateKey(bo, s.key("s"))
+	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("s"))
 	s.Require().NoError(err)
 	regionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
-	s.cluster.Split(loc.Region.GetID(), regionID, s.key("s"), []uint64{peerID}, peerID)
+	s.cluster.Split(loc.Region.GetID(), regionID, []byte("s"), []uint64{peerID}, peerID)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	txn := s.beginAsyncCommit()
-	s.Require().NoError(txn.Set(s.key("a"), []byte("a")))
-	s.Require().NoError(txn.Set(s.key("z"), []byte("z")))
+	s.Require().NoError(txn.Set([]byte("a"), []byte("a")))
+	s.Require().NoError(txn.Set([]byte("z"), []byte("z")))
 	var entered atomic.Int32
 	bothStarted := make(chan struct{})
 	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("confirmed-async-fallback", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
@@ -319,7 +302,7 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-			if bytes.Equal(req.Prewrite().Mutations[0].Key, s.key("a")) {
+			if bytes.Equal(req.Prewrite().Mutations[0].Key, []byte("a")) {
 				return next(target, req)
 			}
 			// The first batch's successful response confirms 2PC fallback before
@@ -335,4 +318,3 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 	s.False(txn.GetCommitter().IsAsyncCommit())
 	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }
->>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))

@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
@@ -312,12 +311,10 @@ func (c *rollbackBroadcastClient) SendRequest(ctx context.Context, addr string, 
 
 func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
 	for _, test := range []struct {
-		name          string
-		committed     bool
-		serverUnknown bool
+		name      string
+		committed bool
 	}{
 		{name: "lost response", committed: true},
-		{name: "server unknown", committed: true, serverUnknown: true},
 		{name: "definitive failure"},
 	} {
 		s.Run(test.name, func() {
@@ -327,14 +324,14 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
 			defer s.store.SetTiKVClient(originalClient)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+			txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
 			s.Require().NoError(err)
 			var background sync.WaitGroup
 			txn.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
 				Pre:  func() { background.Add(1) },
 				Post: background.Done,
 			})
-			key, value := s.key(test.name), []byte("value")
+			key, value := []byte(test.name), []byte("value")
 			s.Require().NoError(txn.Set(key, value))
 			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("pipelined-commit-error", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
@@ -347,9 +344,6 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
 					resp, err := next(target, req)
 					s.Require().NoError(err)
 					s.Require().Nil(resp.Resp.(*kvrpcpb.CommitResponse).GetError())
-					if test.serverUnknown {
-						return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{RegionError: &errorpb.Error{UndeterminedResult: &errorpb.UndeterminedResult{}}}}, nil
-					}
 					// Lose the response after the primary has actually committed.
 					cancel()
 					return nil, context.Canceled
