@@ -193,12 +193,19 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 	return c
 }
 
-// NewClient creates a client with PD cluster addrs.
+// NewClient creates a client with PD cluster addrs. See the documentation
+// for NewClientWithOpts.
 func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...opt.ClientOption) (*Client, error) {
 	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
 }
 
 // NewClientWithOpts creates a client with PD cluster addrs and client options.
+//
+// Note: the ctx passed here is stored by the Client and used for long-running
+// background operations (e.g. re-establishing the PD leader during a
+// failover).  DO NOT pass a context whose lifetime is shorter than the client.
+// A cancelled context will abort these long running background operations and
+// prevent things like PD leader failover from succeeding.
 func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	opt := &option{}
 	for _, o := range opts {
