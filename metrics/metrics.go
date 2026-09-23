@@ -107,7 +107,7 @@ var (
 	TiKVReplicaSelectorFailureCounter              *prometheus.CounterVec
 	TiKVNoisyTenantServerBusyCounter               prometheus.Counter
 	TiKVNoisyTenantReadTimeoutCounter              prometheus.Counter
-	TiKVNoisyTenantLeaderPinnedCounter             *prometheus.CounterVec
+	TiKVNoisyTenantLeaderPinnedCounter             prometheus.Counter
 	TiKVRequestRetryTimesHistogram                 prometheus.Histogram
 	TiKVTxnCommitBackoffSeconds                    prometheus.Histogram
 	TiKVTxnCommitBackoffCount                      prometheus.Histogram
@@ -785,14 +785,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		})
 
-	TiKVNoisyTenantLeaderPinnedCounter = prometheus.NewCounterVec(
+	TiKVNoisyTenantLeaderPinnedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "noisy_tenant_leader_pinned_total",
-			Help:        "Counter of replica-selection attempts steered to the leader because the leader's store reported that a resource group was overloading it. blamed separates attempts from a group the store named from bystanders steered alongside them.",
+			Help:        "Counter of replica-selection attempts steered to the leader because the leader's store reported that this request's own resource group was overloading it.",
 			ConstLabels: constLabels,
-		}, []string{"blamed"})
+		})
 
 	TiKVRequestRetryTimesHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

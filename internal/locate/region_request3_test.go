@@ -1099,9 +1099,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineR
 	s.Nil(err)
 	s.NotNil(regionLoc)
 	bo := retry.NewBackoffer(context.Background(), -1)
+	const deadlineRetryGroup = "uds_006"
 	newReq := func() *tikvrpc.Request {
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadMixed, nil)
 		req.BusyThresholdMs = 50
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: deadlineRetryGroup}
 		return req
 	}
 
@@ -1110,9 +1112,14 @@ func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineR
 	s.Nil(err)
 	leaderIdx := selector.region.getStore().workTiKVIdx
 	leaderStore := selector.replicas[leaderIdx].store
-	defer leaderStore.healthStatus.markOverloaded(false)
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
 
-	// First attempt: the overload mark takes it to the leader.
+	// First attempt: the store blames this request's group, so it goes to the
+	// leader.
+	leaderStore.noisyGroups.replace([]string{deadlineRetryGroup})
 	leaderStore.healthStatus.markOverloaded(true)
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
@@ -1183,21 +1190,37 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	})
 	s.True(leaderStore.healthStatus.IsOverloaded())
 
-	// Every non-stale read type now resolves to the leader, whoever is asking:
-	// the group the store named, a bystander, and a request with no group at
-	// all. A follower would only return here for a ReadIndex, and that message
-	// shares raft connections with the noisy group's own traffic.
+	// Every non-stale read type from the named group now resolves to the
+	// leader: a follower would only return here for a ReadIndex, and that
+	// message shares raft connections with this group's own traffic.
 	for _, readType := range []kv.ReplicaReadType{
 		kv.ReplicaReadLeader, kv.ReplicaReadFollower,
 		kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader,
 	} {
-		for _, g := range []string{group, "uds_007", ""} {
+		req := newReq(group, readType)
+		rpcCtx := selectOnce(req)
+		s.NotNil(rpcCtx, "readType=%v", readType)
+		s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "readType=%v", readType)
+		s.False(req.ReplicaRead, "readType=%v", readType)
+		s.Zero(req.BusyThresholdMs, "readType=%v", readType)
+	}
+
+	// Nobody else is steered. A bystander, and a request with no group at all,
+	// keep the routing and the busy threshold they came with -- the overload is
+	// the named group's to answer for, and moving everyone onto the leader adds
+	// load to the store that just said it was overloaded.
+	for _, readType := range []kv.ReplicaReadType{
+		kv.ReplicaReadLeader, kv.ReplicaReadFollower,
+		kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader,
+	} {
+		for _, g := range []string{"uds_007", ""} {
 			req := newReq(g, readType)
 			rpcCtx := selectOnce(req)
 			s.NotNil(rpcCtx, "readType=%v group=%q", readType, g)
-			s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "readType=%v group=%q", readType, g)
-			s.False(req.ReplicaRead, "readType=%v group=%q", readType, g)
-			s.Zero(req.BusyThresholdMs, "readType=%v group=%q", readType, g)
+			s.Equal(uint32(50), req.BusyThresholdMs, "readType=%v group=%q", readType, g)
+			if readType == kv.ReplicaReadFollower {
+				s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "readType=%v group=%q", readType, g)
+			}
 		}
 	}
 
@@ -1210,7 +1233,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	s.True(stale.StaleRead)
 	s.Equal(uint32(50), stale.BusyThresholdMs)
 
-	// Once the store reports that it blames nobody, steering stops for everyone.
+	// Once the store reports that it blames nobody, steering stops.
 	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
 		StoreId:     leaderStore.storeID,
 		NoisyGroups: &kvrpcpb.NoisyGroups{},

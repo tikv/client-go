@@ -153,12 +153,13 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	return s.buildRPCContext(bo, s.target, s.proxy)
 }
 
-// tryOverloadedLeader takes the leader when its store reports a tenant is
-// overloading it -- for every tenant, not only the blamed group. A follower read
-// returns here as a ReadIndex over the 1-4 gRPC connections per store pair that
-// all groups share, so a bystander queues behind the noisy group's raft traffic
-// anyway; serving from the leader's lease removes that message instead of moving
-// it. Stale reads are excluded by the caller: they need no ReadIndex.
+// tryOverloadedLeader takes the leader when its store reports that this
+// request's own resource group is overloading it. A follower read would come
+// back to this leader as a ReadIndex anyway, so serving it from the leader's
+// lease removes that message instead of moving it.
+//
+// Only the blamed group is steered. Every other group keeps its normal routing,
+// and stale reads are excluded by the caller: they need no ReadIndex.
 func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	if int(leaderIdx) >= len(s.replicas) {
@@ -168,12 +169,11 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 	if !leader.store.healthStatus.IsOverloaded() || !isOverloadedLeaderCandidate(leader) {
 		return
 	}
-	s.target = leader
-	blamed := "false"
-	if leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName()) {
-		blamed = "true"
+	if !leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName()) {
+		return
 	}
-	metrics.TiKVNoisyTenantLeaderPinnedCounter.WithLabelValues(blamed).Inc()
+	s.target = leader
+	metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
 	// A plain leader read: no ReplicaRead, and no busy threshold, because the
 	// threshold's own fallback is to an idle follower and that is a ReadIndex.
 	req.ReplicaRead = false
@@ -664,13 +664,14 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
 	// store with no group dimension.
 	//
-	// The rejection is a second way to learn what health feedback reports
-	// directly, so it marks the store rather than steering this one request:
-	// every tenant's next read on a region this store leads then stays on the
-	// leader instead of reaching it as a ReadIndex from a follower.
+	// The error names this request's own group as the cause, so its retries
+	// are pinned here and now rather than waiting for the store's next health
+	// feedback to say the same thing. The store is marked as well, which is
+	// what steers the group's later reads through tryOverloadedLeader.
 	if ctx != nil && ctx.Store != nil {
 		ctx.Store.healthStatus.markOverloaded(true)
 	}
+	s.pinRetryToLeader(req)
 	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
 	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
 		return false, err
@@ -687,6 +688,18 @@ func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
 		return false
 	}
 	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName())
+}
+
+// pinRetryToLeader keeps every remaining attempt on the leader. The busy
+// threshold has to go too, or nextForReplicaReadLeader diverts to a replica
+// whenever the leader looks busy -- which is the case being retried.
+func (s *replicaSelector) pinRetryToLeader(req *tikvrpc.Request) {
+	req.SetReplicaReadType(kv.ReplicaReadLeader)
+	req.BusyThresholdMs = 0
+	req.StaleRead = false
+	s.replicaReadType = kv.ReplicaReadLeader
+	s.busyThreshold = 0
+	s.option.leaderOnly = true
 }
 
 // onNoisyTenantTimeout backs off a configurable-timeout deadline that the
