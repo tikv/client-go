@@ -42,31 +42,40 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/internal/txnprotocol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
 	"golang.org/x/sync/singleflight"
 )
 
-var _ Client = reqCollapse{}
+var _ Client = (*reqCollapse)(nil)
 
-var resolveRegionSf singleflight.Group
+// detachedTxnProtocolContext preserves the selected declaration without
+// inheriting a waiter's cancellation or unrelated request-scoped values.
+func detachedTxnProtocolContext(ctx context.Context) context.Context {
+	if declaration, ok := txnprotocol.DeclarationFrom(ctx); ok {
+		return txnprotocol.WithDeclaration(context.Background(), declaration)
+	}
+	return context.Background()
+}
 
 type reqCollapse struct {
 	Client
+	resolveRegionSf singleflight.Group
 }
 
 // NewReqCollapse creates a reqCollapse.
 func NewReqCollapse(client Client) Client {
-	return &reqCollapse{client}
+	return &reqCollapse{Client: client}
 }
-func (r reqCollapse) Close() error {
+func (r *reqCollapse) Close() error {
 	if r.Client == nil {
 		panic("client should not be nil")
 	}
 	return r.Client.Close()
 }
 
-func (r reqCollapse) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+func (r *reqCollapse) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	if r.Client == nil {
 		panic("client should not be nil")
 	}
@@ -76,17 +85,19 @@ func (r reqCollapse) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
-func (r reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+func (r *reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	if r.Client == nil {
 		panic("client should not be nil")
 	}
 	if req.Type == tikvrpc.CmdResolveLock && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
 		// try collapse resolve lock request.
-		key := resolveLockCollapseKey(req)
+		key := resolveLockCollapseKey(ctx, req)
 		copyReq := *req
-		rsC := resolveRegionSf.DoChan(key, func() (interface{}, error) {
+		copyReq.Req = proto.Clone(req.ResolveLock())
+		physicalCtx := detachedTxnProtocolContext(ctx)
+		rsC := r.resolveRegionSf.DoChan(key, func() (interface{}, error) {
 			// resolveRegionSf will call this function in a goroutine, thus use SendRequest directly.
-			return r.Client.SendRequest(context.Background(), addr, &copyReq, ReadTimeoutShort)
+			return r.Client.SendRequest(physicalCtx, addr, &copyReq, ReadTimeoutShort)
 		})
 		// waiting the response in another goroutine.
 		cb.Executor().Go(func() {
@@ -106,7 +117,7 @@ func (r reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *tik
 	}
 }
 
-func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (canCollapse bool, resp *tikvrpc.Response, err error) {
+func (r *reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (canCollapse bool, resp *tikvrpc.Response, err error) {
 	switch req.Type {
 	case tikvrpc.CmdResolveLock:
 		resolveLock := req.ResolveLock()
@@ -119,8 +130,8 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 			return
 		}
 		canCollapse = true
-		key := resolveLockCollapseKey(req)
-		resp, err = r.collapse(ctx, key, &resolveRegionSf, addr, req, timeout)
+		key := resolveLockCollapseKey(ctx, req)
+		resp, err = r.collapse(ctx, key, &r.resolveRegionSf, addr, req, timeout)
 		return
 	default:
 		// now we only support collapse resolve lock.
@@ -128,23 +139,34 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 	}
 }
 
-func resolveLockCollapseKey(req *tikvrpc.Request) string {
+func resolveLockCollapseKey(ctx context.Context, req *tikvrpc.Request) string {
 	// IsTxnFile is implied by StartVersion, so it does not need to be part of the collapse key.
 	resolveLock := req.ResolveLock()
+	selectedDeclaration, ok := txnprotocol.DeclarationFrom(ctx)
+	var declaration uint32
+	if ok {
+		declaration = selectedDeclaration.Version
+	}
+	// Routing may differ while the desired transaction state remains identical.
+	// The declaration is part of response attribution: callers that selected
+	// different declarations must not share an incompatible response.
 	return strconv.FormatUint(req.RegionId, 10) + "-" +
 		strconv.FormatUint(resolveLock.StartVersion, 10) + "-" +
-		strconv.FormatBool(resolveLock.GetIsAsync())
+		strconv.FormatUint(resolveLock.CommitVersion, 10) + "-" +
+		strconv.FormatBool(resolveLock.GetIsAsync()) + "-" +
+		strconv.FormatUint(uint64(declaration), 10)
 }
 
-func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.Group,
+func (r *reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.Group,
 	addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	// because the request may be used by other goroutines, copy the request to avoid data race.
 	copyReq := *req
 	if req.Type == tikvrpc.CmdResolveLock && req.Req != nil {
 		copyReq.Req = proto.Clone(req.ResolveLock())
 	}
+	physicalCtx := detachedTxnProtocolContext(ctx)
 	rsC := sf.DoChan(key, func() (interface{}, error) {
-		return r.Client.SendRequest(context.Background(), addr, &copyReq, ReadTimeoutShort) // use resolveLock timeout.
+		return r.Client.SendRequest(physicalCtx, addr, &copyReq, ReadTimeoutShort) // use resolveLock timeout.
 	})
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

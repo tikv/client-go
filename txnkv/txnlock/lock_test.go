@@ -42,6 +42,34 @@ func TestExtractLocksFromKeyErrExpandsSharedLockHolders(t *testing.T) {
 	require.Equal(t, kvrpcpb.Op_PessimisticLock, locks[0].LockType)
 	require.Equal(t, uint64(102), locks[1].TxnID)
 	require.Equal(t, kvrpcpb.Op_Lock, locks[1].LockType)
+	// The wrapper itself and its placeholder transaction id must never reach the
+	// resolve path: ResolveLocks and BatchResolveLocks reject a shared wrapper, and
+	// a zero transaction id would turn into an illegal transaction request.
+	for _, l := range locks {
+		require.False(t, l.IsShared())
+		require.NotZero(t, l.TxnID)
+		require.Equal(t, []byte("shared-key"), l.Key)
+	}
+}
+
+func TestResolveLocksRejectsSharedLockWrapper(t *testing.T) {
+	f := newCheckSecondariesFixture(t)
+	wrapper := &Lock{
+		Key:      []byte("a"),
+		TxnID:    0,
+		LockType: kvrpcpb.Op_SharedLock,
+	}
+
+	_, err := f.resolver.ResolveLocks(checkSecondariesBo(), 1, []*Lock{wrapper})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "misuse of resolveLocks")
+
+	_, err = f.resolver.BatchResolveLocks(checkSecondariesBo(), []*Lock{wrapper}, f.regions[0])
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "misuse of BatchResolveLocks")
+
+	// Neither attempt may reach TiKV.
+	require.Empty(t, f.store.sent)
 }
 
 func TestExtractLocksFromKeyErrPreservesExclusiveLock(t *testing.T) {

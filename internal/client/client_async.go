@@ -16,12 +16,9 @@ package client
 
 import (
 	"context"
-	"fmt"
-	"runtime/trace"
 	"sync/atomic"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -49,12 +46,9 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		return
 	}
 
-	regionRPC := trace.StartRegion(ctx, req.Type.String())
-	spanRPC := opentracing.SpanFromContext(ctx)
-	if spanRPC != nil && spanRPC.Tracer() != nil {
-		spanRPC = spanRPC.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequestAsync, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(spanRPC.Context()))
-		ctx = opentracing.ContextWithSpan(ctx, spanRPC)
-	}
+	// TODO: Restore tracing with an async-aware lifecycle. A region or span
+	// started here cannot be ended in the response callback because concurrent
+	// requests may interleave their callbacks.
 
 	useCodec := c.option != nil && c.option.codec != nil
 	if useCodec {
@@ -64,7 +58,12 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			return
 		}
 	}
-	tikvrpc.AttachContext(req, req.Context)
+	rpcCtx, err := PrepareContextForTransport(ctx, req)
+	if err != nil {
+		cb.Invoke(nil, err)
+		return
+	}
+	tikvrpc.AttachContext(req, rpcCtx)
 
 	// ToBatchCommandsRequest should be called after all modifications to req are done.
 	batchReq := req.ToBatchCommandsRequest()
@@ -120,17 +119,6 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
 			config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
 		}
-
-		// tracing
-		if spanRPC != nil {
-			if util.TraceExecDetailsEnabled(ctx) {
-				if si := buildSpanInfoFromResp(resp); si != nil {
-					si.addTo(spanRPC, entry.reqArriveAt)
-				}
-			}
-			spanRPC.Finish()
-		}
-		regionRPC.End()
 
 		// codec
 		if useCodec && err == nil {

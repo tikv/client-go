@@ -344,7 +344,7 @@ func TestCollapseResolveLock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	reqCh := make(chan *tikvrpc.Request)
-	client := reqCollapse{&chanClient{wg: &wg, ch: reqCh}}
+	client := reqCollapse{Client: &chanClient{wg: &wg, ch: reqCh}}
 	ctx := context.Background()
 
 	// Collapse ResolveLock.

@@ -52,6 +52,9 @@ var (
 	TiKVLockResolverCounter                        *prometheus.CounterVec
 	TiKVLockResolverAsyncRunningTasks              *prometheus.GaugeVec
 	TiKVRegionErrorCounter                         *prometheus.CounterVec
+	TiKVTxnProtocolRejectEventCounter              *prometheus.CounterVec
+	TiKVTxnProtocolStoreReloadCounter              *prometheus.CounterVec
+	TiKVTxnProtocolStoreReloadWaitDuration         *prometheus.HistogramVec
 	TiKVRPCErrorCounter                            *prometheus.CounterVec
 	TiKVTxnWriteKVCountHistogram                   *prometheus.HistogramVec
 	TiKVTxnWriteSizeHistogram                      *prometheus.HistogramVec
@@ -149,6 +152,7 @@ var (
 const (
 	LblType            = "type"
 	LblResult          = "result"
+	LblMode            = "mode"
 	LblStore           = "store"
 	LblTarget          = "target"
 	LblConn            = "conn"
@@ -257,6 +261,29 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "The number of running async resolve lock tasks in lock resolver.",
 			ConstLabels: constLabels,
 		}, []string{LblType})
+
+	TiKVTxnProtocolRejectEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace, Subsystem: subsystem, ConstLabels: constLabels,
+			Name: "txn_protocol_reject_event_total",
+			Help: "Transaction protocol rejection and recovery events.",
+		}, []string{LblType})
+
+	TiKVTxnProtocolStoreReloadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace, Subsystem: subsystem, ConstLabels: constLabels,
+			Name: "txn_protocol_store_reload_total",
+			Help: "Transaction protocol Store capability metadata reload results.",
+		}, []string{LblResult})
+
+	TiKVTxnProtocolStoreReloadWaitDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace, Subsystem: subsystem, ConstLabels: constLabels,
+			Name:    "txn_protocol_store_reload_wait_duration_seconds",
+			Help:    "Time callers wait for transaction protocol Store capability metadata reloads.",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 16), // 1ms ~ 33s
+		}, []string{LblStore, LblMode, LblResult})
+	storeMetrics = append(storeMetrics, TiKVTxnProtocolStoreReloadWaitDuration)
 
 	TiKVRegionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -1137,6 +1164,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVLockResolverAsyncRunningTasks)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
+	prometheus.MustRegister(TiKVTxnProtocolRejectEventCounter)
+	prometheus.MustRegister(TiKVTxnProtocolStoreReloadCounter)
+	prometheus.MustRegister(TiKVTxnProtocolStoreReloadWaitDuration)
 	prometheus.MustRegister(TiKVRPCErrorCounter)
 	prometheus.MustRegister(TiKVTxnWriteKVCountHistogram)
 	prometheus.MustRegister(TiKVTxnWriteSizeHistogram)

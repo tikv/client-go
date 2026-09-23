@@ -121,6 +121,171 @@ func TestDefaultRequestOrigin(t *testing.T) {
 	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
 }
 
+// useDefaultTxnProtocolVersion installs a process-wide transaction protocol
+// version for the duration of the test and restores the previous one afterwards.
+// Tests that call it must not run in parallel, because the setting is global.
+func useDefaultTxnProtocolVersion(t *testing.T, version kvrpcpb.TxnProtocolVersion) {
+	t.Helper()
+	previousVersion := GetDefaultTxnProtocolVersion()
+	require.NoError(t, SetDefaultTxnProtocolVersion(version))
+	t.Cleanup(func() {
+		require.NoError(t, SetDefaultTxnProtocolVersion(previousVersion))
+	})
+}
+
+func TestDefaultTxnProtocolVersion(t *testing.T) {
+	require.Equal(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING, GetDefaultTxnProtocolVersion())
+	previous := GetDefaultTxnProtocolVersion()
+	t.Cleanup(func() { require.NoError(t, SetDefaultTxnProtocolVersion(previous)) })
+
+	for _, version := range []kvrpcpb.TxnProtocolVersion{
+		kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY,
+		kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING,
+		kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK,
+	} {
+		require.NoError(t, SetDefaultTxnProtocolVersion(version))
+		require.Equal(t, version, GetDefaultTxnProtocolVersion())
+	}
+}
+
+func TestSetDefaultTxnProtocolVersionRejectsOutOfRangeValues(t *testing.T) {
+	useDefaultTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING)
+
+	for _, version := range []kvrpcpb.TxnProtocolVersion{
+		-1,
+		clientMaxSupportedTxnProtocolVersion + 1,
+	} {
+		t.Run(version.String(), func(t *testing.T) {
+			require.Error(t, SetDefaultTxnProtocolVersion(version))
+			require.Equal(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING, GetDefaultTxnProtocolVersion())
+		})
+	}
+}
+
+func TestNewRequestDoesNotInjectTxnProtocolVersion(t *testing.T) {
+	useDefaultTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
+
+	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{RegionId: 1})
+	require.Zero(t, req.GetTxnProtocolVersion())
+	require.Equal(t, uint64(1), req.GetRegionId())
+
+	// A plain AttachContext without a prepared attempt uses the unknown [0, 0]
+	// range for protected commands, not the process ceiling.
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
+	require.True(t, AttachContext(req, kvrpcpb.Context{RegionId: 2}))
+	require.Equal(t, txnProtocolVersionLegacy, req.GetTxnProtocolVersion())
+	require.Equal(t, txnProtocolVersionLegacy, req.Get().GetContext().GetTxnProtocolVersion())
+}
+
+// TestCallerSuppliedVersionNeverReachesWire pins that a version written by the
+// caller, on the wrapper context or on the concrete request context, is never a
+// trusted declaration and is cleared by the transport, for protected and
+// unprotected commands alike.
+func TestCallerSuppliedVersionNeverReachesWire(t *testing.T) {
+	useDefaultTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
+
+	prewrite := &kvrpcpb.PrewriteRequest{Context: &kvrpcpb.Context{
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+	}}
+	req := NewRequest(CmdPrewrite, prewrite, kvrpcpb.Context{
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+	})
+	// The wrapper context is cleared at construction time.
+	require.Zero(t, req.GetTxnProtocolVersion())
+	require.True(t, AttachContext(req, kvrpcpb.Context{RegionId: 1}))
+	require.Zero(t, req.GetTxnProtocolVersion())
+	require.Zero(t, req.Prewrite().GetContext().GetTxnProtocolVersion())
+
+	rawPut := &kvrpcpb.RawPutRequest{Context: &kvrpcpb.Context{
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+	}}
+	rawReq := NewRequest(CmdRawPut, rawPut, kvrpcpb.Context{
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+	})
+	require.True(t, AttachContext(rawReq, kvrpcpb.Context{RegionId: 1}))
+	require.Zero(t, rawReq.GetTxnProtocolVersion())
+	require.Zero(t, rawReq.RawPut().GetContext().GetTxnProtocolVersion())
+}
+
+// TestAttachContextPatchesProvidedVersion verifies that tikvrpc only patches
+// the context selected by its caller. Standard transports determine the version
+// through their internal policy before calling this helper.
+func TestAttachContextPatchesProvidedVersion(t *testing.T) {
+
+	for _, tc := range []struct {
+		name string
+		req  *Request
+		// ctx reads the concrete request context of the command.
+		ctx func(*Request) *kvrpcpb.Context
+	}{
+		{
+			name: "get",
+			req:  NewRequest(CmdGet, &kvrpcpb.GetRequest{}),
+			ctx:  func(req *Request) *kvrpcpb.Context { return req.Get().GetContext() },
+		},
+		{
+			name: "scan_lock",
+			req:  NewRequest(CmdScanLock, &kvrpcpb.ScanLockRequest{}),
+			ctx:  func(req *Request) *kvrpcpb.Context { return req.ScanLock().GetContext() },
+		},
+		{
+			name: "check_secondary_locks",
+			req:  NewRequest(CmdCheckSecondaryLocks, &kvrpcpb.CheckSecondaryLocksRequest{}),
+			ctx:  func(req *Request) *kvrpcpb.Context { return req.CheckSecondaryLocks().GetContext() },
+		},
+		{
+			name: "cop",
+			req:  NewRequest(CmdCop, &coprocessor.Request{}),
+			ctx:  func(req *Request) *kvrpcpb.Context { return req.Cop().GetContext() },
+		},
+		{
+			name: "cop_stream",
+			req:  NewRequest(CmdCopStream, &coprocessor.Request{}),
+			ctx:  func(req *Request) *kvrpcpb.Context { return req.Cop().GetContext() },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, AttachContext(tc.req, kvrpcpb.Context{RegionId: 1}))
+			require.Equal(t, txnProtocolVersionLegacy, tc.ctx(tc.req).GetTxnProtocolVersion())
+		})
+	}
+
+	// A caller-selected version is patched unchanged. This low-level helper is
+	// not the transaction-protocol selection boundary.
+	req := NewRequest(CmdUnsafeDestroyRange, &kvrpcpb.UnsafeDestroyRangeRequest{})
+	require.True(t, AttachContext(req, kvrpcpb.Context{
+		RegionId:           1,
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING),
+	}))
+	require.Equal(t, uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING), req.UnsafeDestroyRange().GetContext().GetTxnProtocolVersion())
+}
+
+func TestOriginAndTxnProtocolVersionAreInjectedIndependently(t *testing.T) {
+	previousOrigin := GetDefaultRequestOrigin()
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginTiCDC)
+	t.Cleanup(func() {
+		SetDefaultRequestOrigin(previousOrigin)
+	})
+	useDefaultTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING)
+
+	// Origin still follows the Unknown-only rule, independently of anything the
+	// caller wrote into the version field.
+	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY),
+	})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiCDC, req.GetRequestOrigin())
+	require.Zero(t, req.GetTxnProtocolVersion())
+
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		RequestOrigin:      kvrpcpb.RequestOrigin_RequestOriginBR,
+		TxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+	})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginBR, req.GetRequestOrigin())
+	// The caller-supplied version is still cleared: only the controlled send path
+	// may declare one.
+	require.Zero(t, req.GetTxnProtocolVersion())
+}
+
 func TestAttachContextSetsRequestContext(t *testing.T) {
 	rpcCtx := kvrpcpb.Context{
 		RegionId:     123,
