@@ -125,7 +125,6 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return err
 		}
 		if regionErr != nil {
-<<<<<<< HEAD
 			// For other region error and the fake region error, backoff because
 			// there's something wrong.
 			// For the real EpochNotMatch error, don't backoff.
@@ -134,16 +133,6 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				if err != nil {
 					return err
 				}
-=======
-			if regionErr.GetUndeterminedResult() != nil && !c.isAsyncCommit() && batch.isPrimary {
-				// Record the unknown outcome so failure handling does not roll back the transaction.
-				c.setUndeterminedErr(errors.New(regionErr.String()))
-				return errors.WithStack(tikverr.ErrResultUndetermined)
-			}
-
-			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
-				return err
->>>>>>> 1fd036c3 (txnkv: preserve undetermined commit outcomes across retries and cancellation (#2063))
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
