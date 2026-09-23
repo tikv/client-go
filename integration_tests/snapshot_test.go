@@ -722,14 +722,23 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStatsAsyncBatchGetMultipleRegions
 	s.Nil(err)
 	s.store.GetRegionCache().InvalidateCachedRegion(preSplitLoc.Region)
 	var leftLoc, rightLoc *tikv.KeyLocation
-	s.Eventually(func() bool {
+	s.Require().Eventually(func() bool {
 		leftLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), leftKey)
 		if err != nil {
 			return false
 		}
 		rightLoc, err = s.store.GetRegionCache().LocateKey(retry.NewNoopBackoff(ctx), rightKey)
-		return err == nil && leftLoc.Region.GetID() != rightLoc.Region.GetID()
-	}, 5*time.Second, time.Millisecond)
+		if err != nil {
+			return false
+		}
+		if leftLoc.Region.GetID() == rightLoc.Region.GetID() {
+			// PD may still return the pre-split region immediately after the split.
+			// Invalidate it again so the next attempt does not reuse stale metadata.
+			s.store.GetRegionCache().InvalidateCachedRegion(leftLoc.Region)
+			return false
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond)
 
 	originalClient := s.store.GetTiKVClient()
 	detailClient := &pointResponseBatchGetClient{Client: originalClient}

@@ -141,24 +141,89 @@ func TestExecCancelWhileWaiting(t *testing.T) {
 	require.Equal(t, 0, n)
 }
 
-func TestExecConcurrent(t *testing.T) {
-	defaultMaxProcs := runtime.GOMAXPROCS(0)
+func TestExecCancelWhileAppendNotifying(t *testing.T) {
+	defaultMaxProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(defaultMaxProcs)
-	runtime.GOMAXPROCS(1)
-	l := NewRunLoop()
-	l.Append(func() {
-		time.Sleep(time.Millisecond)
-	})
-	done := make(chan struct{})
-	go func() {
+
+	for attempt := 0; attempt < 100; attempt++ {
+		l := NewRunLoop()
+		called := false
+		ctx, cancel := context.WithCancel(context.Background())
+		execDone := make(chan error, 1)
+		go func() {
+			_, err := l.Exec(ctx)
+			execDone <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			return l.State() == StateWaiting
+		}, time.Second, time.Millisecond, "run loop did not enter waiting state")
+
+		// Queue Append on the mutex before waking Exec through cancellation. If Append acquires the mutex first, it
+		// changes the state to idle and then tries to notify an Exec that has already selected ctx.Done().
+		l.lock.Lock()
+		appendDone := make(chan struct{})
+		go func() {
+			l.Append(func() {
+				called = true
+			})
+			close(appendDone)
+		}()
+		runtime.Gosched()
+		cancel()
+		runtime.Gosched()
+		l.lock.Unlock()
+
+		select {
+		case err := <-execDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("Exec did not return after cancellation")
+		}
+
+		select {
+		case <-appendDone:
+		case <-time.After(time.Second):
+			t.Fatalf("Append remained blocked after Exec cancellation on attempt %d", attempt+1)
+		}
+
+		require.Equal(t, StateIdle, l.State())
+		require.Equal(t, 1, l.NumRunnable())
+
 		n, err := l.Exec(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
-		close(done)
+		require.True(t, called)
+		require.Equal(t, StateIdle, l.State())
+		require.Equal(t, 0, l.NumRunnable())
+	}
+}
+
+func TestExecConcurrent(t *testing.T) {
+	l := NewRunLoop()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	l.Append(func() {
+		close(started)
+		<-release
+	})
+	type execResult struct {
+		n   int
+		err error
+	}
+	done := make(chan execResult, 1)
+	go func() {
+		n, err := l.Exec(context.Background())
+		done <- execResult{n: n, err: err}
 	}()
-	runtime.Gosched()
+
+	<-started
 	n, err := l.Exec(context.Background())
+	close(release)
+	result := <-done
+
 	require.Error(t, err)
 	require.Equal(t, 0, n)
-	<-done
+	require.NoError(t, result.err)
+	require.Equal(t, 1, result.n)
 }

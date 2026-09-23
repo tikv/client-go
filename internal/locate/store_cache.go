@@ -226,6 +226,10 @@ type Store struct {
 	storeType    tikvrpc.EndpointType // type of the store
 	tokenCount   atomic.Int64         // used store token count
 
+	// loadStats holds the estimated wait time reported by the store's read pool
+	// (TiKV ServerIsBusy.estimated_wait_ms). It only reflects read-side load and is
+	// used to steer replica reads, so it must never be updated from a write-path
+	// ServerIsBusy. See replicaSelector.onServerIsBusy.
 	loadStats atomic.Pointer[storeLoadStats]
 
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
@@ -860,6 +864,9 @@ func (s *Store) EstimatedWaitTime() time.Duration {
 	return loadStats.estimatedWait - timeSinceUpdated
 }
 
+// updateServerLoadStats records the estimated wait time reported by the store's
+// read pool. Callers must only pass a value taken from a read-side ServerIsBusy;
+// a rejection from the write path must not pollute the read load estimate.
 func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
 	estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
 	// Update the estimated wait time of the store.
