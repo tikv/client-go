@@ -121,6 +121,13 @@ type RegionRequestSender struct {
 	AccessStats       *ReplicaAccessStats
 }
 
+// Whether the attempt just sent was forced onto the leader by the noisy-tenant
+// logic. Such latency is one group's throttling, not the store's health, and the
+// prefer-leader slow score has no group dimension to keep it out of.
+func (s *RegionRequestSender) attemptPinnedToOverloadedLeader() bool {
+	return s.replicaSelector != nil && s.replicaSelector.pinnedToOverloadedLeader
+}
+
 func (s *RegionRequestSender) String() string {
 	if s.replicaSelector == nil {
 		return fmt.Sprintf("{rpcError:%v, replicaSelector: <nil>}", s.rpcError)
@@ -1290,7 +1297,8 @@ func (s *sendReqState) send() (canceled bool) {
 		collector.onResp(req, s.vars.resp, execDetails)
 
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
-		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
+			!s.attemptPinnedToOverloadedLeader() {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
@@ -1469,7 +1477,8 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	collector.onReq(req, execDetails)
 	collector.onResp(req, resp, execDetails)
 
-	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
+		!s.attemptPinnedToOverloadedLeader() {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
 	if s.vars.rpcCtx.ProxyStore != nil {
@@ -1810,10 +1819,21 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		metrics.TiKVRPCErrorCounter.WithLabelValues("shutting-down", storeLabel).Inc()
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	} else if isCauseByDeadlineExceeded(err) {
-		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
-			errLabel := "read-timeout-" + strconv.FormatUint(req.MaxExecutionDurationMs, 10) + "ms"
-			metrics.TiKVRPCErrorCounter.WithLabelValues(errLabel, storeLabel).Inc()
-			return nil
+		if s.replicaSelector != nil {
+			// A store that blames this request's own group gets a backoff rather
+			// than the immediate retry below: the queue the deadline went on is of
+			// the tenant's own making, so coming straight back only rejoins it.
+			if handled, bErr := s.replicaSelector.onNoisyTenantTimeout(bo, ctx, req); bErr != nil {
+				return bErr
+			} else if handled {
+				metrics.TiKVRPCErrorCounter.WithLabelValues("read-timeout-noisy-tenant", storeLabel).Inc()
+				return nil
+			}
+			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
+				errLabel := "read-timeout-" + strconv.FormatUint(req.MaxExecutionDurationMs, 10) + "ms"
+				metrics.TiKVRPCErrorCounter.WithLabelValues(errLabel, storeLabel).Inc()
+				return nil
+			}
 		}
 	}
 	if status.Code(errors.Cause(err)) == codes.Canceled {
@@ -2159,7 +2179,12 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
-		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
+		// A blamed tenant is excluded: its deadline went on a queue of its own
+		// making, so it takes the backoff path below rather than retrying the
+		// same overloaded leader straight away. The reason carries both
+		// markers, and Contains would otherwise match the deadline one first.
+		if s.replicaSelector != nil && !isNoisyTenantBusy(serverIsBusy) &&
+			strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
 			}
@@ -2289,8 +2314,17 @@ func (s *RegionRequestSender) onRegionError(
 		return true, nil
 	}
 
-	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
-		return true, nil
+	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
+		// Same as the local timeout: a deadline the blamed group filled the
+		// queue for waits before the retry instead of returning at once.
+		if handled, bErr := s.replicaSelector.onNoisyTenantTimeout(bo, ctx, req); bErr != nil {
+			return false, bErr
+		} else if handled {
+			return true, nil
+		}
+		if s.replicaSelector.onReadReqConfigurableTimeout(req) {
+			return true, nil
+		}
 	}
 
 	if mismatch := regionErr.GetMismatchPeerId(); mismatch != nil {

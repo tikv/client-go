@@ -1051,6 +1051,275 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	}
 }
 
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOnLeader() {
+	s.False(isNoisyTenantBusy(nil))
+	s.False(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy"}))
+	s.True(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy|noisy_tenant"}))
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		BusyThresholdMs: 50,
+	})
+
+	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.NotNil(replicaSelector)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err := replicaSelector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+
+	// The rejection marks the store rather than steering only this request, so
+	// what it teaches outlives the request that was rejected.
+	defer rpcCtx.Store.healthStatus.markOverloaded(false)
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
+		Reason: "scheduler is busy|noisy_tenant",
+	})
+	s.True(rpcCtx.Store.healthStatus.IsOverloaded())
+
+	// A wait over the threshold would normally divert the retry to an idle
+	// replica, which only reaches this same leader again as a ReadIndex.
+	rpcCtx, err = replicaSelector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.False(req.ReplicaRead)
+	s.False(req.StaleRead)
+	s.Zero(req.BusyThresholdMs)
+
+	// The store is not marked slow: overload is a signal of its own, and nothing
+	// here has touched the latency-driven one.
+	s.False(rpcCtx.Store.healthStatus.IsSlow())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineRetry() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	bo := retry.NewBackoffer(context.Background(), -1)
+	const deadlineRetryGroup = "uds_006"
+	newReq := func() *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadMixed, nil)
+		req.BusyThresholdMs = 50
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: deadlineRetryGroup}
+		return req
+	}
+
+	req := newReq()
+	selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	leaderIdx := selector.region.getStore().workTiKVIdx
+	leaderStore := selector.replicas[leaderIdx].store
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
+
+	// First attempt: the store blames this request's group, so it goes to the
+	// leader.
+	leaderStore.noisyGroups.replace([]string{deadlineRetryGroup})
+	leaderStore.healthStatus.markOverloaded(true)
+	rpcCtx, err := selector.next(bo, req)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.Zero(req.BusyThresholdMs)
+
+	// The leader then answers with a configurable-timeout deadline. Upstream that
+	// disqualifies it and turns the retry into a replica read on a follower, but
+	// a follower throttles the same group against the same quota, so while the
+	// store is overloaded the retry stays here rather than spending a ReadIndex.
+	selector.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	rpcCtx, err = selector.next(bo, req)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "an overloaded leader keeps the deadline retry")
+	s.False(req.ReplicaRead)
+	s.False(req.StaleRead)
+
+	// Once the store is no longer overloaded the upstream behaviour stands: the
+	// pin does not fire, so the busy threshold it would have cleared survives.
+	leaderStore.healthStatus.markOverloaded(false)
+	other := newReq()
+	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
+	s.Nil(err)
+	otherSel.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	_, err = otherSel.next(bo, other)
+	s.Nil(err)
+	s.Equal(uint32(50), other.BusyThresholdMs, "without the mark the deadline flag is left to upstream")
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {
+	const group = "uds_006"
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	bo := retry.NewBackoffer(context.Background(), -1)
+	newReq := func(g string, readType kv.ReplicaReadType) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, readType, nil)
+		req.BusyThresholdMs = 50
+		if g != "" {
+			req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: g}
+		}
+		return req
+	}
+	selectOnce := func(req *tikvrpc.Request) *RPCContext {
+		selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+		s.Nil(err)
+		rpcCtx, err := selector.next(bo, req)
+		s.Nil(err)
+		return rpcCtx
+	}
+
+	// Find the leader's store the way a request does, then let it report that a
+	// group is noisy, as it would on its next health feedback.
+	probe := newReq(group, kv.ReplicaReadLeader)
+	leaderStore := selectOnce(probe).Store
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
+	s.False(leaderStore.healthStatus.IsOverloaded())
+	s.Equal(uint32(50), probe.BusyThresholdMs, "nothing steered before the store says anything")
+
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:     leaderStore.storeID,
+		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+	})
+	s.True(leaderStore.healthStatus.IsOverloaded())
+
+	// Every non-stale read type from the named group now resolves to the
+	// leader: a follower would only return here for a ReadIndex, and that
+	// message shares raft connections with this group's own traffic.
+	for _, readType := range []kv.ReplicaReadType{
+		kv.ReplicaReadLeader, kv.ReplicaReadFollower,
+		kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader,
+	} {
+		req := newReq(group, readType)
+		rpcCtx := selectOnce(req)
+		s.NotNil(rpcCtx, "readType=%v", readType)
+		s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "readType=%v", readType)
+		s.False(req.ReplicaRead, "readType=%v", readType)
+		s.Zero(req.BusyThresholdMs, "readType=%v", readType)
+	}
+
+	// Nobody else is steered. A bystander, and a request with no group at all,
+	// keep the routing and the busy threshold they came with -- the overload is
+	// the named group's to answer for, and moving everyone onto the leader adds
+	// load to the store that just said it was overloaded.
+	for _, readType := range []kv.ReplicaReadType{
+		kv.ReplicaReadLeader, kv.ReplicaReadFollower,
+		kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader,
+	} {
+		for _, g := range []string{"uds_007", ""} {
+			req := newReq(g, readType)
+			rpcCtx := selectOnce(req)
+			s.NotNil(rpcCtx, "readType=%v group=%q", readType, g)
+			s.Equal(uint32(50), req.BusyThresholdMs, "readType=%v group=%q", readType, g)
+			if readType == kv.ReplicaReadFollower {
+				s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "readType=%v group=%q", readType, g)
+			}
+		}
+	}
+
+	// A stale read is left alone: it is served from a follower's own state
+	// without a ReadIndex, so it already keeps off the leader, and steering it
+	// would move load onto the store that just said it was overloaded.
+	stale := newReq(group, kv.ReplicaReadMixed)
+	stale.StaleRead = true
+	selectOnce(stale)
+	s.True(stale.StaleRead)
+	s.Equal(uint32(50), stale.BusyThresholdMs)
+
+	// Once the store reports that it blames nobody, steering stops.
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:     leaderStore.storeID,
+		NoisyGroups: &kvrpcpb.NoisyGroups{},
+	})
+	s.False(leaderStore.healthStatus.IsOverloaded())
+	after := newReq(group, kv.ReplicaReadLeader)
+	selectOnce(after)
+	s.Equal(uint32(50), after.BusyThresholdMs)
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowScore() {
+	const group = "uds_006"
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	newReq := func(g string) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadPreferLeader, nil)
+		if g != "" {
+			req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: g}
+		}
+		return req
+	}
+
+	// Find the leader's store the way a request does, so the feedback below can
+	// be given to the store the sends will land on.
+	selector, err := newReplicaSelector(s.cache, regionLoc.Region, newReq(group))
+	s.Nil(err)
+	probeCtx, err := selector.next(retry.NewBackoffer(context.Background(), -1), newReq(group))
+	s.Nil(err)
+	leaderStore := probeCtx.Store
+	s.Equal(s.leaderPeer, probeCtx.Peer.Id)
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
+
+	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(
+		ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration,
+	) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
+	}}, oracle.NoopReadTSValidator{})
+	// Sends one request to the leader and reports whether that attempt's latency
+	// was added to the store's client-side slow score.
+	send := func(g string) bool {
+		before := atomic.LoadUint64(&leaderStore.healthStatus.clientSideSlowScore.intervalUpdCount)
+		bo := retry.NewBackoffer(context.Background(), -1)
+		resp, rpcCtx, _, err := sender.SendReqCtx(bo, newReq(g), regionLoc.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(err)
+		s.NotNil(resp)
+		if rpcCtx != nil { // the async path does not hand one back
+			s.Equal(leaderStore, rpcCtx.Store)
+		}
+		return atomic.LoadUint64(&leaderStore.healthStatus.clientSideSlowScore.intervalUpdCount) > before
+	}
+
+	// The sync and async send paths each carry their own copy of the condition.
+	for _, async := range []bool{false, true} {
+		if async {
+			s.Nil(failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`))
+		}
+
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+		s.True(send(group), "normal routing is ordinary traffic, async=%v", async)
+
+		leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+			StoreId:     leaderStore.storeID,
+			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+		})
+		s.True(leaderStore.healthStatus.IsOverloaded())
+
+		// The blamed group is pinned here now. Its latency is this group's own
+		// throttling, and the slow score is store-wide with no group dimension
+		// to keep it out of, so the attempt is not measured.
+		s.False(send(group), "a pinned attempt is not measured, async=%v", async)
+		// A bystander reaching the same store was routed normally, and is.
+		s.True(send("uds_007"), "a bystander is still measured, async=%v", async)
+
+		if async {
+			s.Nil(failpoint.Disable("tikvclient/useSendReqAsync"))
+		}
+	}
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	if config.NextGen {
 		s.T().Skip("NextGen does not support replica read")

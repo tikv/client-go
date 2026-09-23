@@ -239,6 +239,10 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
+	// The resource groups this store last blamed for its own overload, so that
+	// their reads can stay on the leader from the first request rather than
+	// after one has been rejected.
+	noisyGroups noisyGroups
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -885,11 +889,29 @@ const (
 	tikvSlowScoreActiveUpdateInterval = time.Second * 15
 )
 
+// How long a store stays marked overloaded after a signal that it is. Health
+// feedback re-reports about once a second, so this only has to outlast that
+// gap; it exists for the stores that only ever signal by ServerIsBusy.
+const storeOverloadedDuration = 5 * time.Second
+
 type StoreHealthStatus struct {
 	// Used for logging.
 	storeID uint64
 
 	isSlow atomic.Bool
+
+	// Deadline in unix nanoseconds until which some tenant is taken to be
+	// overloading this store; 0 means it is not. This is a different question
+	// from isSlow: that one is derived from observed latency and the disk-driven
+	// slow score, so a store can be overloaded well before it looks slow.
+	//
+	// A deadline rather than a flag because the two signals that set it differ.
+	// Health feedback carries the whole noisy-group set about once a second, so
+	// it refreshes the mark while the condition lasts and clears it outright on
+	// the first report that blames nobody. A noisy-tenant ServerIsBusy is only a
+	// point-in-time rejection with nothing to clear it, so on a store too old to
+	// report the set the mark has to lapse on its own.
+	overloadedUntil atomic.Int64
 
 	// A statistic for counting the request latency to this store
 	clientSideSlowScore SlowScoreStat
@@ -928,6 +950,24 @@ func newStoreHealthStatus(storeID uint64) *StoreHealthStatus {
 // IsSlow returns whether current Store is slow.
 func (s *StoreHealthStatus) IsSlow() bool {
 	return s.isSlow.Load()
+}
+
+// IsOverloaded returns whether some tenant is currently overloading this store,
+// according to the last signal the store gave about it.
+func (s *StoreHealthStatus) IsOverloaded() bool {
+	until := s.overloadedUntil.Load()
+	return until != 0 && time.Now().UnixNano() < until
+}
+
+// markOverloaded records a store's report about being overloaded. Marking it
+// true extends the mark; marking it false clears it immediately, and only a
+// store that reports the noisy-group set ever does that.
+func (s *StoreHealthStatus) markOverloaded(overloaded bool) {
+	if !overloaded {
+		s.overloadedUntil.Store(0)
+		return
+	}
+	s.overloadedUntil.Store(time.Now().Add(storeOverloadedDuration).UnixNano())
 }
 
 // GetHealthStatusDetail gets the current detailed information about the store's health status.
@@ -1120,6 +1160,13 @@ func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
 	// only a slow score. It's prepared for possible use in the future.
 	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
+	// An absent message means the store does not report noisy groups at all, so
+	// whatever is already known is left alone; only a store that does report
+	// them may clear the set, by reporting it empty.
+	if groups := feedback.GetNoisyGroups(); groups != nil {
+		s.noisyGroups.replace(groups.GetNames())
+		s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
+	}
 }
 
 // getReplicaFlowsStats returns the statistics on the related replicaFlowsType.
