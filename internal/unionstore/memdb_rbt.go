@@ -152,6 +152,15 @@ func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte, _ ...kv
 	return m, nil
 }
 
+// Dirty implements the MemBuffer interface.
+func (db *rbtDBWithContext) Dirty() bool {
+	if !db.skipMutex {
+		db.RLock()
+		defer db.RUnlock()
+	}
+	return db.RBT.Dirty()
+}
+
 // GetMetrics implements the MemBuffer interface.
 func (db *rbtDBWithContext) GetMetrics() Metrics { return Metrics{} }
 
