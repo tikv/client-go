@@ -33,6 +33,8 @@ const (
 	CategoryKVRequest
 	// CategoryRegionCache traces region cache operations and PD lookups.
 	CategoryRegionCache
+	// CategoryDevDebug is used for development and debugging purposes.
+	CategoryDevDebug
 )
 
 // TraceEventFunc is the function signature for recording trace events.
@@ -55,11 +57,17 @@ func noopTraceControlExtractor(context.Context) TraceControlFlags {
 	return FlagTiKVCategoryRequest
 }
 
+// CheckFlightRecorderDumpTriggerFunc is the function signature for checking whether flight recorder should trigger a dump.
+type CheckFlightRecorderDumpTriggerFunc func(ctx context.Context, triggerCanonicalName string, val any)
+
+func noopCheckFlightRecorderDumpTrigger(ctx context.Context, triggerCanonicalName string, val any) {}
+
 // Global function pointers stored independently
 var (
-	globalTraceEventFunc            atomic.Pointer[TraceEventFunc]
-	globalIsCategoryEnabledFunc     atomic.Pointer[IsCategoryEnabledFunc]
-	globalTraceControlExtractorFunc atomic.Pointer[TraceControlExtractorFunc]
+	globalTraceEventFunc                     atomic.Pointer[TraceEventFunc]
+	globalIsCategoryEnabledFunc              atomic.Pointer[IsCategoryEnabledFunc]
+	globalTraceControlExtractorFunc          atomic.Pointer[TraceControlExtractorFunc]
+	globalCheckFlightRecorderDumpTriggerFunc atomic.Pointer[CheckFlightRecorderDumpTriggerFunc]
 )
 
 func init() {
@@ -67,9 +75,27 @@ func init() {
 	defaultTraceEvent := TraceEventFunc(noopTraceEvent)
 	defaultIsCategoryEnabled := IsCategoryEnabledFunc(noopIsCategoryEnabled)
 	defaultTraceControlExtractor := TraceControlExtractorFunc(noopTraceControlExtractor)
+	defaultCheckFlightRecorderDumpTrigger := CheckFlightRecorderDumpTriggerFunc(noopCheckFlightRecorderDumpTrigger)
 	globalTraceEventFunc.Store(&defaultTraceEvent)
 	globalIsCategoryEnabledFunc.Store(&defaultIsCategoryEnabled)
 	globalTraceControlExtractorFunc.Store(&defaultTraceControlExtractor)
+	globalCheckFlightRecorderDumpTriggerFunc.Store(&defaultCheckFlightRecorderDumpTrigger)
+}
+
+// CheckFlightRecorderDumpTrigger checks whether flight recorder should trigger a dump.
+func CheckFlightRecorderDumpTrigger(ctx context.Context, triggerCanonicalName string, val any) {
+	fn := *globalCheckFlightRecorderDumpTriggerFunc.Load()
+	fn(ctx, triggerCanonicalName, val)
+}
+
+// SetCheckFlightRecorderDumpTriggerFunc sets the flight recorder dump trigger function.
+// This is typically called once during application initialization (e.g., by TiDB).
+// Passing nil will use a no-op implementation.
+func SetCheckFlightRecorderDumpTriggerFunc(fn CheckFlightRecorderDumpTriggerFunc) {
+	if fn == nil {
+		fn = noopCheckFlightRecorderDumpTrigger
+	}
+	globalCheckFlightRecorderDumpTriggerFunc.Store(&fn)
 }
 
 // SetTraceEventFunc registers the trace event handler function.
