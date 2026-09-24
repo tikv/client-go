@@ -122,39 +122,32 @@ func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, co
 	return s.resolveLocks(ctx, safepoint, concurrency)
 }
 
+// ScanLocks returns all locks in [startKey, endKey) at or below maxVersion.
+// An empty endKey means the end of the key space.
 func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxVersion uint64) ([]*txnlock.Lock, error) {
 	bo := NewGcResolveLockMaxBackoffer(ctx)
-	const limit = 1024
-
 	var result []*txnlock.Lock
-
-outerLoop:
-	for {
-		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, nil, maxVersion, limit)
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
+		// A limit can truncate a shared-lock wrapper. Since this probe only
+		// scans and does not resolve locks, neither skipping nor rescanning the
+		// last key can enumerate its remaining holders. Scan without a limit
+		// within each region instead.
+		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, endKey, maxVersion, 0)
 		if err != nil {
 			return nil, err
 		}
-		for _, l := range locks {
-			if bytes.Compare(endKey, l.Key) <= 0 {
-				// Finished scanning the given range.
-				break outerLoop
+		for _, lock := range locks {
+			// Some test stores scan the entire region regardless of EndKey.
+			if len(endKey) > 0 && bytes.Compare(lock.Key, endKey) >= 0 {
+				return result, nil
 			}
-			result = append(result, l)
+			result = append(result, lock)
 		}
-
-		if len(locks) < limit {
-			if len(loc.EndKey) == 0 {
-				// Scanned to the very end.
-				break outerLoop
-			}
-			// The current region is completely scanned.
-			startKey = loc.EndKey
-		} else {
-			// The current region may still have more locks.
-			startKey = append(locks[len(locks)-1].Key, 0)
+		if len(loc.EndKey) == 0 {
+			break
 		}
+		startKey = loc.EndKey
 	}
-
 	return result, nil
 }
 
