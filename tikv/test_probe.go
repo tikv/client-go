@@ -37,8 +37,10 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"math"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -126,15 +128,24 @@ func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, co
 // An empty endKey means the end of the key space.
 func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxVersion uint64) ([]*txnlock.Lock, error) {
 	bo := NewGcResolveLockMaxBackoffer(ctx)
+	const initialLimit = 1024
+	limit := uint32(initialLimit)
 	var result []*txnlock.Lock
 	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
-		// A limit can truncate a shared-lock wrapper. Since this probe only
-		// scans and does not resolve locks, neither skipping nor rescanning the
-		// last key can enumerate its remaining holders. Scan without a limit
-		// within each region instead.
-		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, endKey, maxVersion, 0)
+		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, endKey, maxVersion, limit)
 		if err != nil {
 			return nil, err
+		}
+		// A full page may truncate a shared-lock wrapper. This probe cannot
+		// remove holders to make progress, so retry the region with a larger
+		// limit before appending any results. Keep the limit positive because
+		// some test stores interpret zero as an empty result, not unlimited.
+		if uint64(len(locks)) >= uint64(limit) {
+			if limit == math.MaxUint32 {
+				return nil, errors.New("ScanLocks result reaches the maximum scan limit")
+			}
+			limit = uint32(min(uint64(limit)*2, uint64(math.MaxUint32)))
+			continue
 		}
 		for _, lock := range locks {
 			// Some test stores scan the entire region regardless of EndKey.
@@ -147,6 +158,7 @@ func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxV
 			break
 		}
 		startKey = loc.EndKey
+		limit = initialLimit
 	}
 	return result, nil
 }
