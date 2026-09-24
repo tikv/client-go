@@ -116,13 +116,14 @@ type kvstore interface {
 	GetTiKVClient() (client client.Client)
 	GetLockResolver() *txnlock.LockResolver
 	Ctx() context.Context
-	WaitGroup() *sync.WaitGroup
 	// TxnLatches returns txnLatches.
 	TxnLatches() *latch.LatchesScheduler
 	GetClusterID() uint64
 	// IsClose checks whether the store is closed.
 	IsClose() bool
-	// Go run the function in a separate goroutine.
+	// Go runs the function in a background goroutine tracked by the store. It
+	// returns a non-nil error if and only if the function is rejected and will
+	// never be executed, which happens when the store is closing.
 	Go(f func()) error
 }
 
@@ -1096,7 +1097,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
-		err = c.txn.spawnWithStorePool(func() {
+		err = c.txn.spawn(func() {
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
 					if s, ok := v.(string); !ok {
@@ -1478,7 +1479,7 @@ func broadcastToAllStores(
 			wg.Add(1)
 			target := s
 
-			err := txn.spawnWithStorePool(func() {
+			err := txn.spawn(func() {
 				defer wg.Done()
 				defer func() { <-rateLimit }()
 
@@ -1522,7 +1523,7 @@ func broadcastToAllStores(
 		wg.Wait()
 	}
 
-	if err := txn.spawnWithStorePool(broadcastFunc); err != nil {
+	if err := txn.spawn(broadcastFunc); err != nil {
 		logutil.Logger(store.Ctx()).Error("failed to spawn goroutine for broadcasting txn status",
 			zap.Error(err))
 	}
@@ -1675,7 +1676,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 		return
 	}
 	c.cleanWg.Add(1)
-	c.txn.spawn(func() {
+	err := c.txn.spawn(func() {
 		defer c.cleanWg.Done()
 
 		if _, err := util.EvalFailpoint("commitFailedSkipCleanup"); err == nil {
@@ -1735,6 +1736,14 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			}
 		}
 	})
+	if err != nil {
+		// The cleanup will never run, release the waiter so that it does not
+		// block forever.
+		c.cleanWg.Done()
+		logutil.Logger(ctx).Warn("twoPhaseCommitter fail to spawn the cleanup goroutine",
+			zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
+			zap.Bool("isOnePC", c.isOnePC()), zap.Error(err))
+	}
 }
 
 // execute executes the two-phase commit protocol.
@@ -2054,7 +2063,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
-		c.txn.spawn(func() {
+		err := c.txn.spawn(func() {
 			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
 				return
 			}
@@ -2065,6 +2074,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 					zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
 			}
 		})
+		if err != nil {
+			logutil.Logger(ctx).Warn("2PC fail to spawn the async commit goroutine",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID), zap.Error(err))
+		}
 		return nil
 	}
 	return c.commitTxn(ctx, commitDetail)
