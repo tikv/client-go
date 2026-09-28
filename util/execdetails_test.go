@@ -129,65 +129,47 @@ func TestPointResponseStatsInvalid(t *testing.T) {
 func TestRUDetailsDrainRUV2(t *testing.T) {
 	ruDetails := NewRUDetails()
 	ruDetails.AddRUV2(&kvrpcpb.RUV2{
-		ReadRpcCount:                 1,
-		StorageProcessedKeysBatchGet: 2,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchSelection: 3,
-		},
+		ReadRpcCount:             1,
+		CoprocessorResponseBytes: 2,
 	})
 	ruDetails.AddRUV2(&kvrpcpb.RUV2{
-		WriteRpcCount:                     4,
-		StorageProcessedKeysGet:           5,
-		RaftstoreStoreWriteTriggerWbBytes: 6,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchSelection: 7,
-		},
+		WriteRpcCount:            4,
+		CoprocessorResponseBytes: 5,
 	})
 
 	drained := ruDetails.DrainRUV2()
 	assert.NotNil(t, drained)
-	assert.Equal(t, uint64(1), drained.ReadRpcCount)
-	assert.Equal(t, uint64(4), drained.WriteRpcCount)
-	assert.Equal(t, uint64(2), drained.StorageProcessedKeysBatchGet)
-	assert.Equal(t, uint64(5), drained.StorageProcessedKeysGet)
-	assert.Equal(t, uint64(6), drained.RaftstoreStoreWriteTriggerWbBytes)
-	assert.Equal(t, uint64(10), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+	assert.Equal(t, uint64(7), drained.CoprocessorResponseBytes)
+	assert.Zero(t, drained.ReadRpcCount)
+	assert.Zero(t, drained.WriteRpcCount)
 	assert.Nil(t, ruDetails.DrainRUV2())
 }
 
-func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
+func TestRUDetailsCloneAndMergeRUV2(t *testing.T) {
 	orig := NewRUDetails()
 	orig.AddRUV2(&kvrpcpb.RUV2{
-		ReadRpcCount: 1,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
-		},
+		CoprocessorResponseBytes: 2,
 	})
 
 	cloned := orig.Clone()
-	cloned.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 3})
+	cloned.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 3})
 
 	origDrained := orig.DrainRUV2()
-	assert.Equal(t, uint64(1), origDrained.ReadRpcCount)
-	assert.Zero(t, origDrained.WriteRpcCount)
-	assert.Equal(t, uint64(2), origDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(2), origDrained.CoprocessorResponseBytes)
 
 	clonedDrained := cloned.DrainRUV2()
-	assert.Equal(t, uint64(1), clonedDrained.ReadRpcCount)
-	assert.Equal(t, uint64(3), clonedDrained.WriteRpcCount)
-	assert.Equal(t, uint64(2), clonedDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(5), clonedDrained.CoprocessorResponseBytes)
 
 	left := NewRUDetails()
-	left.AddRUV2(&kvrpcpb.RUV2{ReadRpcCount: 5})
+	left.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 5})
 	right := NewRUDetails()
-	right.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 7})
+	right.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 7})
 	left.Merge(right)
 
 	merged := left.DrainRUV2()
-	assert.Equal(t, uint64(5), merged.ReadRpcCount)
-	assert.Equal(t, uint64(7), merged.WriteRpcCount)
+	assert.Equal(t, uint64(12), merged.CoprocessorResponseBytes)
 	rightDrained := right.DrainRUV2()
-	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
+	assert.Equal(t, uint64(7), rightDrained.CoprocessorResponseBytes)
 }
 
 func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
@@ -1067,9 +1049,21 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 
 	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
 	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
-	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
+	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 
 	cloned := rd.Clone()
+	assert.InDelta(t, rd.RRU(), cloned.RRU(), 1e-9)
+	assert.InDelta(t, rd.WRU(), cloned.WRU(), 1e-9)
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
+
+	merged := NewRUDetails()
+	merged.Merge(rd)
+	assert.InDelta(t, rd.TiflashRU(), merged.TiflashRU(), 1e-9)
+}
+
+func TestRUDetailsTiKVRUV2CompatibilityIsNoop(t *testing.T) {
+	rd := NewRUDetails()
+	rd.AddTiKVRUV2(42)
+	assert.Zero(t, rd.TiKVRUV2())
 }

@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +49,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -282,7 +285,60 @@ func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
 	s.Nil(txn.Set(s.key("key"), []byte("value")))
 	// prewrite fail for an undetermined result in async commit should return undetermined error.
 	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("undeterminedResult")->return("")`))
+	defer func() { s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult")) }()
 	err := txn.Commit(context.Background())
 	s.NotNil(err)
 	s.True(tikverr.IsErrorUndetermined(err))
+	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
+}
+
+func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
+	if *withTiKV {
+		s.T().Skip("requires a controlled region split in unistore")
+	}
+	s.Require().NoError(failpoint.Enable("tikvclient/invalidMaxCommitTS", `return(true)`))
+	defer func() { s.NoError(failpoint.Disable("tikvclient/invalidMaxCommitTS")) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	bo := tikv.NewBackofferWithVars(ctx, 5000, nil)
+	loc, err := s.store.GetRegionCache().LocateKey(bo, s.key("s"))
+	s.Require().NoError(err)
+	regionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
+	s.cluster.Split(loc.Region.GetID(), regionID, s.key("s"), []uint64{peerID}, peerID)
+	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+
+	txn := s.beginAsyncCommit()
+	s.Require().NoError(txn.Set(s.key("a"), []byte("a")))
+	s.Require().NoError(txn.Set(s.key("z"), []byte("z")))
+	var entered atomic.Int32
+	bothStarted := make(chan struct{})
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("confirmed-async-fallback", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPrewrite {
+				return next(target, req)
+			}
+			s.True(req.Prewrite().UseAsyncCommit)
+			if entered.Add(1) == 2 {
+				close(bothStarted)
+			}
+			select {
+			case <-bothStarted:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if bytes.Equal(req.Prewrite().Mutations[0].Key, s.key("a")) {
+				return next(target, req)
+			}
+			// The first batch's successful response confirms 2PC fallback before
+			// the other batch reports an RPC error. No commit request was sent.
+			if !s.Eventually(func() bool { return !txn.GetCommitter().IsAsyncCommit() }, 5*time.Second, time.Millisecond) {
+				return nil, errors.New("async commit did not fall back")
+			}
+			return nil, context.Canceled
+		}
+	}))
+	err = txn.Commit(ctx)
+	s.ErrorIs(err, context.Canceled)
+	s.False(txn.GetCommitter().IsAsyncCommit())
+	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }

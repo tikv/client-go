@@ -566,10 +566,6 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 			}
 			return resp, nil
 		}
-		if batch.isPrimary {
-			// TiKV has definitively processed the primary commit request.
-			c.setUndeterminedErr(nil)
-		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {
 				logutil.Logger(bo.GetCtx()).Info("2PC commitTS rejected by TiKV, retry with a newer commitTS",
@@ -583,6 +579,9 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 						zap.Bool("batchIsPrimary", batch.isPrimary))
 					return nil, errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
 				}
+				// The primary lock still exists, so earlier commit attempts did not succeed.
+				c.setUndeterminedErr(nil)
+				sender.SetRPCError(nil)
 
 				// Do not retry for a txn which has a too large MinCommitTs
 				// 3600000 << 18 = 943718400000
@@ -608,6 +607,9 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 				continue
 			}
 			return nil, tikverr.ExtractKeyErr(keyErr)
+		}
+		if batch.isPrimary {
+			c.setUndeterminedErr(nil)
 		}
 		return resp, nil
 	}

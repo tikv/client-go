@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -221,47 +222,41 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 	assert.Equal(t, errors.Cause(err), context.DeadlineExceeded)
 }
 
-func TestCompletedTiKVRUV2RPCCount(t *testing.T) {
-	testCases := []struct {
-		name       string
-		req        *tikvrpc.Request
-		readCount  int64
-		writeCount int64
-	}{
-		{
-			name:       "get",
-			req:        tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}),
-			readCount:  1,
-			writeCount: 0,
-		},
-		{
-			name:       "batch get",
-			req:        tikvrpc.NewRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{}),
-			readCount:  1,
-			writeCount: 0,
-		},
-		{
-			name:       "prewrite",
-			req:        tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}),
-			readCount:  0,
-			writeCount: 1,
-		},
-		{
-			name:       "commit",
-			req:        tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{}),
-			readCount:  0,
-			writeCount: 1,
-		},
-	}
+func TestSendRequestCollectsCoprocessorResponseBytes(t *testing.T) {
+	server, port := mockserver.StartMockTikvService()
+	require.Positive(t, port)
+	defer server.Stop()
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.req.StoreTp = tikvrpc.TiKV
-			readCount, writeCount := completedTiKVRUV2RPCCount(tc.req)
-			require.Equal(t, tc.readCount, readCount)
-			require.Equal(t, tc.writeCount, writeCount)
-		})
+	handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
+		ids := req.GetRequestIds()
+		require.Len(t, ids, 1)
+		return &tikvpb.BatchCommandsResponse{
+			RequestIds: ids,
+			Responses: []*tikvpb.BatchCommandsResponse_Response{{
+				Cmd: &tikvpb.BatchCommandsResponse_Response_Get{Get: &kvrpcpb.GetResponse{
+					ExecDetailsV2: &kvrpcpb.ExecDetailsV2{RuV2: &kvrpcpb.RUV2{
+						CoprocessorResponseBytes: 13,
+						StorageProcessedKeysGet:  7,
+					}},
+				}},
+			}},
+		}, nil
 	}
+	server.OnBatchCommandsRequest.Store(&handle)
+
+	client := NewRPCClient()
+	defer client.Close()
+	ruDetails := util.NewRUDetails()
+	ctx := context.WithValue(context.Background(), util.RUDetailsCtxKey, ruDetails)
+	resp, err := client.SendRequest(ctx, server.Addr(), tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), 5*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	drained := ruDetails.DrainRUV2()
+	require.NotNil(t, drained)
+	require.Equal(t, uint64(13), drained.GetCoprocessorResponseBytes())
+	require.Zero(t, drained.GetStorageProcessedKeysGet())
+	require.Nil(t, ruDetails.DrainRUV2())
 }
 
 func TestSendWhenReconnect(t *testing.T) {
