@@ -1532,6 +1532,16 @@ func (rs *SnapshotRuntimeStats) GetPointResponseStats() PointResponseStats {
 	return rs.pointResponseExtra.buildPointResponseStats(rs.scanDetail)
 }
 
+// GetScanDetail returns a copy of the aggregated scan details, or nil if the
+// receiver is nil. It must be called after concurrent statistics updates finish.
+func (rs *SnapshotRuntimeStats) GetScanDetail() *util.ScanDetail {
+	if rs == nil {
+		return nil
+	}
+	detail := rs.scanDetail
+	return &detail
+}
+
 // GetTimeDetail returns the timeDetail
 func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
 	return &rs.timeDetail
