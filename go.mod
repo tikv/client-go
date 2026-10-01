@@ -59,3 +59,7 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary: fork of kvproto master adding HealthFeedback.noisy_groups.
+// Drop once https://github.com/pingcap/kvproto is updated.
+replace github.com/pingcap/kvproto => github.com/mittalrishabh/kvproto v0.0.0-20260922195209-09946a827f2a
