@@ -1,0 +1,15 @@
+patterns:
+  - name: # sub pattern name 1
+    workload_type: # workload type, [rawkv | txnkv]
+    workloads: # list of workloads [batch_get | batch_write | get | put | scan | update | begin | commit | rollback]
+      - # workload name 1
+      - # workload name 2
+    mode: # transaction mode, only valid for txnkv, [async_commit | 1PC | 2PC]
+    lock: # lock type, only valid for txnkv, [optimistic | pessimistic]
+    key_prefix: # prefix of the key, default is ${name}
+    count: # number of operations
+    key_size: # size of the key
+    value_size: # size of the value
+    threads: # number of threads
+    random: # whether to use random key, default is false
+  - name: # sub pattern name 2
