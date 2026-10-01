@@ -41,6 +41,9 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 	// InternalTxnStats is the type of statistics txn.
 	InternalTxnStats = "stats"
+	// InternalTxnStoreCacheRefresh is the type of region-cache refresh Gets
+	// sent to an evicted store before restart.
+	InternalTxnStoreCacheRefresh = "store_cache_refresh"
 )
 
 // explicit source types.
