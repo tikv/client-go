@@ -365,9 +365,13 @@ func (req *Request) EnableStaleWithMixedReplicaRead() {
 	req.ReplicaRead = false
 }
 
-// DisableStaleReadMeetLock is called when stale-read fallbacks to leader read after meeting key-is-locked error.
+// DisableStaleReadMeetLock is called when a read fallbacks to leader read after meeting key-is-locked error.
+// It also clears ReplicaRead: a request built as a replica read (e.g. prefer-leader or follower) keeps
+// ReplicaRead=true otherwise, and the leader selector never resets it, so the leader would receive a
+// replica read request.
 func (req *Request) DisableStaleReadMeetLock() {
 	req.StaleRead = false
+	req.ReplicaRead = false
 	req.ReplicaReadType = kv.ReplicaReadLeader
 }
 
