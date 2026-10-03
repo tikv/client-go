@@ -177,5 +177,9 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	// Temporary replacement for kvproto PR #1503. Remove it after the PR merges.
+	github.com/pingcap/kvproto => github.com/LykxSassinator/kvproto v0.0.0-20260723025057-6a82baebdef0
 	github.com/tikv/client-go/v2 => ../
+	// Temporary replacement for PD PR #11041. Remove it after the PR merges.
+	github.com/tikv/pd/client => github.com/LykxSassinator/pd/client v0.0.0-20260723073558-d09cfb9779a7
 )
