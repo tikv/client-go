@@ -1098,8 +1098,8 @@ func (s *sendReqState) next() (done bool) {
 		defer releaseAttempt()
 	}
 
-	// judge the store limit switch.
-	if limit := kv.StoreLimit.Load(); limit > 0 {
+	// TiDB endpoints have no backing Store, so per-store limits do not apply.
+	if limit := kv.StoreLimit.Load(); limit > 0 && s.vars.rpcCtx.Store != nil {
 		if s.vars.err = s.getStoreToken(s.vars.rpcCtx.Store, limit); s.vars.err != nil {
 			return true
 		}
