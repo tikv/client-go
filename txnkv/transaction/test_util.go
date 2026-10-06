@@ -16,7 +16,6 @@ package transaction
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
@@ -470,11 +469,6 @@ func (u *unimplementedKVStore) SplitTxnFileRegions(ctx context.Context, splitKey
 
 // TxnLatches implements kvstore.
 func (u *unimplementedKVStore) TxnLatches() *latch.LatchesScheduler {
-	panic("unimplemented")
-}
-
-// WaitGroup implements kvstore.
-func (u *unimplementedKVStore) WaitGroup() *sync.WaitGroup {
 	panic("unimplemented")
 }
 

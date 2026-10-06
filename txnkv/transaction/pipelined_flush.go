@@ -490,7 +490,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 	runner.SetStatLogInterval(30 * time.Second)
 	runner.SetRegionsPerTask(1)
 
-	c.txn.spawnWithStorePool(func() {
+	errSpawn := c.txn.spawn(func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
 			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] resolve flushed locks failed",
 				zap.String("txn-status", status),
@@ -534,4 +534,13 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 			)
 		}
 	})
+	if errSpawn != nil {
+		logutil.Logger(bo.GetCtx()).Warn("[pipelined dml] failed to spawn the goroutine resolving flushed locks",
+			zap.String("txn-status", status),
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", commitTs),
+			zap.Uint64("session", c.sessionID),
+			zap.Error(errSpawn),
+		)
+	}
 }

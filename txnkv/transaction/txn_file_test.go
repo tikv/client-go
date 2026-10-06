@@ -1368,7 +1368,6 @@ func (s *stubKVStore) SendReq(_ *retry.Backoffer, _ *tikvrpc.Request, _ locate.R
 func (s *stubKVStore) GetTiKVClient() client.Client           { panic("not implemented") }
 func (s *stubKVStore) GetLockResolver() *txnlock.LockResolver { panic("not implemented") }
 func (s *stubKVStore) Ctx() context.Context                   { panic("not implemented") }
-func (s *stubKVStore) WaitGroup() *sync.WaitGroup             { panic("not implemented") }
 func (s *stubKVStore) TxnLatches() *latch.LatchesScheduler    { panic("not implemented") }
 func (s *stubKVStore) GetClusterID() uint64                   { return 0 }
 func (s *stubKVStore) IsClose() bool                          { return false }
