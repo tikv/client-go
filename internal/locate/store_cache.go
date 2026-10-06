@@ -1162,10 +1162,14 @@ func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
 	// An absent message means the store does not report noisy groups at all, so
 	// whatever is already known is left alone; only a store that does report
-	// them may clear the set, by reporting it empty.
+	// them may clear the set, by reporting it empty. The sequence number is
+	// checked for this part: an out-of-order report that undid a newer one would
+	// restore blame the store has withdrawn, and the overload mark derived from
+	// it would follow.
 	if groups := feedback.GetNoisyGroups(); groups != nil {
-		s.noisyGroups.replace(groups.GetNames())
-		s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
+		if s.noisyGroups.record(groups.GetNames(), feedback.GetFeedbackSeqNo(), time.Now()) {
+			s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
+		}
 	}
 }
 

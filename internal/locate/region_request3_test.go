@@ -1165,6 +1165,31 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "without the blame the deadline flag is left to upstream")
 	s.True(other.ReplicaRead)
 	s.False(otherSel.pinnedToOverloadedLeader)
+
+	// Blame the store stopped reporting has expired with the mark. A timeout now
+	// is a disk or network stall, not the group's own queue, and must not renew
+	// the overload or the pin on the store's old diagnosis.
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:       leaderStore.storeID,
+		FeedbackSeqNo: 1,
+		NoisyGroups:   &kvrpcpb.NoisyGroups{Names: []string{group}},
+	})
+	expired := time.Now().Add(-noisyGroupsFreshDuration)
+	leaderStore.noisyGroups.report.Load().at = expired
+	leaderStore.healthStatus.overloadedUntil.Store(expired.UnixNano())
+	s.False(leaderStore.healthStatus.IsOverloaded())
+	stale := newReq(kv.ReplicaReadLeader)
+	staleSel, err := newReplicaSelector(s.cache, regionLoc.Region, stale)
+	s.Nil(err)
+	rpcCtx, err = staleSel.next(bo, stale)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.False(staleSel.pinnedToOverloadedLeader, "expired blame steers nobody")
+	handled, err = staleSel.onNoisyTenantTimeout(bo, rpcCtx, stale)
+	s.Nil(err)
+	s.False(handled, "a timeout does not renew expired blame")
+	s.False(leaderStore.healthStatus.IsOverloaded())
+	s.False(staleSel.pinnedByNoisyReply)
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {

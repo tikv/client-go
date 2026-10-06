@@ -24,25 +24,64 @@ import (
 
 func TestNoisyGroupsReplaceAndLookup(t *testing.T) {
 	var n noisyGroups
+	now := time.Now()
 
 	// Nothing reported yet, which must not read as a clean bill of health for
 	// anyone in particular -- it simply says nothing.
-	require.False(t, n.contains("uds_006"))
+	require.False(t, n.contains("uds_006", now))
 
 	n.replace([]string{"uds_006", "uds_007"})
-	require.True(t, n.contains("uds_006"))
-	require.True(t, n.contains("uds_007"))
-	require.False(t, n.contains("uds_008"))
-	require.False(t, n.contains(""))
+	require.True(t, n.contains("uds_006", now))
+	require.True(t, n.contains("uds_007", now))
+	require.False(t, n.contains("uds_008", now))
+	require.False(t, n.contains("", now))
 
 	// A report replaces rather than accumulates, so a group the store no longer
 	// blames stops being pinned on the next report.
 	n.replace([]string{"uds_008"})
-	require.False(t, n.contains("uds_006"))
-	require.True(t, n.contains("uds_008"))
+	require.False(t, n.contains("uds_006", now))
+	require.True(t, n.contains("uds_008", now))
 
 	n.replace(nil)
-	require.False(t, n.contains("uds_008"))
+	require.False(t, n.contains("uds_008", now))
+}
+
+func TestNoisyGroupsFreshness(t *testing.T) {
+	var n noisyGroups
+	now := time.Now()
+
+	require.True(t, n.record([]string{"uds_006"}, 100, now))
+	require.True(t, n.contains("uds_006", now))
+	require.True(t, n.contains("uds_006", now.Add(noisyGroupsFreshDuration-time.Millisecond)))
+
+	// Feedback that stops arriving stops meaning anything: the store's diagnosis
+	// is not renewed by this client's own timeouts, however many it sees.
+	require.False(t, n.contains("uds_006", now.Add(noisyGroupsFreshDuration)))
+	require.False(t, n.contains("uds_006", now.Add(time.Minute)))
+}
+
+func TestNoisyGroupsOutOfOrderReports(t *testing.T) {
+	var n noisyGroups
+	now := time.Now()
+
+	// The store withdrew the blame in report 101. A delayed report 100 from
+	// another connection, still naming the group, is not allowed to restore it.
+	require.True(t, n.record([]string{"uds_006"}, 99, now))
+	require.True(t, n.record(nil, 101, now.Add(time.Second)))
+	require.False(t, n.record([]string{"uds_006"}, 100, now.Add(time.Second+time.Millisecond)))
+	require.False(t, n.contains("uds_006", now.Add(2*time.Second)))
+
+	// Equal sequence (a re-sent report) and a higher one are adopted.
+	require.True(t, n.record([]string{"uds_007"}, 101, now.Add(2*time.Second)))
+	require.True(t, n.contains("uds_007", now.Add(2*time.Second)))
+	require.True(t, n.record(nil, 102, now.Add(3*time.Second)))
+	require.False(t, n.contains("uds_007", now.Add(3*time.Second)))
+
+	// Once the held report has expired, a lower sequence is taken: the sequence
+	// restarts with the TiKV process, and expired evidence outranks nothing.
+	later := now.Add(3*time.Second + noisyGroupsFreshDuration)
+	require.True(t, n.record([]string{"uds_008"}, 7, later))
+	require.True(t, n.contains("uds_008", later))
 }
 
 func TestRecordHealthFeedbackNoisyGroups(t *testing.T) {
@@ -50,30 +89,44 @@ func TestRecordHealthFeedbackNoisyGroups(t *testing.T) {
 
 	// A store that does not report the set leaves what is known untouched,
 	// rather than being taken to have cleared it.
+	now := time.Now()
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{StoreId: 1, SlowScore: 1})
-	require.False(t, store.noisyGroups.contains("uds_006"))
+	require.False(t, store.noisyGroups.contains("uds_006", now))
 	require.False(t, store.healthStatus.IsOverloaded())
 
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{
-		StoreId:     1,
-		SlowScore:   1,
-		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{"uds_006"}},
+		StoreId:       1,
+		FeedbackSeqNo: 100,
+		SlowScore:     1,
+		NoisyGroups:   &kvrpcpb.NoisyGroups{Names: []string{"uds_006"}},
 	})
-	require.True(t, store.noisyGroups.contains("uds_006"))
+	require.True(t, store.noisyGroups.contains("uds_006", now))
 	// Naming anyone marks the whole store, which is what routing keys on.
 	require.True(t, store.healthStatus.IsOverloaded())
 
-	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{StoreId: 1, SlowScore: 1})
-	require.True(t, store.noisyGroups.contains("uds_006"))
+	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{StoreId: 1, FeedbackSeqNo: 101, SlowScore: 1})
+	require.True(t, store.noisyGroups.contains("uds_006", now))
 	require.True(t, store.healthStatus.IsOverloaded())
 
 	// Only a store that does report the set may clear it, by reporting empty.
 	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{
-		StoreId:     1,
-		SlowScore:   1,
-		NoisyGroups: &kvrpcpb.NoisyGroups{},
+		StoreId:       1,
+		FeedbackSeqNo: 102,
+		SlowScore:     1,
+		NoisyGroups:   &kvrpcpb.NoisyGroups{},
 	})
-	require.False(t, store.noisyGroups.contains("uds_006"))
+	require.False(t, store.noisyGroups.contains("uds_006", now))
+	require.False(t, store.healthStatus.IsOverloaded())
+
+	// A report that was overtaken on another connection arrives late. It is
+	// dropped whole: neither the set nor the overload mark it would have set.
+	store.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:       1,
+		FeedbackSeqNo: 101,
+		SlowScore:     1,
+		NoisyGroups:   &kvrpcpb.NoisyGroups{Names: []string{"uds_006"}},
+	})
+	require.False(t, store.noisyGroups.contains("uds_006", now))
 	require.False(t, store.healthStatus.IsOverloaded())
 
 	// A store too old to report the set can only ever signal by ServerIsBusy,

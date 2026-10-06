@@ -188,7 +188,7 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 	if !leader.store.healthStatus.IsOverloaded() || !isLeaderCandidate(leader) {
 		return
 	}
-	if !leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName()) {
+	if !leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now()) {
 		return
 	}
 	s.target = leader
@@ -685,12 +685,14 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 // Whether the store this attempt targeted blames the request's own resource
 // group, as last reported in that store's health feedback. That report is the
 // only attribution available when a request times out locally, since no
-// response carrying a reason ever arrives.
+// response carrying a reason ever arrives. It has to be recent: a timeout on a
+// disk or network stall must not renew an overload the store diagnosed and
+// has since stopped reporting.
 func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
 	if req == nil || s.target == nil || s.target.store == nil {
 		return false
 	}
-	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName())
+	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now())
 }
 
 // pinRetryToLeader keeps the remaining attempts on the leader for as long as it
