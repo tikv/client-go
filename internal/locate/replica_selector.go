@@ -152,7 +152,7 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	// route. Re-steering here would also keep re-selecting a leader that the
 	// normal strategy has set aside, such as one suspected of having lost its
 	// leadership.
-	if s.attempts == 1 && !s.isStaleRead {
+	if s.attempts == 1 && s.isReadOnlyReq && !s.isStaleRead {
 		s.tryOverloadedLeader(req)
 	}
 	if s.target == nil {
@@ -177,8 +177,9 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 // back to this leader as a ReadIndex anyway, so serving it from the leader's
 // lease removes that message instead of moving it.
 //
-// Only the blamed group is steered. Every other group keeps its normal routing,
-// and stale reads are excluded by the caller: they need no ReadIndex.
+// Only the blamed group is steered. Every other group keeps its normal routing.
+// Writes and stale reads are excluded by the caller: a write is bound to the
+// leader already, and a stale read needs no ReadIndex.
 func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	if int(leaderIdx) >= len(s.replicas) {
@@ -664,8 +665,10 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	//
 	// The error names this request's own group as the cause, so its retries
 	// are pinned here and now rather than waiting for the store's next health
-	// feedback to say the same thing. The store is marked as well, which is
-	// what steers the group's later requests through tryOverloadedLeader.
+	// feedback to say the same thing. The store is marked overloaded as well,
+	// though that alone steers no other request: a rejection carries no group
+	// set, so later requests go through tryOverloadedLeader only once health
+	// feedback names the group.
 	if ctx != nil && ctx.Store != nil {
 		ctx.Store.healthStatus.markOverloaded(true)
 	}
@@ -744,8 +747,11 @@ func (s *replicaSelector) onNoisyTenantTimeout(
 	return true, nil
 }
 
-// Pins every remaining attempt to the leader. busyThreshold must go too, or
-// nextForReplicaReadLeader diverts to a replica whenever the leader is busy.
+// onServerIsBusy handles a ServerIsBusy region error. A reply that blames the
+// request's own resource group goes to onNoisyTenantServerIsBusy, which pins
+// the retry to the leader. Any other reply keeps upstream's handling: the
+// store's load and health are updated, the target is flagged busy, and the
+// request is retried either at once or after a backoff.
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {

@@ -1075,9 +1075,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	// The rejection marks the store rather than steering only this request, so
 	// what it teaches outlives the request that was rejected.
 	defer rpcCtx.Store.healthStatus.markOverloaded(false)
-	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
+	shouldRetry, err := replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		Reason: "scheduler is busy|noisy_tenant",
 	})
+	s.Nil(err)
+	s.True(shouldRetry)
 	s.True(rpcCtx.Store.healthStatus.IsOverloaded())
 
 	// A wait over the threshold would normally divert the retry to an idle
@@ -1193,6 +1195,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support replica read")
+	}
 	const group = "uds_006"
 
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
@@ -1246,6 +1251,28 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 		s.False(req.ReplicaRead, "readType=%v", readType)
 		s.Zero(req.BusyThresholdMs, "readType=%v", readType)
 	}
+
+	// A write from the named group is bound to the leader already, so there is
+	// nothing to steer and nothing to count.
+	write := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{ResourceGroupName: group},
+	})
+	readCounter := func(col prometheus.Collector) float64 {
+		ch := make(chan prometheus.Metric, 1)
+		col.Collect(ch)
+		var m dto.Metric
+		s.Nil((<-ch).Write(&m))
+		return m.Counter.GetValue()
+	}
+	pinnedBefore := readCounter(metrics.TiKVNoisyTenantLeaderPinnedCounter)
+	writeSel, err := newReplicaSelector(s.cache, regionLoc.Region, write)
+	s.Nil(err)
+	rpcCtx, err := writeSel.next(bo, write)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.False(writeSel.pinnedToOverloadedLeader, "a write is not steered")
+	s.Equal(pinnedBefore, readCounter(metrics.TiKVNoisyTenantLeaderPinnedCounter), "a write is not counted as pinned")
 
 	// Nobody else is steered. A bystander, and a request with no group at all,
 	// keep the routing and the busy threshold they came with -- the overload is
