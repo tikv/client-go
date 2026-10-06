@@ -1088,26 +1088,27 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.False(req.ReplicaRead)
 	s.False(req.StaleRead)
 	s.Zero(req.BusyThresholdMs)
+	s.True(replicaSelector.pinnedToOverloadedLeader, "a pinned retry stays out of the slow score")
 
 	// The store is not marked slow: overload is a signal of its own, and nothing
 	// here has touched the latency-driven one.
 	s.False(rpcCtx.Store.healthStatus.IsSlow())
 }
 
-func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineRetry() {
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader() {
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
 	bo := retry.NewBackoffer(context.Background(), -1)
-	const deadlineRetryGroup = "uds_006"
-	newReq := func() *tikvrpc.Request {
-		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadMixed, nil)
+	const group = "uds_006"
+	newReq := func(readType kv.ReplicaReadType) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, readType, nil)
 		req.BusyThresholdMs = 50
-		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: deadlineRetryGroup}
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: group}
 		return req
 	}
 
-	req := newReq()
+	req := newReq(kv.ReplicaReadMixed)
 	selector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
 	s.Nil(err)
 	leaderIdx := selector.region.getStore().workTiKVIdx
@@ -1119,35 +1120,51 @@ func (s *testRegionRequestToThreeStoresSuite) TestOverloadedLeaderKeepsDeadlineR
 
 	// First attempt: the store blames this request's group, so it goes to the
 	// leader.
-	leaderStore.noisyGroups.replace([]string{deadlineRetryGroup})
+	leaderStore.noisyGroups.replace([]string{group})
 	leaderStore.healthStatus.markOverloaded(true)
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.True(selector.pinnedToOverloadedLeader)
 	s.Zero(req.BusyThresholdMs)
 
-	// The leader then answers with a configurable-timeout deadline. Upstream that
+	// The leader then times out. Upstream a configurable-timeout deadline
 	// disqualifies it and turns the retry into a replica read on a follower, but
-	// a follower throttles the same group against the same quota, so while the
-	// store is overloaded the retry stays here rather than spending a ReadIndex.
-	selector.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
+	// a follower throttles the same group against the same quota, so the blamed
+	// group's retry waits and stays here rather than spending a ReadIndex.
+	handled, err := selector.onNoisyTenantTimeout(bo, rpcCtx, req)
+	s.Nil(err)
+	s.True(handled)
+	s.False(selector.replicas[leaderIdx].hasFlag(deadlineErrUsingConfTimeoutFlag))
 	rpcCtx, err = selector.next(bo, req)
 	s.Nil(err)
 	s.NotNil(rpcCtx)
-	s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "an overloaded leader keeps the deadline retry")
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "the blamed group's deadline retry stays on the leader")
 	s.False(req.ReplicaRead)
 	s.False(req.StaleRead)
+	s.True(selector.pinnedToOverloadedLeader, "a pinned retry stays out of the slow score")
 
-	// Once the store is no longer overloaded the upstream behaviour stands: the
-	// pin does not fire, so the busy threshold it would have cleared survives.
-	leaderStore.healthStatus.markOverloaded(false)
-	other := newReq()
+	// A deadline the store does not blame on the group is upstream's to handle:
+	// the flag goes on the leader and the retry diverts to a follower as a
+	// replica read, overloaded store or not.
+	leaderStore.noisyGroups.replace(nil)
+	other := newReq(kv.ReplicaReadLeader)
 	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
 	s.Nil(err)
-	otherSel.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
-	_, err = otherSel.next(bo, other)
+	rpcCtx, err = otherSel.next(bo, other)
 	s.Nil(err)
-	s.Equal(uint32(50), other.BusyThresholdMs, "without the mark the deadline flag is left to upstream")
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.False(otherSel.pinnedToOverloadedLeader, "nobody blamed, nothing steered")
+	handled, err = otherSel.onNoisyTenantTimeout(bo, rpcCtx, other)
+	s.Nil(err)
+	s.False(handled)
+	s.True(otherSel.onReadReqConfigurableTimeout(other))
+	rpcCtx, err = otherSel.next(bo, other)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "without the blame the deadline flag is left to upstream")
+	s.True(other.ReplicaRead)
+	s.False(otherSel.pinnedToOverloadedLeader)
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader() {
