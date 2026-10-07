@@ -169,7 +169,21 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	if s.pinnedByNoisyReply && s.target == s.replicas[s.region.getStore().workTiKVIdx] {
 		s.pinnedToOverloadedLeader = true
 	}
+	if err := s.backoffStaleRetryOnBlamingStore(bo, req); err != nil {
+		return nil, err
+	}
 	return s.buildRPCContext(bo, s.target, s.proxy)
+}
+
+// backoffStaleRetryOnBlamingStore backs off a stale read's retry, whatever caused it,
+// when the target store blames the request's own resource group.
+func (s *replicaSelector) backoffStaleRetryOnBlamingStore(bo *retry.Backoffer, req *tikvrpc.Request) error {
+	if !s.isStaleRead || s.attempts < 2 || s.pinnedByNoisyReply || !s.targetBlamesRequestGroup(req) {
+		return nil
+	}
+	metrics.TiKVNoisyTenantStaleRetryBackoffCounter.Inc()
+	return bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf(
+		"stale read retry on a store that blames the group (noisy tenant), store: %d", s.target.store.storeID))
 }
 
 // tryOverloadedLeader takes the leader when its store reports that this

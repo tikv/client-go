@@ -2329,3 +2329,100 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 		}
 	}
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantStaleRetryBacksOff() {
+	const group = "uds_006"
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	region := s.cache.GetCachedRegionWithRLock(regionLoc.Region)
+	s.NotNil(region)
+	var leaderStore *Store
+	var follower *replica
+	for _, r := range buildTiKVReplicas(region) {
+		if r.peer.Id == s.leaderPeer {
+			leaderStore = r.store
+		} else if follower == nil {
+			follower = r
+		}
+	}
+	s.NotNil(leaderStore)
+	s.NotNil(follower)
+	defer func() {
+		leaderStore.noisyGroups.replace(nil)
+		leaderStore.healthStatus.markOverloaded(false)
+	}()
+	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+		StoreId:     leaderStore.storeID,
+		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+	})
+
+	newStale := func(g string) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadMixed, nil)
+		req.StaleRead = true
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: g}
+		return req
+	}
+	// Place the first attempt on a follower, as a stale read's normally is,
+	// without depending on how the mixed strategy breaks ties.
+	firstAttemptOnFollower := func(sel *replicaSelector) {
+		sel.attempts = 1
+		for _, r := range sel.replicas {
+			if r.peer.Id == follower.peer.Id {
+				sel.target = r
+			}
+		}
+		s.NotNil(sel.target)
+		sel.target.attempts++
+	}
+
+	// The first attempt is not steered: a stale read stays off the leader
+	// while a follower can answer it, blame or no blame.
+	req := newStale(group)
+	sel, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.Nil(err)
+	bo := retry.NewBackoffer(context.Background(), -1)
+	firstAttemptOnFollower(sel)
+	s.True(req.StaleRead)
+
+	// The follower missed. Upstream sends the retry to the leader at once; the
+	// leader blames this group, so the retry waits first.
+	sel.onDataIsNotReady()
+	rpcCtx, err := sel.next(bo, req)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.Greater(bo.GetTotalSleep(), 0)
+	s.False(req.StaleRead, "the retry is a plain leader read, as upstream sends it")
+
+	// A bystander's stale read retries without waiting.
+	other := newStale("uds_007")
+	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
+	s.Nil(err)
+	bo = retry.NewBackoffer(context.Background(), -1)
+	firstAttemptOnFollower(otherSel)
+	otherSel.onDataIsNotReady()
+	rpcCtx, err = otherSel.next(bo, other)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.Zero(bo.GetTotalSleep())
+
+	// A retry that a noisy reply already pinned has paid its backoff in that
+	// handler and is not charged twice.
+	pinned := newStale(group)
+	pinnedSel, err := newReplicaSelector(s.cache, regionLoc.Region, pinned)
+	s.Nil(err)
+	bo = retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err = pinnedSel.next(bo, pinned)
+	s.Nil(err)
+	retryable, err := pinnedSel.onNoisyTenantServerIsBusy(bo, rpcCtx, pinned)
+	s.Nil(err)
+	s.True(retryable)
+	slept := bo.GetTotalSleep()
+	s.Greater(slept, 0)
+	rpcCtx, err = pinnedSel.next(bo, pinned)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.Equal(slept, bo.GetTotalSleep(), "no second backoff on the pinned retry")
+}

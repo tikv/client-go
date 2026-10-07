@@ -112,6 +112,10 @@ var (
 	// configurable timeout on a store that blames the request's own resource
 	// group, and so backed off before retrying.
 	TiKVNoisyTenantReadTimeoutCounter prometheus.Counter
+	// TiKVNoisyTenantStaleRetryBackoffCounter counts stale-read retries that
+	// backed off before being sent to a store that blames the request's own
+	// resource group.
+	TiKVNoisyTenantStaleRetryBackoffCounter prometheus.Counter
 	// TiKVNoisyTenantLeaderPinnedCounter counts replica-selection attempts
 	// steered to the leader because its store reported that the request's own
 	// resource group was overloading it.
@@ -793,6 +797,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		})
 
+	TiKVNoisyTenantStaleRetryBackoffCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "noisy_tenant_stale_retry_backoff_total",
+			Help:        "Counter of stale-read retries that backed off before being sent to a store that blames the request's own resource group, whatever the reason for the retry.",
+			ConstLabels: constLabels,
+		})
+
 	TiKVNoisyTenantLeaderPinnedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -1229,6 +1242,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReplicaSelectorFailureCounter)
 	prometheus.MustRegister(TiKVNoisyTenantServerBusyCounter)
 	prometheus.MustRegister(TiKVNoisyTenantReadTimeoutCounter)
+	prometheus.MustRegister(TiKVNoisyTenantStaleRetryBackoffCounter)
 	prometheus.MustRegister(TiKVNoisyTenantLeaderPinnedCounter)
 	prometheus.MustRegister(TiKVRequestRetryTimesHistogram)
 	prometheus.MustRegister(TiKVTxnCommitBackoffSeconds)
