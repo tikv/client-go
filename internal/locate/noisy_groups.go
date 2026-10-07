@@ -19,13 +19,6 @@ import (
 	"time"
 )
 
-// How long a store's noisy-group report is trusted. Health feedback re-reports
-// about once a second while this client talks to the store, and pinning the
-// blamed group to its leader keeps that traffic flowing; a report older than
-// this means the feedback stopped, and the store's diagnosis has gone stale.
-// Kept separate from storeOverloadedDuration, though they match today: that one
-// bounds the overload mark, which a ServerIsBusy can renew with no report at
-// all, while this bounds the evidence about who is to blame.
 const noisyGroupsFreshDuration = storeOverloadedDuration
 
 // noisyReport is one store's statement about which resource groups overload
@@ -55,21 +48,15 @@ type noisyGroups struct {
 	report atomic.Pointer[noisyReport]
 }
 
-// record adopts a store's newly reported set, unless a report with a higher
-// sequence number is already held and still fresh: feedback arrives on every
-// batch connection independently, so a delayed report can land after a newer
-// one and must not restore blame the store has since withdrawn. Once the held
-// report has expired any sequence is taken, since the sequence restarts with
-// the TiKV process and the expired evidence is worth nothing anyway.
+// record stores the reported set and returns true, unless the held report has
+// a higher sequence and is younger than noisyGroupsFreshDuration, in which case
+// the report is stale (delivered out of order on another batch connection) and
+// is dropped. An expired report loses regardless of sequence, since the
+// sequence restarts with the TiKV process. An empty names clears the set.
 //
-// TiKV allocates the sequence before it reads the group snapshot, so two
-// producers that interleave can hand the newer snapshot the lower sequence.
-// That snapshot is then dropped here for one feedback interval, after which
-// the next report carries it. Taking the snapshot before the sequence on the
-// TiKV side would close that window.
-//
-// An empty names is a positive report that the store blames nobody, and
-// clears the previous set. Returns whether the report was adopted.
+// TiKV assigns the sequence before it snapshots the groups, so two interleaved
+// producers can give the newer snapshot the lower sequence; that snapshot is
+// then dropped until the next report, one feedback interval later.
 func (n *noisyGroups) record(names []string, seq uint64, now time.Time) bool {
 	set := make(map[string]struct{}, len(names))
 	for _, name := range names {
