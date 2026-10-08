@@ -239,6 +239,8 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
+	// The last HealthFeedback accepted from this store, for ordering later ones.
+	lastFeedback atomic.Pointer[acceptedFeedback]
 	// The resource groups this store last blamed for its own overload, so that
 	// their reads can stay on the leader from the first request rather than
 	// after one has been rejected.
@@ -1155,21 +1157,48 @@ func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime
 	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
 }
 
-func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
-	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
-	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
-	// only a slow score. It's prepared for possible use in the future.
-	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
-	// An absent message means the store does not report noisy groups at all, so
-	// whatever is already known is left alone; only a store that does report
-	// them may clear the set, by reporting it empty. The sequence number is
-	// checked for this part: an out-of-order report that undid a newer one would
-	// restore blame the store has withdrawn, and the overload mark derived from
-	// it would follow.
-	if groups := feedback.GetNoisyGroups(); groups != nil {
-		if s.noisyGroups.record(groups.GetNames(), feedback.GetFeedbackSeqNo(), time.Now()) {
-			s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
+// healthFeedbackFreshDuration is how long the last accepted feedback's
+// sequence is held against later ones. After that any sequence is taken,
+// since the sequence restarts with the TiKV process.
+const healthFeedbackFreshDuration = storeOverloadedDuration
+
+type acceptedFeedback struct {
+	seq uint64
+	at  time.Time
+}
+
+// acceptHealthFeedback drops a duplicate or out-of-order feedback while the
+// last accepted one is still fresh. A zero sequence is unset and is applied
+// without moving the baseline.
+func (s *Store) acceptHealthFeedback(seq uint64, now time.Time) bool {
+	if seq == 0 {
+		return true
+	}
+	next := &acceptedFeedback{seq: seq, at: now}
+	for {
+		prev := s.lastFeedback.Load()
+		if prev != nil && seq <= prev.seq && now.Sub(prev.at) < healthFeedbackFreshDuration {
+			return false
 		}
+		if s.lastFeedback.CompareAndSwap(prev, next) {
+			return true
+		}
+	}
+}
+
+func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
+	now := time.Now()
+	// The feedback is one snapshot of the store, so it is ordered as a unit:
+	// a late one must not roll back the slow score or restore withdrawn blame.
+	if !s.acceptHealthFeedback(feedback.GetFeedbackSeqNo(), now) {
+		return
+	}
+	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), now)
+	// An absent set means the store does not report noisy groups; only a
+	// store that does may clear them, by reporting the set empty.
+	if groups := feedback.GetNoisyGroups(); groups != nil {
+		s.noisyGroups.replace(groups.GetNames(), now)
+		s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
 	}
 }
 

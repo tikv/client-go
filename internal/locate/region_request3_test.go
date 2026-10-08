@@ -1116,13 +1116,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	leaderIdx := selector.region.getStore().workTiKVIdx
 	leaderStore := selector.replicas[leaderIdx].store
 	defer func() {
-		leaderStore.noisyGroups.replace(nil)
+		leaderStore.noisyGroups.replace(nil, time.Now())
 		leaderStore.healthStatus.markOverloaded(false)
 	}()
 
 	// First attempt: the store blames this request's group, so it goes to the
 	// leader.
-	leaderStore.noisyGroups.replace([]string{group})
+	leaderStore.noisyGroups.replace([]string{group}, time.Now())
 	leaderStore.healthStatus.markOverloaded(true)
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
@@ -1149,7 +1149,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	// A deadline the store does not blame on the group is upstream's to handle:
 	// the flag goes on the leader and the retry diverts to a follower as a
 	// replica read, overloaded store or not.
-	leaderStore.noisyGroups.replace(nil)
+	leaderStore.noisyGroups.replace(nil, time.Now())
 	other := newReq(kv.ReplicaReadLeader)
 	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
 	s.Nil(err)
@@ -1225,7 +1225,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	probe := newReq(group, kv.ReplicaReadLeader)
 	leaderStore := selectOnce(probe).Store
 	defer func() {
-		leaderStore.noisyGroups.replace(nil)
+		leaderStore.noisyGroups.replace(nil, time.Now())
 		leaderStore.healthStatus.markOverloaded(false)
 	}()
 	s.False(leaderStore.healthStatus.IsOverloaded())
@@ -1337,7 +1337,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 	leaderStore := probeCtx.Store
 	s.Equal(s.leaderPeer, probeCtx.Peer.Id)
 	defer func() {
-		leaderStore.noisyGroups.replace(nil)
+		leaderStore.noisyGroups.replace(nil, time.Now())
 		leaderStore.healthStatus.markOverloaded(false)
 	}()
 
@@ -1366,7 +1366,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 			s.Nil(failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`))
 		}
 
-		leaderStore.noisyGroups.replace(nil)
+		leaderStore.noisyGroups.replace(nil, time.Now())
 		leaderStore.healthStatus.markOverloaded(false)
 		s.True(send(group), "normal routing is ordinary traffic, async=%v", async)
 
@@ -2349,7 +2349,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantStaleRetryBacksOff(
 	s.NotNil(leaderStore)
 	s.NotNil(follower)
 	defer func() {
-		leaderStore.noisyGroups.replace(nil)
+		leaderStore.noisyGroups.replace(nil, time.Now())
 		leaderStore.healthStatus.markOverloaded(false)
 	}()
 	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{

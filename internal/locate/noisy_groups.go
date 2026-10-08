@@ -22,16 +22,10 @@ import (
 const noisyGroupsFreshDuration = storeOverloadedDuration
 
 // noisyReport is one store's statement about which resource groups overload
-// it, published as a unit so a reader never sees the set from one report with
-// the age or sequence of another.
+// it, published as a unit with the time this client adopted it.
 type noisyReport struct {
 	set map[string]struct{}
-	// FeedbackSeqNo of the feedback that carried the set; 0 when adopted
-	// without one.
-	seq uint64
-	// When this client adopted the report, which is what its freshness is
-	// measured from.
-	at time.Time
+	at  time.Time
 }
 
 // noisyGroups is the set of resource groups a store blames for its own
@@ -40,48 +34,20 @@ type noisyReport struct {
 // only for metrics.
 //
 // The zero value means unknown, not "nobody is noisy": a store too old to
-// report the set leaves it empty forever.
+// report the set leaves it empty forever. Ordering is handled before a set
+// gets here, by Store.recordHealthFeedback.
 type noisyGroups struct {
-	// nil until the first report, then replaced wholesale by each one. A read
-	// is a single atomic load, and a group that stops being blamed stops being
-	// pinned as soon as the next report lands rather than after a timeout.
+	// nil until the first report, then replaced wholesale by each one.
 	report atomic.Pointer[noisyReport]
 }
 
-// record stores the reported set and returns true, unless the held report has
-// a higher sequence and is younger than noisyGroupsFreshDuration, in which case
-// the report is stale (delivered out of order on another batch connection) and
-// is dropped. An expired report loses regardless of sequence, since the
-// sequence restarts with the TiKV process. An empty names clears the set.
-//
-// TiKV assigns the sequence before it snapshots the groups, so two interleaved
-// producers can give the newer snapshot the lower sequence; that snapshot is
-// then dropped until the next report, one feedback interval later.
-func (n *noisyGroups) record(names []string, seq uint64, now time.Time) bool {
+// replace adopts the reported set as of now. An empty names clears the set.
+func (n *noisyGroups) replace(names []string, now time.Time) {
 	set := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		set[name] = struct{}{}
 	}
-	next := &noisyReport{set: set, seq: seq, at: now}
-	for {
-		prev := n.report.Load()
-		if prev != nil && seq < prev.seq && now.Sub(prev.at) < noisyGroupsFreshDuration {
-			return false
-		}
-		if n.report.CompareAndSwap(prev, next) {
-			return true
-		}
-	}
-}
-
-// replace adopts a set unconditionally, as if freshly reported with no
-// sequence. For tests and for callers that have no feedback to cite.
-func (n *noisyGroups) replace(names []string) {
-	set := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		set[name] = struct{}{}
-	}
-	n.report.Store(&noisyReport{set: set, at: time.Now()})
+	n.report.Store(&noisyReport{set: set, at: now})
 }
 
 // contains reports whether the store named this group recently enough for the
