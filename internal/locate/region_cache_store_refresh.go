@@ -10,7 +10,6 @@ package locate
 
 import (
 	"bytes"
-	"sort"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -160,157 +159,55 @@ func (c *RegionCache) ClassifyWorkStore(id RegionVerID, storeID uint64) WorkStor
 	return WorkStoreOnStore
 }
 
-func keyRangesOverlap(aStart, aEnd, bStart, bEnd []byte) bool {
-	if len(aEnd) > 0 && bytes.Compare(bStart, aEnd) >= 0 {
-		return false
-	}
-	if len(bEnd) > 0 && bytes.Compare(aStart, bEnd) >= 0 {
-		return false
-	}
-	return true
-}
-
-type workStoreSpan struct {
-	start   []byte
-	end     []byte
-	onStore bool
-}
-
-// WorkSpanIndex is a one-shot snapshot of unexpired cache ranges for storeID.
-type WorkSpanIndex struct {
-	spans []workStoreSpan
-}
-
-func rangeCoveredTo(coveredTo, endKey []byte, toInf bool) bool {
-	if toInf {
-		return true
-	}
-	if len(endKey) == 0 {
-		return false
-	}
-	return bytes.Compare(coveredTo, endKey) >= 0
-}
-
-// NewWorkSpanIndex copies unexpired region ranges and whether they still work
-// on storeID. It does not renew region TTL.
-func (c *RegionCache) NewWorkSpanIndex(storeID uint64) *WorkSpanIndex {
+// WorkStoreRangeStatus checks contiguous, unexpired coverage of [startKey, endKey).
+// coveredTo is the end of the cached prefix and may exceed endKey on completion.
+// An empty coveredTo with complete=true means coverage reaches infinity.
+// complete reports full coverage; resolved additionally requires every covering
+// region to work on a different store. Cache TTL is not renewed.
+// It uses the existing region B-tree in O(log R + K) time, where R is the
+// number of cached regions and K is the number of regions visited in the range.
+// Only the returned boundary is copied; no full-cache snapshot or sort is needed.
+func (c *RegionCache) WorkStoreRangeStatus(startKey, endKey []byte, storeID uint64) (coveredTo []byte, complete, resolved bool) {
 	now := time.Now().Unix()
 	c.mu.RLock()
-	spans := make([]workStoreSpan, 0, len(c.mu.regions))
-	for _, r := range c.mu.regions {
-		if r == nil || r.meta == nil || r.isCacheTTLExpired(now) {
-			continue
+	defer c.mu.RUnlock()
+	coveredTo = startKey
+	if c.mu.sorted == nil || len(endKey) > 0 && bytes.Compare(startKey, endKey) >= 0 {
+		return append([]byte(nil), coveredTo...), false, false
+	}
+	first := c.mu.sorted.SearchByKey(startKey, false)
+	if first == nil {
+		return append([]byte(nil), coveredTo...), false, false
+	}
+	allMoved := true
+	c.mu.sorted.b.AscendGreaterOrEqual(newBtreeSearchItem(first.StartKey()), func(item *btreeItem) bool {
+		r := item.cachedRegion
+		if r == nil || r.meta == nil || r.isCacheTTLExpired(now) ||
+			!r.Contains(coveredTo) {
+			return false
 		}
-		onStore := false
 		rs := r.getStore()
 		if rs != nil && int(rs.workTiKVIdx) < rs.accessStoreNum(tiKVOnly) {
 			store, peer, _, _ := r.WorkStorePeer(rs)
-			onStore = store != nil && peer != nil && store.StoreID() == storeID
+			if store != nil && peer != nil && store.StoreID() == storeID {
+				allMoved = false
+			}
 		}
-		spans = append(spans, workStoreSpan{
-			start:   append([]byte(nil), r.StartKey()...),
-			end:     append([]byte(nil), r.EndKey()...),
-			onStore: onStore,
-		})
-	}
-	c.mu.RUnlock()
-	sort.Slice(spans, func(i, j int) bool {
-		return bytes.Compare(spans[i].start, spans[j].start) < 0
-	})
-	return &WorkSpanIndex{spans: spans}
-}
-
-// RangeResolved reports whether [startKey, endKey) is fully covered by snapshot
-// ranges that no longer work on the target store. Uncached holes are unresolved.
-func (idx *WorkSpanIndex) RangeResolved(startKey, endKey []byte) bool {
-	if idx == nil || len(idx.spans) == 0 {
-		return false
-	}
-	spans := idx.spans
-	i := sort.Search(len(spans), func(j int) bool {
-		end := spans[j].end
-		return len(end) == 0 || bytes.Compare(end, startKey) > 0
-	})
-	coveredTo := startKey
-	toInf := false
-	started := false
-	for ; i < len(spans); i++ {
-		sp := spans[i]
-		if len(endKey) > 0 && bytes.Compare(sp.start, endKey) >= 0 {
-			break
-		}
-		if !keyRangesOverlap(startKey, endKey, sp.start, sp.end) {
-			continue
-		}
-		if sp.onStore {
+		coveredTo = r.EndKey()
+		if len(coveredTo) == 0 || len(endKey) > 0 && bytes.Compare(coveredTo, endKey) >= 0 {
+			complete = true
 			return false
 		}
-		need := startKey
-		if started {
-			need = coveredTo
-		}
-		if bytes.Compare(sp.start, need) > 0 {
-			return false
-		}
-		started = true
-		if len(sp.end) == 0 {
-			toInf = true
-			break
-		}
-		if bytes.Compare(coveredTo, sp.end) < 0 {
-			coveredTo = sp.end
-		}
-		if rangeCoveredTo(coveredTo, endKey, toInf) {
-			return true
-		}
-	}
-	return started && rangeCoveredTo(coveredTo, endKey, toInf)
+		return true
+	})
+	return append([]byte(nil), coveredTo...), complete, complete && allMoved
 }
 
-// CoveredTo returns how far [startKey, endKey) is covered by contiguous cached
-// spans, ignoring whether they still work on the target store. A hole or the
-// first span that starts after the covered prefix stops the walk. complete
-// means the original range is fully in cache; the caller still needs
-// RangeResolved before dropping a failure.
-func (idx *WorkSpanIndex) CoveredTo(startKey, endKey []byte) (coveredTo []byte, complete bool) {
-	coveredTo = startKey
-	if idx == nil || len(idx.spans) == 0 {
-		return coveredTo, false
-	}
-	spans := idx.spans
-	i := sort.Search(len(spans), func(j int) bool {
-		end := spans[j].end
-		return len(end) == 0 || bytes.Compare(end, startKey) > 0
-	})
-	toInf := false
-	started := false
-	for ; i < len(spans); i++ {
-		sp := spans[i]
-		if len(endKey) > 0 && bytes.Compare(sp.start, endKey) >= 0 {
-			break
-		}
-		if !keyRangesOverlap(startKey, endKey, sp.start, sp.end) {
-			continue
-		}
-		need := startKey
-		if started {
-			need = coveredTo
-		}
-		if bytes.Compare(sp.start, need) > 0 {
-			return coveredTo, false
-		}
-		started = true
-		if len(sp.end) == 0 {
-			return sp.end, true
-		}
-		if bytes.Compare(coveredTo, sp.end) < 0 {
-			coveredTo = sp.end
-		}
-		if rangeCoveredTo(coveredTo, endKey, toInf) {
-			return coveredTo, true
-		}
-	}
-	return coveredTo, started && rangeCoveredTo(coveredTo, endKey, toInf)
+// IsWorkStoreRangeResolved reports whether the entire range is cached and no
+// covering region still works on storeID. Missing or expired coverage is unresolved.
+func (c *RegionCache) IsWorkStoreRangeResolved(startKey, endKey []byte, storeID uint64) bool {
+	_, _, resolved := c.WorkStoreRangeStatus(startKey, endKey, storeID)
+	return resolved
 }
 
 // ApplyLeaderIfOnStore CAS-updates the working TiKV to leader only while the

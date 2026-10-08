@@ -115,16 +115,12 @@ func (s *KVStore) recycleIfIdleReadyLocked(storeID uint64, task *storeCacheRefre
 // Cache TTL expiry is not success: Operator fallback is a separate wait, and
 // leftover failures are dropped only by ResetStoreCacheRefresh.
 func (s *KVStore) dropMovedUnresolvedLocked(task *storeCacheRefreshTask, storeID uint64) {
-	var idx *locate.WorkSpanIndex
 	for id, u := range task.unresolved {
 		switch s.regionCache.ClassifyWorkStore(id, storeID) {
 		case locate.WorkStoreMoved:
 			delete(task.unresolved, id)
 		case locate.WorkStoreGone:
-			if idx == nil {
-				idx = s.regionCache.NewWorkSpanIndex(storeID)
-			}
-			if idx.RangeResolved(u.startKey, u.endKey) {
+			if s.regionCache.IsWorkStoreRangeResolved(u.startKey, u.endKey, storeID) {
 				delete(task.unresolved, id)
 			}
 		}
@@ -433,7 +429,6 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 	if len(items) == 0 {
 		return nil, nil
 	}
-	idx := s.regionCache.NewWorkSpanIndex(storeID)
 	type locateCandidate struct {
 		item     gone
 		startKey []byte
@@ -445,11 +440,11 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 		if ctx.Err() != nil {
 			break
 		}
-		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
+		cur, complete, resolved := s.regionCache.WorkStoreRangeStatus(it.u.startKey, it.u.endKey, storeID)
+		if resolved {
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 			continue
 		}
-		cur, complete := idx.CoveredTo(it.u.startKey, it.u.endKey)
 		if complete {
 			// Fully cached but not resolved: remaining work is on-store
 			// probes, not another prefix walk from startKey.
@@ -465,14 +460,11 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 			located = true
 		}
 	}
-	if located {
-		// LocateKey updates the cache. Rebuild once after the batch of walks so
-		// split/merge replacements are checked against a consistent snapshot.
-		idx = s.regionCache.NewWorkSpanIndex(storeID)
-	}
+	// LocateKey updates the cache. Check each candidate against current coverage
+	// after the batch of walks, including any split/merge replacements.
 	for _, candidate := range candidates {
 		it := candidate.item
-		if idx.RangeResolved(it.u.startKey, it.u.endKey) {
+		if s.regionCache.IsWorkStoreRangeResolved(it.u.startKey, it.u.endKey, storeID) {
 			evs = append(evs, probeEvent{id: it.id, startKey: it.u.startKey, endKey: it.u.endKey, outcome: probeMoved})
 		}
 	}
@@ -615,12 +607,12 @@ func (s *KVStore) reloadOriginalMatch(ctx context.Context, orig locate.WorkStore
 	// failed range: a split sibling may still be uncached or may still work on
 	// storeID. Walk the original span once when needed, then check the whole
 	// range before reporting it moved.
-	resolved := s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
+	resolved := s.regionCache.IsWorkStoreRangeResolved(orig.StartKey, orig.EndKey, storeID)
 	switch s.regionCache.ClassifyWorkStore(loc.Region, storeID) {
 	case locate.WorkStoreMoved:
 		if !resolved {
 			s.locateFailedRange(ctx, orig.StartKey, orig.EndKey)
-			resolved = s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
+			resolved = s.regionCache.IsWorkStoreRangeResolved(orig.StartKey, orig.EndKey, storeID)
 		}
 		if resolved {
 			return locate.WorkStoreMatch{}, true, true
@@ -635,7 +627,7 @@ func (s *KVStore) reloadOriginalMatch(ctx context.Context, orig locate.WorkStore
 	}
 	if !resolved {
 		s.locateFailedRange(ctx, orig.StartKey, orig.EndKey)
-		resolved = s.regionCache.NewWorkSpanIndex(storeID).RangeResolved(orig.StartKey, orig.EndKey)
+		resolved = s.regionCache.IsWorkStoreRangeResolved(orig.StartKey, orig.EndKey, storeID)
 	}
 	if !resolved {
 		// The replacement still works on storeID, or a sibling is missing.

@@ -9,6 +9,7 @@
 package locate
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,37 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
+
+func BenchmarkWorkStoreRangeStatus(b *testing.B) {
+	for _, count := range []int{100, 10000, 100000} {
+		b.Run(fmt.Sprintf("regions=%d", count), func(b *testing.B) {
+			c := &RegionCache{}
+			c.mu.sorted = NewSortedRegions(btreeDegree)
+			ttl := time.Now().Unix() + 3600
+			rs := &regionStore{stores: []*Store{{storeID: 2}}}
+			rs.accessIndex[tiKVOnly] = []int{0}
+			for i := 0; i < count; i++ {
+				r := &Region{meta: &metapb.Region{
+					Id:       uint64(i + 1),
+					StartKey: []byte(fmt.Sprintf("%08d", i)),
+					EndKey:   []byte(fmt.Sprintf("%08d", i+1)),
+					Peers:    []*metapb.Peer{{Id: uint64(i + 1), StoreId: 2}},
+				}, ttl: ttl}
+				r.setStore(rs)
+				c.mu.sorted.ReplaceOrInsert(r)
+			}
+			start := []byte(fmt.Sprintf("%08d", count/2))
+			end := []byte(fmt.Sprintf("%08d", count/2+1))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if !c.IsWorkStoreRangeResolved(start, end, 1) {
+					b.Fatal("range unresolved")
+				}
+			}
+		})
+	}
+}
 
 func BenchmarkCountWorkStoreMatches(b *testing.B) {
 	b.ReportAllocs()
@@ -64,6 +96,77 @@ func TestClassifyWorkStoreNilStoreIsGone(t *testing.T) {
 	c.mu.regions[r.VerID()] = r
 	require.Equal(t, WorkStoreGone, c.ClassifyWorkStore(r.VerID(), 1))
 	require.NotPanics(t, func() { _ = r.GetLeaderStoreID() })
+}
+
+func TestWorkStoreRangeStatus(t *testing.T) {
+	type span struct {
+		start, end string
+		onStore    bool
+		expired    bool
+	}
+	tests := []struct {
+		name                string
+		spans               []span
+		start, end, covered string
+		complete, resolved  bool
+	}{
+		{name: "empty cache", start: "b", end: "y", covered: "b"},
+		{name: "start in hole", spans: []span{{start: "m", end: "z"}}, start: "b", end: "y", covered: "b"},
+		{name: "merged region", spans: []span{{start: "a", end: "z"}}, start: "b", end: "y", covered: "z", complete: true, resolved: true},
+		{name: "split regions", spans: []span{{start: "a", end: "m"}, {start: "m", end: "z"}}, start: "b", end: "y", covered: "z", complete: true, resolved: true},
+		{name: "split sibling on store", spans: []span{{start: "a", end: "m"}, {start: "m", end: "z", onStore: true}}, start: "b", end: "y", covered: "z", complete: true},
+		{name: "on store outside range", spans: []span{{start: "a", end: "m"}, {start: "m", end: "z", onStore: true}}, start: "b", end: "m", covered: "m", complete: true, resolved: true},
+		{name: "interior hole", spans: []span{{start: "a", end: "m"}, {start: "n", end: "z"}}, start: "b", end: "y", covered: "m"},
+		{name: "expired first", spans: []span{{start: "a", end: "m", expired: true}, {start: "m", end: "z"}}, start: "b", end: "y", covered: "b"},
+		{name: "expired sibling", spans: []span{{start: "a", end: "m"}, {start: "m", end: "z", expired: true}}, start: "b", end: "y", covered: "m"},
+		{name: "missing tail", spans: []span{{start: "a", end: "m"}}, start: "b", covered: "m"},
+		{name: "infinite tail", spans: []span{{start: "a", end: "m"}, {start: "m"}}, start: "b", complete: true, resolved: true},
+		{name: "whole keyspace", spans: []span{{end: "m"}, {start: "m"}}, complete: true, resolved: true},
+		{name: "empty finite range", spans: []span{{start: "a", end: "z"}}, start: "b", end: "b", covered: "b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &RegionCache{}
+			c.mu.sorted = NewSortedRegions(btreeDegree)
+			var regions []*Region
+			for i, sp := range tt.spans {
+				storeID := uint64(2)
+				if sp.onStore {
+					storeID = 1
+				}
+				ttl := time.Now().Unix() + 3600
+				if sp.expired {
+					ttl = time.Now().Unix() - 1
+				}
+				r := &Region{meta: &metapb.Region{
+					Id: uint64(i + 1), StartKey: []byte(sp.start), EndKey: []byte(sp.end),
+					Peers: []*metapb.Peer{{Id: uint64(i + 1), StoreId: storeID}},
+				}, ttl: ttl}
+				rs := &regionStore{stores: []*Store{{storeID: storeID}}}
+				rs.accessIndex[tiKVOnly] = []int{0}
+				r.setStore(rs)
+				c.mu.sorted.ReplaceOrInsert(r)
+				regions = append(regions, r)
+			}
+			ttls := make([]int64, len(regions))
+			for i, r := range regions {
+				ttls[i] = r.ttl
+			}
+			covered, complete, resolved := c.WorkStoreRangeStatus([]byte(tt.start), []byte(tt.end), 1)
+			require.Equal(t, tt.covered, string(covered))
+			require.Equal(t, tt.complete, complete)
+			require.Equal(t, tt.resolved, resolved)
+			require.Equal(t, tt.resolved, c.IsWorkStoreRangeResolved([]byte(tt.start), []byte(tt.end), 1))
+			for i, r := range regions {
+				require.Equal(t, ttls[i], r.ttl, "range checks must not renew TTL")
+			}
+			if len(covered) > 0 {
+				covered[0] = '!'
+				again, _, _ := c.WorkStoreRangeStatus([]byte(tt.start), []byte(tt.end), 1)
+				require.Equal(t, tt.covered, string(again), "returned boundary must not alias cached keys")
+			}
+		})
+	}
 }
 
 func TestClassifyWorkStoreConcurrentInvalidate(t *testing.T) {
