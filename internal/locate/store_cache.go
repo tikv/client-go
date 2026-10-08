@@ -239,8 +239,10 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
-	// The last HealthFeedback accepted from this store, for ordering later ones.
-	lastFeedback atomic.Pointer[acceptedFeedback]
+	// feedbackMu serializes recordHealthFeedback, so the slow score, the noisy
+	// group set and the overload mark always come from the same feedback.
+	feedbackMu   sync.Mutex
+	lastFeedback acceptedFeedback // guarded by feedbackMu; zero before the first
 	// The resource groups this store last blamed for its own overload, so that
 	// their reads can stay on the leader from the first request rather than
 	// after one has been rejected.
@@ -1169,25 +1171,23 @@ type acceptedFeedback struct {
 
 // acceptHealthFeedback drops a duplicate or out-of-order feedback while the
 // last accepted one is still fresh. A zero sequence is unset and is applied
-// without moving the baseline.
+// without moving the baseline. The caller holds feedbackMu.
 func (s *Store) acceptHealthFeedback(seq uint64, now time.Time) bool {
 	if seq == 0 {
 		return true
 	}
-	next := &acceptedFeedback{seq: seq, at: now}
-	for {
-		prev := s.lastFeedback.Load()
-		if prev != nil && seq <= prev.seq && now.Sub(prev.at) < healthFeedbackFreshDuration {
-			return false
-		}
-		if s.lastFeedback.CompareAndSwap(prev, next) {
-			return true
-		}
+	prev := s.lastFeedback
+	if prev.seq != 0 && seq <= prev.seq && now.Sub(prev.at) < healthFeedbackFreshDuration {
+		return false
 	}
+	s.lastFeedback = acceptedFeedback{seq: seq, at: now}
+	return true
 }
 
 func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	now := time.Now()
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
 	// The feedback is one snapshot of the store, so it is ordered as a unit:
 	// a late one must not roll back the slow score or restore withdrawn blame.
 	if !s.acceptHealthFeedback(feedback.GetFeedbackSeqNo(), now) {

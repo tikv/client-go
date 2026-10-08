@@ -71,17 +71,17 @@ func TestAcceptHealthFeedbackOrder(t *testing.T) {
 	// A duplicate and one overtaken on another connection are both dropped.
 	require.False(t, store.acceptHealthFeedback(102, now.Add(time.Second+time.Millisecond)))
 	require.False(t, store.acceptHealthFeedback(101, now.Add(time.Second+time.Millisecond)))
-	require.Equal(t, uint64(102), store.lastFeedback.Load().seq)
+	require.Equal(t, uint64(102), store.lastFeedback.seq)
 
 	// An unset sequence is applied without moving the baseline.
 	require.True(t, store.acceptHealthFeedback(0, now.Add(2*time.Second)))
-	require.Equal(t, uint64(102), store.lastFeedback.Load().seq)
+	require.Equal(t, uint64(102), store.lastFeedback.seq)
 	require.False(t, store.acceptHealthFeedback(101, now.Add(2*time.Second)))
 
 	// Past the freshness bound a lower sequence is taken (TiKV restarted).
 	later := now.Add(time.Second + healthFeedbackFreshDuration)
 	require.True(t, store.acceptHealthFeedback(7, later))
-	require.Equal(t, uint64(7), store.lastFeedback.Load().seq)
+	require.Equal(t, uint64(7), store.lastFeedback.seq)
 	require.False(t, store.acceptHealthFeedback(6, later))
 }
 
