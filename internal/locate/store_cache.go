@@ -239,8 +239,8 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
-	// feedbackMu serializes recordHealthFeedback, so the slow score, the noisy
-	// group set and the overload mark always come from the same feedback.
+	// feedbackMu serializes recordHealthFeedback, so the slow score and the
+	// noisy group set always come from the same feedback.
 	feedbackMu   sync.Mutex
 	lastFeedback acceptedFeedback // guarded by feedbackMu; zero before the first
 	// The resource groups this store last blamed for its own overload, so that
@@ -893,11 +893,6 @@ const (
 	tikvSlowScoreActiveUpdateInterval = time.Second * 15
 )
 
-// How long a store stays marked overloaded after a signal that it is. Health
-// feedback re-reports about once a second, so this only has to outlast that
-// gap; it exists for the stores that only ever signal by ServerIsBusy.
-const storeOverloadedDuration = 5 * time.Second
-
 type StoreHealthStatus struct {
 	// Used for logging.
 	storeID uint64
@@ -915,7 +910,6 @@ type StoreHealthStatus struct {
 	// the first report that blames nobody. A noisy-tenant ServerIsBusy is only a
 	// point-in-time rejection with nothing to clear it, so on a store too old to
 	// report the set the mark has to lapse on its own.
-	overloadedUntil atomic.Int64
 
 	// A statistic for counting the request latency to this store
 	clientSideSlowScore SlowScoreStat
@@ -954,24 +948,6 @@ func newStoreHealthStatus(storeID uint64) *StoreHealthStatus {
 // IsSlow returns whether current Store is slow.
 func (s *StoreHealthStatus) IsSlow() bool {
 	return s.isSlow.Load()
-}
-
-// IsOverloaded returns whether some tenant is currently overloading this store,
-// according to the last signal the store gave about it.
-func (s *StoreHealthStatus) IsOverloaded() bool {
-	until := s.overloadedUntil.Load()
-	return until != 0 && time.Now().UnixNano() < until
-}
-
-// markOverloaded records a store's report about being overloaded. Marking it
-// true extends the mark; marking it false clears it immediately, and only a
-// store that reports the noisy-group set ever does that.
-func (s *StoreHealthStatus) markOverloaded(overloaded bool) {
-	if !overloaded {
-		s.overloadedUntil.Store(0)
-		return
-	}
-	s.overloadedUntil.Store(time.Now().Add(storeOverloadedDuration).UnixNano())
 }
 
 // GetHealthStatusDetail gets the current detailed information about the store's health status.
@@ -1161,8 +1137,9 @@ func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime
 
 // healthFeedbackFreshDuration is how long the last accepted feedback's
 // sequence is held against later ones. After that any sequence is taken,
-// since the sequence restarts with the TiKV process.
-const healthFeedbackFreshDuration = storeOverloadedDuration
+// since the sequence restarts with the TiKV process. Feedback arrives about
+// once a second, so this only has to outlast that gap.
+const healthFeedbackFreshDuration = 5 * time.Second
 
 type acceptedFeedback struct {
 	seq uint64
@@ -1198,7 +1175,6 @@ func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	// store that does may clear them, by reporting the set empty.
 	if groups := feedback.GetNoisyGroups(); groups != nil {
 		s.noisyGroups.replace(groups.GetNames(), now)
-		s.healthStatus.markOverloaded(len(groups.GetNames()) > 0)
 	}
 }
 

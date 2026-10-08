@@ -2930,12 +2930,6 @@ func TestReplicaSelectorNoisyTenantBusyProbe(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
-	unmarkOverloaded := func(selector *replicaSelector) {
-		for _, r := range selector.replicas {
-			r.store.healthStatus.markOverloaded(false)
-		}
-	}
-
 	// 2 noisy rejections from the cached leader: the retry is pinned to the leader
 	// and backs off, and the second one still arms the probe. The third attempt
 	// goes to a follower as a leader read.
@@ -2959,8 +2953,6 @@ func TestReplicaSelectorNoisyTenantBusyProbe(t *testing.T) {
 			s.True(selector.leaderBusyProbed)
 			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
 			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
-			s.True(selector.replicas[0].store.healthStatus.IsOverloaded())
-			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
 	}
@@ -2988,7 +2980,6 @@ func TestReplicaSelectorNoisyTenantBusyProbe(t *testing.T) {
 		},
 		afterRun: func(selector *replicaSelector) {
 			s.Equal(uint64(3), selector.region.GetLeaderStoreID())
-			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
 	}
@@ -3015,7 +3006,6 @@ func TestReplicaSelectorNoisyTenantBusyProbe(t *testing.T) {
 		},
 		afterRun: func(selector *replicaSelector) {
 			s.Equal(uint64(3), selector.region.GetLeaderStoreID())
-			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
 	}

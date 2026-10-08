@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const noisyGroupsFreshDuration = storeOverloadedDuration
+const noisyGroupsFreshDuration = healthFeedbackFreshDuration
 
 // noisyReport is one store's statement about which resource groups overload
 // it, published as a unit with the time this client adopted it.

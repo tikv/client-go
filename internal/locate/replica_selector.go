@@ -166,9 +166,6 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	if s.target == nil {
 		return nil, nil
 	}
-	if s.pinnedByNoisyReply && s.target == s.replicas[s.region.getStore().workTiKVIdx] {
-		s.pinnedToOverloadedLeader = true
-	}
 	if err := s.backoffStaleRetryOnBlamingStore(bo, req); err != nil {
 		return nil, err
 	}
@@ -200,10 +197,8 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 		return
 	}
 	leader := s.replicas[leaderIdx]
-	if !leader.store.healthStatus.IsOverloaded() || !isLeaderCandidate(leader) {
-		return
-	}
-	if !leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now()) {
+	if !isLeaderCandidate(leader) ||
+		!leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now()) {
 		return
 	}
 	s.target = leader
@@ -679,13 +674,8 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	//
 	// The error names this request's own group as the cause, so its retries
 	// are pinned here and now rather than waiting for the store's next health
-	// feedback to say the same thing. The store is marked overloaded as well,
-	// though that alone steers no other request: a rejection carries no group
-	// set, so later requests go through tryOverloadedLeader only once health
-	// feedback names the group.
-	if ctx != nil && ctx.Store != nil {
-		ctx.Store.healthStatus.markOverloaded(true)
-	}
+	// feedback to say the same thing. Only this request: a rejection carries
+	// no group set, so others are steered once health feedback names the group.
 	s.pinRetryToLeader(req)
 	// A rejection at the read-pool entrance carries no leadership information
 	// whichever reason it gives, so it counts toward the suspect-not-leader
@@ -750,9 +740,6 @@ func (s *replicaSelector) onNoisyTenantTimeout(
 		return false, nil
 	}
 	metrics.TiKVNoisyTenantReadTimeoutCounter.Inc()
-	if ctx != nil && ctx.Store != nil {
-		ctx.Store.healthStatus.markOverloaded(true)
-	}
 	s.pinRetryToLeader(req)
 	backoffErr := errors.Errorf("read timeout (noisy tenant), ctx: %v", ctx)
 	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {

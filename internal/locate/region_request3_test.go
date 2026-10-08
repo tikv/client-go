@@ -1072,15 +1072,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
 
-	// The rejection marks the store rather than steering only this request, so
-	// what it teaches outlives the request that was rejected.
-	defer rpcCtx.Store.healthStatus.markOverloaded(false)
 	shouldRetry, err := replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		Reason: "scheduler is busy|noisy_tenant",
 	})
 	s.Nil(err)
 	s.True(shouldRetry)
-	s.True(rpcCtx.Store.healthStatus.IsOverloaded())
 
 	// A wait over the threshold would normally divert the retry to an idle
 	// replica, which only reaches this same leader again as a ReadIndex.
@@ -1090,7 +1086,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.False(req.ReplicaRead)
 	s.False(req.StaleRead)
 	s.Zero(req.BusyThresholdMs)
-	s.True(replicaSelector.pinnedToOverloadedLeader, "a pinned retry stays out of the slow score")
+	s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType, "a pinned retry is a leader read, which the prefer-leader slow score skips")
 
 	// The store is not marked slow: overload is a signal of its own, and nothing
 	// here has touched the latency-driven one.
@@ -1117,13 +1113,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	leaderStore := selector.replicas[leaderIdx].store
 	defer func() {
 		leaderStore.noisyGroups.replace(nil, time.Now())
-		leaderStore.healthStatus.markOverloaded(false)
 	}()
 
 	// First attempt: the store blames this request's group, so it goes to the
 	// leader.
 	leaderStore.noisyGroups.replace([]string{group}, time.Now())
-	leaderStore.healthStatus.markOverloaded(true)
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
@@ -1144,7 +1138,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer, "the blamed group's deadline retry stays on the leader")
 	s.False(req.ReplicaRead)
 	s.False(req.StaleRead)
-	s.True(selector.pinnedToOverloadedLeader, "a pinned retry stays out of the slow score")
+	s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType, "a pinned retry is a leader read, which the prefer-leader slow score skips")
 
 	// A deadline the store does not blame on the group is upstream's to handle:
 	// the flag goes on the leader and the retry diverts to a follower as a
@@ -1178,8 +1172,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	})
 	expired := time.Now().Add(-noisyGroupsFreshDuration)
 	leaderStore.noisyGroups.report.Load().at = expired
-	leaderStore.healthStatus.overloadedUntil.Store(expired.UnixNano())
-	s.False(leaderStore.healthStatus.IsOverloaded())
 	stale := newReq(kv.ReplicaReadLeader)
 	staleSel, err := newReplicaSelector(s.cache, regionLoc.Region, stale)
 	s.Nil(err)
@@ -1190,7 +1182,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	handled, err = staleSel.onNoisyTenantTimeout(bo, rpcCtx, stale)
 	s.Nil(err)
 	s.False(handled, "a timeout does not renew expired blame")
-	s.False(leaderStore.healthStatus.IsOverloaded())
 	s.False(staleSel.pinnedByNoisyReply)
 }
 
@@ -1226,16 +1217,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	leaderStore := selectOnce(probe).Store
 	defer func() {
 		leaderStore.noisyGroups.replace(nil, time.Now())
-		leaderStore.healthStatus.markOverloaded(false)
 	}()
-	s.False(leaderStore.healthStatus.IsOverloaded())
 	s.Equal(uint32(50), probe.BusyThresholdMs, "nothing steered before the store says anything")
 
 	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
 		StoreId:     leaderStore.storeID,
 		NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
 	})
-	s.True(leaderStore.healthStatus.IsOverloaded())
 
 	// Every non-stale read type from the named group now resolves to the
 	// leader: a follower would only return here for a ReadIndex, and that
@@ -1307,7 +1295,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 		StoreId:     leaderStore.storeID,
 		NoisyGroups: &kvrpcpb.NoisyGroups{},
 	})
-	s.False(leaderStore.healthStatus.IsOverloaded())
 	after := newReq(group, kv.ReplicaReadLeader)
 	selectOnce(after)
 	s.Equal(uint32(50), after.BusyThresholdMs)
@@ -1338,7 +1325,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 	s.Equal(s.leaderPeer, probeCtx.Peer.Id)
 	defer func() {
 		leaderStore.noisyGroups.replace(nil, time.Now())
-		leaderStore.healthStatus.markOverloaded(false)
 	}()
 
 	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(
@@ -1367,14 +1353,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 		}
 
 		leaderStore.noisyGroups.replace(nil, time.Now())
-		leaderStore.healthStatus.markOverloaded(false)
 		s.True(send(group), "normal routing is ordinary traffic, async=%v", async)
 
 		leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
 			StoreId:     leaderStore.storeID,
 			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
 		})
-		s.True(leaderStore.healthStatus.IsOverloaded())
 
 		// The blamed group is pinned here now. Its latency is this group's own
 		// throttling, and the slow score is store-wide with no group dimension
@@ -2350,7 +2334,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantStaleRetryBacksOff(
 	s.NotNil(follower)
 	defer func() {
 		leaderStore.noisyGroups.replace(nil, time.Now())
-		leaderStore.healthStatus.markOverloaded(false)
 	}()
 	leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
 		StoreId:     leaderStore.storeID,
