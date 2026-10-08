@@ -2920,11 +2920,12 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
-// A ServerIsBusy that blames the request's own group does not count toward the
-// suspect-not-leader probe: the pinned retries stay on the cached leader for as
-// long as it keeps answering with that reason. Only an ordinary ServerIsBusy(0)
-// from the leader arms the probe.
-func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
+// A ServerIsBusy(0) that blames the request's own group is rejected at the same
+// read-pool entrance as an ordinary one, so it says just as little about who the
+// leader is. It must feed the same suspect-not-leader probe, or the pin it sets
+// would keep a request on a store that has lost leadership until the attempts or
+// the backoff budget run out.
+func TestReplicaSelectorNoisyTenantBusyProbe(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -2935,9 +2936,9 @@ func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
 		}
 	}
 
-	// 2 noisy rejections from the cached leader: each retry is pinned to the leader
-	// and backs off, and the probe is never armed, so the third attempt is on the
-	// leader again.
+	// 2 noisy rejections from the cached leader: the retry is pinned to the leader
+	// and backs off, and the second one still arms the probe. The third attempt
+	// goes to a follower as a leader read.
 	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadLeader,
@@ -2946,7 +2947,7 @@ func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2955,9 +2956,9 @@ func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
 			regionIsValid:   true,
 		},
 		afterRun: func(selector *replicaSelector) {
-			s.False(selector.leaderBusyProbed)
-			s.Equal(0, selector.leaderBusyCount)
-			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			s.True(selector.leaderBusyProbed)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
+			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
 			s.True(selector.replicas[0].store.healthStatus.IsOverloaded())
 			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
@@ -2965,17 +2966,19 @@ func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 
-	// A follower read pinned by a noisy rejection behaves the same: the pin keeps
-	// it on the leader and nothing is probed.
+	// The probed follower replies NotLeader pointing at store3: the cache heals and
+	// the request finishes on the real leader instead of spending its remaining
+	// attempts on store1.
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
-		readType:  kv.ReplicaReadMixed,
-		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, NoisyTenantServerIsBusyErr},
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, NoisyTenantServerIsBusyErr, NotLeaderWithNewLeader3Err},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2984,37 +2987,34 @@ func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
 			regionIsValid:   true,
 		},
 		afterRun: func(selector *replicaSelector) {
-			s.False(selector.leaderBusyProbed)
-			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			s.Equal(uint64(3), selector.region.GetLeaderStoreID())
 			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
 
-	// An ordinary ServerIsBusy(0) from the leader after a noisy one still arms the
-	// probe on its own: the noisy rejection contributed nothing to the count.
+	// A follower read pinned by a noisy rejection probes the same way: the pin
+	// switched the selector to leader reads, which is the mode the probe counts.
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
-		readType:  kv.ReplicaReadLeader,
-		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		readType:  kv.ReplicaReadMixed,
+		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, NoisyTenantServerIsBusyErr, NotLeaderWithNewLeader3Err},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store1, replica-read: false, stale-read: false}",
 				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
-			backoffCnt:      3,
-			backoffDetail:   []string{"tikvServerBusy+3"},
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
 			regionIsValid:   true,
 		},
 		afterRun: func(selector *replicaSelector) {
-			s.True(selector.leaderBusyProbed)
-			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
-			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			s.Equal(uint64(3), selector.region.GetLeaderStoreID())
 			unmarkOverloaded(selector)
 			selector.invalidateRegion() // invalidate region to reload for next test case.
 		},
