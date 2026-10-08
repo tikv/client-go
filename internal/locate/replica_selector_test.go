@@ -148,8 +148,6 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(ctx)
 }
 
-<<<<<<< HEAD
-=======
 // TestLockFallbackLeaderReadClearsReplicaRead checks that a read which falls back to the leader after
 // meeting a lock (DisableStaleReadMeetLock) reaches the leader with ReplicaRead=false, whatever replica
 // read mode the request was built with. TiKV treats a request with ReplicaRead=true as a follower read
@@ -196,71 +194,6 @@ func TestLockFallbackLeaderReadClearsReplicaRead(t *testing.T) {
 	}
 }
 
-func TestNextGenReadFeaturesDisabled(t *testing.T) {
-	if !config.NextGen {
-		t.Skip("only runs under NextGen")
-	}
-	s := new(testReplicaSelectorSuite)
-	s.SetupTest(t)
-	defer s.TearDownTest()
-
-	// Even when the request is created with replica-read mode, NextGen should force leader-only.
-	for _, readType := range []kv.ReplicaReadType{kv.ReplicaReadFollower, kv.ReplicaReadMixed, kv.ReplicaReadLearner, kv.ReplicaReadPreferLeader} {
-		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, readType, nil, kvrpcpb.Context{})
-		req.BusyThresholdMs = 100 // set a non-zero busy threshold to ensure it's cleared
-		region, err := s.cache.LocateKey(s.bo, []byte("a"))
-		s.Nil(err)
-		selector, err := newReplicaSelector(s.cache, region.Region, req)
-		s.Nil(err)
-		s.Equal(kv.ReplicaReadLeader, selector.replicaReadType)
-		s.Equal(time.Duration(0), selector.busyThreshold)
-		s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
-		s.False(req.ReplicaRead)
-		s.Equal(uint32(0), req.BusyThresholdMs)
-
-		ctx, err := selector.next(s.bo, req)
-		s.Nil(err)
-		s.NotNil(ctx)
-		s.Equal(s.leaderPeer, ctx.Peer.Id)
-		s.False(req.ReplicaRead)
-	}
-
-	// Stale-read feature should also be downgraded to ordinary leader read.
-	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
-	req.EnableStaleWithMixedReplicaRead()
-	req.BusyThresholdMs = 100
-	region, err := s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	selector, err := newReplicaSelector(s.cache, region.Region, req)
-	s.Nil(err)
-	s.False(req.StaleRead)
-	s.Equal(kv.ReplicaReadLeader, selector.replicaReadType)
-	s.Equal(time.Duration(0), selector.busyThreshold)
-	s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
-	s.False(req.ReplicaRead)
-	s.Equal(uint32(0), req.BusyThresholdMs)
-	ctx, err := selector.next(s.bo, req)
-	s.Nil(err)
-	s.NotNil(ctx)
-	s.Equal(s.leaderPeer, ctx.Peer.Id)
-
-	// Configurable-timeout retry on the leader should not flip the request back to replica-read in nextgen.
-	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")})
-	req.ReplicaReadType = kv.ReplicaReadLeader
-	region, err = s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	selector, err = newReplicaSelector(s.cache, region.Region, req)
-	s.Nil(err)
-	leaderIdx := selector.region.getStore().workTiKVIdx
-	selector.replicas[leaderIdx].addFlag(deadlineErrUsingConfTimeoutFlag)
-	ctx, err = selector.next(s.bo, req)
-	s.Nil(err)
-	s.NotNil(ctx)
-	s.False(req.ReplicaRead)
-	s.False(req.StaleRead)
-}
-
->>>>>>> 0bed899e (tikvrpc: clear ReplicaRead when falling back to leader read after meeting a lock (#2097))
 func TestReplicaSelectorCalculateScore(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
