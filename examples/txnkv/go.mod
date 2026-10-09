@@ -3,11 +3,7 @@ module txnkv
 go 1.25.8
 
 require (
-<<<<<<< HEAD
 	github.com/pingcap/kvproto v0.0.0-20260902031311-e98c296c957f
-=======
-	github.com/pingcap/kvproto v0.0.0-20260820034643-9327469bb3ce
->>>>>>> 5f38569c (txnkv: back off when TiKV ignores lock hints (#2075))
 	github.com/tikv/client-go/v2 v2.0.0
 )
 
