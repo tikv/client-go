@@ -173,7 +173,7 @@ func (s *testKVSuite) TestAutocommitPointGetResolvesIgnoredLockHint() {
 	ctx := context.WithValue(context.Background(), util.ExecDetailsKey, detail)
 	value, err := s.store.GetSnapshot(math.MaxUint64).Get(ctx, key)
 	s.Require().NoError(err)
-	s.Equal([]byte("value"), value.Value)
+	s.Equal([]byte("value"), value)
 	s.Equal(4, requests)
 	s.Equal(int64(1), atomic.LoadInt64(&detail.BackoffCount))
 	// A repeated lock despite the hint falls back to normal lock resolution.
