@@ -34,6 +34,13 @@
 
 package kv
 
+// KillSignalHandler handles kill signals at interruptible KV request checkpoints.
+// Implementations must be safe for concurrent use.
+type KillSignalHandler interface {
+	// HandleSignal returns an error when the current operation should stop.
+	HandleSignal() error
+}
+
 // Variables defines the variables used by KV storage.
 type Variables struct {
 	// BackoffLockFast specifies the LockFast backoff base duration in milliseconds.
@@ -49,6 +56,10 @@ type Variables struct {
 	// When its value is 0, it's not killed
 	// When its value is not 0, it's killed, the value indicates concrete reason.
 	Killed *uint32
+
+	// KillSignalHandler takes precedence over Killed when it is set.
+	// It must be configured before Variables is used by concurrent requests.
+	KillSignalHandler KillSignalHandler
 }
 
 // NewVariables create a new Variables instance with default values.
