@@ -16,6 +16,7 @@ package locate
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -48,6 +49,15 @@ type replicaSelector struct {
 	leaderBusyCount  int
 	leaderBusyPeerID uint64
 	leaderBusyProbed bool
+	// Whether the noisy-tenant logic put this attempt on the leader: either
+	// tryOverloadedLeader chose it, or a busy or timeout reply that blamed the
+	// request's group pinned the selector there. Re-decided per attempt, since
+	// the probe or exhaustion may move a pinned retry off the leader.
+	pinnedToOverloadedLeader bool
+	// Set by pinRetryToLeader once a reply blamed the request's own group. It
+	// is what marks the pinned retries, so their latency stays out of the
+	// store's slow score the same way the first steered attempt's does.
+	pinnedByNoisyReply bool
 }
 
 // disableReadFeaturesForNextGen disables replica-read and stale-read feature
@@ -77,7 +87,7 @@ func newReplicaSelector(
 	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 		WithPerferLeader()(&option)
 	}
-	return &replicaSelector{
+	selector := &replicaSelector{
 		baseReplicaSelector: baseReplicaSelector{
 			regionCache:   regionCache,
 			region:        cachedRegion,
@@ -90,7 +100,8 @@ func newReplicaSelector(
 		option:          option,
 		target:          nil,
 		attempts:        0,
-	}, nil
+	}
+	return selector, nil
 }
 
 func buildTiKVReplicas(region *Region) []*replica {
@@ -134,16 +145,71 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	s.attempts++
 	s.target = nil
 	s.proxy = nil
-	switch s.replicaReadType {
-	case kv.ReplicaReadLeader:
-		s.nextForReplicaReadLeader(req)
-	default:
-		s.nextForReplicaReadMixed(req)
+	s.pinnedToOverloadedLeader = false
+	// Only a fresh request is steered by the store's report. A retry goes where
+	// the reply that failed it said: a busy or timeout that blamed the group
+	// pinned the selector to the leader, and anything else is upstream's to
+	// route. Re-steering here would also keep re-selecting a leader that the
+	// normal strategy has set aside, such as one suspected of having lost its
+	// leadership.
+	if s.attempts == 1 && s.isReadOnlyReq && !s.isStaleRead {
+		s.tryOverloadedLeader(req)
+	}
+	if s.target == nil {
+		switch s.replicaReadType {
+		case kv.ReplicaReadLeader:
+			s.nextForReplicaReadLeader(req)
+		default:
+			s.nextForReplicaReadMixed(req)
+		}
 	}
 	if s.target == nil {
 		return nil, nil
 	}
+	if err := s.backoffStaleRetryOnBlamingStore(bo, req); err != nil {
+		return nil, err
+	}
 	return s.buildRPCContext(bo, s.target, s.proxy)
+}
+
+// backoffStaleRetryOnBlamingStore backs off a stale read's retry, whatever caused it,
+// when the target store blames the request's own resource group.
+func (s *replicaSelector) backoffStaleRetryOnBlamingStore(bo *retry.Backoffer, req *tikvrpc.Request) error {
+	if !s.isStaleRead || s.attempts < 2 || s.pinnedByNoisyReply || !s.targetBlamesRequestGroup(req) {
+		return nil
+	}
+	metrics.TiKVNoisyTenantStaleRetryBackoffCounter.Inc()
+	return bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf(
+		"stale read retry on a store that blames the group (noisy tenant), store: %d", s.target.store.storeID))
+}
+
+// tryOverloadedLeader takes the leader when its store reports that this
+// request's own resource group is overloading it. A follower read would come
+// back to this leader as a ReadIndex anyway, so serving it from the leader's
+// lease removes that message instead of moving it.
+//
+// Only the blamed group is steered. Every other group keeps its normal routing.
+// Writes and stale reads are excluded by the caller: a write is bound to the
+// leader already, and a stale read needs no ReadIndex.
+func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
+	leaderIdx := s.region.getStore().workTiKVIdx
+	if int(leaderIdx) >= len(s.replicas) {
+		return
+	}
+	leader := s.replicas[leaderIdx]
+	if !isLeaderCandidate(leader) ||
+		!leader.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now()) {
+		return
+	}
+	s.target = leader
+	s.pinnedToOverloadedLeader = true
+	metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
+	// A plain leader read: no ReplicaRead, and no busy threshold, because the
+	// threshold's own fallback is to an idle follower and that is a ReadIndex.
+	req.ReplicaRead = false
+	req.StaleRead = false
+	req.BusyThresholdMs = 0
+	s.busyThreshold = 0
 }
 
 func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
@@ -588,9 +654,106 @@ func (s *replicaSelector) onRegionNotFound(
 // cached leader within one selector that triggers a suspect-not-leader probe.
 const leaderBusyProbeThreshold = 2
 
+// Kept in step with NOISY_TENANT_REASON_SUFFIX in TiKV's resource_control crate.
+const noisyTenantReasonSuffix = "|noisy_tenant"
+
+// Whether TiKV blamed this request's own resource group for the overload.
+func isNoisyTenantBusy(serverIsBusy *errorpb.ServerIsBusy) bool {
+	return serverIsBusy != nil &&
+		strings.HasSuffix(serverIsBusy.GetReason(), noisyTenantReasonSuffix)
+}
+
+// Backs off and returns to the leader: a follower read comes back to this same
+// leader as a ReadIndex, and the store is not slow, one tenant is over quota.
+func (s *replicaSelector) onNoisyTenantServerIsBusy(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (shouldRetry bool, err error) {
+	metrics.TiKVNoisyTenantServerBusyCounter.Inc()
+	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
+	// store with no group dimension.
+	//
+	// The error names this request's own group as the cause, so its retries
+	// are pinned here and now rather than waiting for the store's next health
+	// feedback to say the same thing. Only this request: a rejection carries
+	// no group set, so others are steered once health feedback names the group.
+	s.pinRetryToLeader(req)
+	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
+	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Whether the store this attempt targeted blames the request's own resource
+// group, as last reported in that store's health feedback. That report is the
+// only attribution available when a request times out locally, since no
+// response carrying a reason ever arrives. It has to be recent: a timeout on a
+// disk or network stall must not renew an overload the store diagnosed and
+// has since stopped reporting.
+func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
+	if req == nil || s.target == nil || s.target.store == nil {
+		return false
+	}
+	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now())
+}
+
+// pinRetryToLeader keeps the remaining attempts on the leader for as long as it
+// stays a candidate. The busy threshold has to go too, or
+// nextForReplicaReadLeader diverts to a replica whenever the leader looks busy
+// -- which is the case being retried.
+func (s *replicaSelector) pinRetryToLeader(req *tikvrpc.Request) {
+	req.SetReplicaReadType(kv.ReplicaReadLeader)
+	req.BusyThresholdMs = 0
+	req.StaleRead = false
+	s.replicaReadType = kv.ReplicaReadLeader
+	s.busyThreshold = 0
+	s.pinnedByNoisyReply = true
+}
+
+// onNoisyTenantTimeout backs off a configurable-timeout deadline that the
+// blamed tenant queued for itself, rather than spending the retry on the same
+// store straight away.
+//
+// Only the fast-retry case is intercepted: a request without a configurable
+// timeout already falls through to the send-failure backoff, and diverting it
+// here would skip that path's liveness check.
+//
+// The retry is pinned to the leader, so it waits rather than moving to a
+// follower throttled against the same quota. The caller returns before
+// onReadReqConfigurableTimeout, so the leader never gets the deadline flag
+// that would otherwise disqualify it; it stays an ordinary candidate, and the
+// normal leader strategy still sets it aside if it is suspected of having lost
+// its leadership.
+//
+// handled is false when the store blames somebody else, or nobody: the caller
+// then takes the immediate-retry path as before, and the deadline flag diverts
+// the retry to a follower as upstream does.
+func (s *replicaSelector) onNoisyTenantTimeout(
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
+) (handled bool, err error) {
+	if !isReadReqConfigurableTimeout(req) || !s.targetBlamesRequestGroup(req) {
+		return false, nil
+	}
+	metrics.TiKVNoisyTenantReadTimeoutCounter.Inc()
+	s.pinRetryToLeader(req)
+	backoffErr := errors.Errorf("read timeout (noisy tenant), ctx: %v", ctx)
+	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// onServerIsBusy handles a ServerIsBusy region error. A reply that blames the
+// request's own resource group goes to onNoisyTenantServerIsBusy, which pins
+// the retry to the leader. Any other reply keeps upstream's handling: the
+// store's load and health are updated, the target is flagged busy, and the
+// request is retried either at once or after a backoff.
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
+	if isNoisyTenantBusy(serverIsBusy) {
+		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
+	}
 	var store *Store
 	if ctx != nil && ctx.Store != nil {
 		store = ctx.Store

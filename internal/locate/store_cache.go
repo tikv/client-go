@@ -239,6 +239,14 @@ type Store struct {
 	unreachableSince time.Time
 
 	healthStatus *StoreHealthStatus
+	// feedbackMu serializes recordHealthFeedback, so the slow score and the
+	// noisy group set always come from the same feedback.
+	feedbackMu   sync.Mutex
+	lastFeedback acceptedFeedback // guarded by feedbackMu; zero before the first
+	// The resource groups this store last blamed for its own overload, so that
+	// their reads can stay on the leader from the first request rather than
+	// after one has been rejected.
+	noisyGroups noisyGroups
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -891,6 +899,18 @@ type StoreHealthStatus struct {
 
 	isSlow atomic.Bool
 
+	// Deadline in unix nanoseconds until which some tenant is taken to be
+	// overloading this store; 0 means it is not. This is a different question
+	// from isSlow: that one is derived from observed latency and the disk-driven
+	// slow score, so a store can be overloaded well before it looks slow.
+	//
+	// A deadline rather than a flag because the two signals that set it differ.
+	// Health feedback carries the whole noisy-group set about once a second, so
+	// it refreshes the mark while the condition lasts and clears it outright on
+	// the first report that blames nobody. A noisy-tenant ServerIsBusy is only a
+	// point-in-time rejection with nothing to clear it, so on a store too old to
+	// report the set the mark has to lapse on its own.
+
 	// A statistic for counting the request latency to this store
 	clientSideSlowScore SlowScoreStat
 
@@ -1115,11 +1135,47 @@ func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime
 	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
 }
 
+// healthFeedbackFreshDuration is how long the last accepted feedback's
+// sequence is held against later ones. After that any sequence is taken,
+// since the sequence restarts with the TiKV process. Feedback arrives about
+// once a second, so this only has to outlast that gap.
+const healthFeedbackFreshDuration = 5 * time.Second
+
+type acceptedFeedback struct {
+	seq uint64
+	at  time.Time
+}
+
+// acceptHealthFeedback drops a duplicate or out-of-order feedback while the
+// last accepted one is still fresh. A zero sequence is unset and is applied
+// without moving the baseline. The caller holds feedbackMu.
+func (s *Store) acceptHealthFeedback(seq uint64, now time.Time) bool {
+	if seq == 0 {
+		return true
+	}
+	prev := s.lastFeedback
+	if prev.seq != 0 && seq <= prev.seq && now.Sub(prev.at) < healthFeedbackFreshDuration {
+		return false
+	}
+	s.lastFeedback = acceptedFeedback{seq: seq, at: now}
+	return true
+}
+
 func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
-	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
-	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
-	// only a slow score. It's prepared for possible use in the future.
-	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
+	now := time.Now()
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
+	// The feedback is one snapshot of the store, so it is ordered as a unit:
+	// a late one must not roll back the slow score or restore withdrawn blame.
+	if !s.acceptHealthFeedback(feedback.GetFeedbackSeqNo(), now) {
+		return
+	}
+	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), now)
+	// An absent set means the store does not report noisy groups; only a
+	// store that does may clear them, by reporting the set empty.
+	if groups := feedback.GetNoisyGroups(); groups != nil {
+		s.noisyGroups.replace(groups.GetNames(), now)
+	}
 }
 
 // getReplicaFlowsStats returns the statistics on the related replicaFlowsType.
