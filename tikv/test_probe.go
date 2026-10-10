@@ -37,8 +37,10 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"math"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -122,39 +124,42 @@ func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, co
 	return s.resolveLocks(ctx, safepoint, concurrency)
 }
 
+// ScanLocks returns all locks in [startKey, endKey) at or below maxVersion.
+// An empty endKey means the end of the key space.
 func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxVersion uint64) ([]*txnlock.Lock, error) {
 	bo := NewGcResolveLockMaxBackoffer(ctx)
-	const limit = 1024
-
+	const initialLimit = 1024
+	limit := uint32(initialLimit)
 	var result []*txnlock.Lock
-
-outerLoop:
-	for {
-		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, nil, maxVersion, limit)
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
+		locks, loc, err := scanLocksInOneRegionWithRange(bo, s.KVStore, startKey, endKey, maxVersion, limit)
 		if err != nil {
 			return nil, err
 		}
-		for _, l := range locks {
-			if bytes.Compare(endKey, l.Key) <= 0 {
-				// Finished scanning the given range.
-				break outerLoop
+		// A full page may truncate a shared-lock wrapper. This probe cannot
+		// remove holders to make progress, so retry the region with a larger
+		// limit before appending any results. Keep the limit positive because
+		// some test stores interpret zero as an empty result, not unlimited.
+		if uint64(len(locks)) >= uint64(limit) {
+			if limit == math.MaxUint32 {
+				return nil, errors.New("ScanLocks result reaches the maximum scan limit")
 			}
-			result = append(result, l)
+			limit = uint32(min(uint64(limit)*2, uint64(math.MaxUint32)))
+			continue
 		}
-
-		if len(locks) < limit {
-			if len(loc.EndKey) == 0 {
-				// Scanned to the very end.
-				break outerLoop
+		for _, lock := range locks {
+			// Some test stores scan the entire region regardless of EndKey.
+			if len(endKey) > 0 && bytes.Compare(lock.Key, endKey) >= 0 {
+				return result, nil
 			}
-			// The current region is completely scanned.
-			startKey = loc.EndKey
-		} else {
-			// The current region may still have more locks.
-			startKey = append(locks[len(locks)-1].Key, 0)
+			result = append(result, lock)
 		}
+		if len(loc.EndKey) == 0 {
+			break
+		}
+		startKey = loc.EndKey
+		limit = initialLimit
 	}
-
 	return result, nil
 }
 
