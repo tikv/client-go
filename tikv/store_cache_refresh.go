@@ -545,7 +545,6 @@ func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte
 			return true
 		}
 	}
-	return progressed
 }
 
 type probeOutcome int
