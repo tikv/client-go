@@ -220,23 +220,45 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 	}
 }
 
+// StartRefreshStoreCache starts a background refresh and returns its initial status.
+// A second call for the same store reuses the in-flight refresh task.
+func (s *KVStore) StartRefreshStoreCache(storeID uint64) StoreCacheStatus {
+	started := make(chan struct{})
+	go s.refreshStoreCacheInternal(context.Background(), storeID, nil, started)
+	<-started
+	return s.GetStoreCacheStatus(storeID)
+}
+
 // RefreshStoreCache probes the old store with a one-shot Get and updates cache from NotLeader.
 // It does not use RegionRequestSender.SendReq, so it will not retry on the new leader.
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
-	return s.refreshStoreCache(ctx, storeID, nil)
+	return s.refreshStoreCacheInternal(ctx, storeID, nil, nil)
 }
 
 // afterLoad runs after the task is loaded and before it is locked. Tests use it
 // to interleave recycle with a stale pointer; production passes nil.
 func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
+	return s.refreshStoreCacheInternal(ctx, storeID, afterLoad, nil)
+}
+
+func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func(), started chan<- struct{}) StoreCacheRefreshResult {
+	var startedOnce sync.Once
+	signalStarted := func() {
+		if started != nil {
+			startedOnce.Do(func() { close(started) })
+		}
+	}
+	defer signalStarted()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if storeID == 0 {
+		signalStarted()
 		return StoreCacheRefreshResult{Ready: true, ObservedAt: time.Now().Unix()}
 	}
 	if s.IsClose() {
+		signalStarted()
 		return closedStoreCacheResult(storeID)
 	}
 	var (
@@ -287,6 +309,7 @@ func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLo
 		}
 		task.cancel = cancel
 		task.mu.Unlock()
+		signalStarted()
 		break
 	}
 
@@ -485,33 +508,35 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 // locateFailedRange walks [startKey, endKey) so a split sibling after startKey
 // is loaded. The caller should pass the first uncached hole, not the original
 // start, so a later round is not spent re-walking an already cached prefix.
-// Stops on cancel, backoff budget, max spans, or a region that does not advance.
+// It loads at most storeCacheRefreshRecoverMaxSpans regions per PD batch and
+// continues with the next batch until the complete range is covered.
 func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte) bool {
 	if ctx.Err() != nil {
 		return false
 	}
 	bo := NewBackofferWithVars(ctx, storeCacheRefreshRecoverBackoff, nil)
-	cur := startKey
 	progressed := false
-	for i := 0; i < storeCacheRefreshRecoverMaxSpans; i++ {
+	cur := startKey
+	for {
 		if ctx.Err() != nil {
 			return progressed
 		}
-		loc, err := s.regionCache.LocateKey(bo, cur)
-		if err != nil || loc == nil {
+		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(bo, cur, endKey, storeCacheRefreshRecoverMaxSpans)
+		if err != nil || len(regions) == 0 {
 			return progressed
 		}
 		progressed = true
-		if len(loc.EndKey) == 0 {
+		last := regions[len(regions)-1]
+		if len(last.EndKey()) == 0 {
 			return true
 		}
-		if len(endKey) > 0 && bytes.Compare(loc.EndKey, endKey) >= 0 {
+		if len(endKey) > 0 && bytes.Compare(last.EndKey(), endKey) >= 0 {
 			return true
 		}
-		if bytes.Compare(loc.EndKey, cur) <= 0 {
+		if bytes.Compare(last.EndKey(), cur) <= 0 {
 			return progressed
 		}
-		cur = loc.EndKey
+		cur = last.EndKey()
 		if len(endKey) > 0 && bytes.Compare(cur, endKey) >= 0 {
 			return true
 		}
