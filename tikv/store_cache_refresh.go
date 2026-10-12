@@ -285,9 +285,9 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 			return closedStoreCacheResult(storeID)
 		}
 		task = s.getRefreshTask(storeID)
-		if taskLoadedHook != nil {
-			taskLoadedHook()
-			taskLoadedHook = nil
+		if afterLoad != nil {
+			afterLoad()
+			afterLoad = nil
 		}
 		task.mu.Lock()
 		if s.IsClose() || !s.taskStillLive(storeID, task) {
