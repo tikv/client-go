@@ -17,17 +17,86 @@ package txnsnapshot
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func newSnapshotWithRuntimeStats(stats *SnapshotRuntimeStats) *KVSnapshot {
 	snapshot := &KVSnapshot{}
 	snapshot.SetRuntimeStats(stats)
 	return snapshot
+}
+
+func TestSnapshotRuntimeStatsGetScanDetail(t *testing.T) {
+	var nilStats *SnapshotRuntimeStats
+	require.Nil(t, nilStats.GetScanDetail())
+
+	stats := &SnapshotRuntimeStats{}
+	snapshot := newSnapshotWithRuntimeStats(stats)
+	require.Equal(t, &util.ScanDetail{}, stats.GetScanDetail())
+
+	detail := &kvrpcpb.ExecDetailsV2{ScanDetailV2: &kvrpcpb.ScanDetailV2{
+		TotalVersions:             11,
+		ProcessedVersions:         7,
+		ProcessedVersionsSize:     70,
+		RocksdbDeleteSkippedCount: 2,
+		RocksdbKeySkippedCount:    3,
+		RocksdbBlockCacheHitCount: 5,
+		RocksdbBlockReadCount:     6,
+		RocksdbBlockReadByte:      99,
+		RocksdbBlockReadNanos:     13,
+		GetSnapshotNanos:          17,
+		IaCacheHitCount:           19,
+		IaRemoteReadSegmentCount:  23,
+		IaRemoteReadSegmentBytes:  101,
+		IaRemoteReadSegmentNanos:  29,
+	}}
+	snapshot.mergePointResponse(detail, 0)
+	snapshot.mergePointResponse(nil, 0)
+	snapshot.mergePointResponse(detail, 0)
+	want := &util.ScanDetail{
+		TotalKeys:                   22,
+		ProcessedKeys:               14,
+		ProcessedKeysSize:           140,
+		RocksdbDeleteSkippedCount:   4,
+		RocksdbKeySkippedCount:      6,
+		RocksdbBlockCacheHitCount:   10,
+		RocksdbBlockReadCount:       12,
+		RocksdbBlockReadByte:        198,
+		RocksdbBlockReadDuration:    26 * time.Nanosecond,
+		GetSnapshotDuration:         34 * time.Nanosecond,
+		IaCacheHitCount:             38,
+		IaRemoteReadSegmentCount:    46,
+		IaRemoteReadSegmentBytes:    202,
+		IaRemoteReadSegmentDuration: 58 * time.Nanosecond,
+	}
+	require.Equal(t, want, stats.GetScanDetail())
+
+	// Modifying the returned detail must not alter the runtime statistics.
+	copy := stats.GetScanDetail()
+	*copy = util.ScanDetail{}
+	require.Equal(t, want, stats.GetScanDetail())
+
+	// Subsequent responses must not change an earlier copy or a cloned stats instance.
+	copy = stats.GetScanDetail()
+	clone := stats.Clone()
+	snapshot.mergePointResponse(detail, 0)
+	require.Equal(t, want, copy)
+	require.Equal(t, want, clone.GetScanDetail())
+	require.Equal(t, uint64(69), stats.GetScanDetail().IaRemoteReadSegmentCount)
+
+	merged := &SnapshotRuntimeStats{}
+	merged.Merge(clone)
+	merged.Merge(clone)
+	require.Equal(t, uint64(92), merged.GetScanDetail().IaRemoteReadSegmentCount)
+	require.Equal(t, uint64(404), merged.GetScanDetail().IaRemoteReadSegmentBytes)
+	require.Equal(t, 116*time.Nanosecond, merged.GetScanDetail().IaRemoteReadSegmentDuration)
+	require.Equal(t, want, clone.GetScanDetail())
 }
 
 func TestSnapshotRuntimeStatsPointResponseStats(t *testing.T) {

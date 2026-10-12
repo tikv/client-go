@@ -352,11 +352,10 @@ func (action actionPrewrite) newSingleBatchPrewriteReqHandler(c *twoPhaseCommitt
 // drop is called when the prewrite request is finished. It checks the error and updates the commit details.
 func (handler *prewrite1BatchReqHandler) drop(err error) {
 	if err != nil {
-		// If we fail to receive response for async commit prewrite, it will be undetermined whether this
-		// transaction has been successfully committed.
-		// If prewrite has been cancelled, all ongoing prewrite RPCs will become errors, we needn't set undetermined
-		// errors.
-		if (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) && handler.sender.GetRPCError() != nil && atomic.LoadUint32(&handler.committer.prewriteCancelled) == 0 {
+		// A lost async/1PC response can leave the result unknown. Ignore RPC errors caused
+		// by another failed batch's cancellation. A split can disable 1PC locally, whereas
+		// disabling async commit requires TiKV to confirm fallback.
+		if (handler.committer.isAsyncCommit() || handler.req.Prewrite().TryOnePc) && handler.sender.GetRPCError() != nil && atomic.LoadUint32(&handler.committer.prewriteCancelled) == 0 {
 			handler.committer.setUndeterminedErr(handler.sender.GetRPCError())
 		}
 	}
@@ -434,11 +433,9 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 //     doActionOnMutations directly and return retryable false regardless of success or failure.
 //  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
-	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) {
-		// If the current transaction is async commit and prewrite fails for `UndeterminedResult`,
-		// It means the transaction's commit state is unknown.
-		// We should return the error `ErrResultUndetermined` to the caller
-		// to for further handling (.i.e disconnect the connection).
+	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.req.Prewrite().TryOnePc) {
+		// Record the unknown outcome so other batch errors cannot hide it and cleanup is skipped.
+		handler.committer.setUndeterminedErr(errors.New(regionErr.String()))
 		return false, errors.WithStack(tikverr.ErrResultUndetermined)
 	}
 
@@ -469,7 +466,19 @@ func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Erro
 	if same {
 		return true, nil
 	}
+	// A split retry can cancel its own sub-batches. That does not resolve an
+	// uncertain request sent before the split.
+	rpcErr := handler.sender.GetRPCError()
+	if atomic.LoadUint32(&handler.committer.prewriteCancelled) != 0 {
+		rpcErr = nil
+	}
 	err = handler.committer.doActionOnMutations(handler.bo, actionPrewrite{true, handler.action.isInternal, handler.action.hasRpcRetries}, handler.batch.mutations)
+	// Successful 2PC prewrites do not determine whether an earlier 1PC request
+	// committed. Preserve its uncertainty until the primary commit responds.
+	onePCFallback := handler.req.Prewrite().TryOnePc && !handler.committer.isOnePC() && !handler.committer.isAsyncCommit()
+	if rpcErr != nil && (err != nil || onePCFallback) && (handler.committer.isAsyncCommit() || handler.req.Prewrite().TryOnePc) {
+		handler.committer.setUndeterminedErr(rpcErr)
+	}
 	return false, err
 }
 

@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
@@ -817,18 +818,34 @@ func TestTxnFileCommitSecondaryRPCErrorIsNotResultUndetermined(t *testing.T) {
 	require.Nil(t, committer.getUndeterminedErr())
 }
 
-func TestTxnFileCommitClearsUndeterminedErrOnDefinitivePrimaryResponse(t *testing.T) {
+func TestTxnFileCommitPrimaryResponseResolvesUndeterminedErr(t *testing.T) {
 	tests := []struct {
-		name string
-		resp *kvrpcpb.CommitResponse
+		name             string
+		resp             *kvrpcpb.CommitResponse
+		hadRPCError      bool
+		wantUndetermined bool
 	}{
 		{
-			name: "success",
-			resp: &kvrpcpb.CommitResponse{},
+			name:        "success after RPC error",
+			resp:        &kvrpcpb.CommitResponse{},
+			hadRPCError: true,
 		},
 		{
-			name: "key error",
+			name: "abort without RPC error",
 			resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{Abort: "aborted"}},
+		},
+		{
+			name:             "abort after RPC error",
+			resp:             &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{Abort: "aborted"}},
+			hadRPCError:      true,
+			wantUndetermined: true,
+		},
+		{
+			name: "primary rejection before TSO cancellation",
+			resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				StartTs: 1, AttemptedCommitTs: 2, MinCommitTs: 3, Key: []byte("k"),
+			}}},
+			hadRPCError: true,
 		},
 	}
 
@@ -837,18 +854,59 @@ func TestTxnFileCommitClearsUndeterminedErrOnDefinitivePrimaryResponse(t *testin
 			committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
 				return &tikvrpc.Response{Resp: tt.resp}, nil
 			})
-			committer.setUndeterminedErr(errors.New("stale RPC error"))
+			committer.primaryKey = []byte("k")
+			committer.store.(*txnFileCommitTSStore).timestampErr = context.Canceled
+			rpcErr := errors.New("lost primary commit response")
+			if tt.hadRPCError {
+				committer.setUndeterminedErr(rpcErr)
+			}
 
 			_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
 
 			if tt.resp.GetError() == nil {
 				require.NoError(t, err)
+			} else if tt.resp.GetError().GetCommitTsExpired() != nil {
+				require.ErrorIs(t, err, context.Canceled)
 			} else {
-				require.Error(t, err)
+				require.ErrorContains(t, err, "aborted")
 			}
-			require.Nil(t, committer.getUndeterminedErr())
+			if tt.wantUndetermined {
+				require.Same(t, rpcErr, committer.getUndeterminedErr())
+			} else {
+				require.Nil(t, committer.getUndeterminedErr())
+			}
 		})
 	}
+}
+
+func TestTxnFileCommitDoesNotRestoreResolvedRPCError(t *testing.T) {
+	util.EnableFailpoints()
+	require.NoError(t, failpoint.Enable("tikvclient/injectLiveness", `return("reachable")`))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/injectLiveness"))
+		_ = failpoint.Disable("tikvclient/tikvStoreSendReqResult")
+	})
+	requests := 0
+	committer, bo, batch := newTxnFileCommitTestBatch(t, func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		requests++
+		if requests == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		require.Equal(t, 2, requests)
+		// Fail the next SendReq before it sends another primary commit request.
+		require.NoError(t, failpoint.Enable("tikvclient/tikvStoreSendReqResult", `return("timeout")`))
+		return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+			StartTs: 1, AttemptedCommitTs: 2, MinCommitTs: 3, Key: []byte("k"),
+		}}}}, nil
+	})
+	committer.primaryKey = []byte("k")
+	committer.store.(*txnFileCommitTSStore).timestamps = []uint64{4}
+
+	_, err := (txnFileCommitAction{}).executeBatch(committer, bo, batch)
+
+	require.Equal(t, 2, requests)
+	require.ErrorContains(t, err, "timeout")
+	require.Nil(t, committer.getUndeterminedErr())
 }
 
 func TestTxnFileCommitPrimaryUndeterminedRegionError(t *testing.T) {

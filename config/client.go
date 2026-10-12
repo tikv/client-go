@@ -121,7 +121,8 @@ type TiKVClient struct {
 	// TODO(crazycs520): remove this config in 8.6 LTS version.
 	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 
-	// RUV2 is the RU v2 TiKV-side weights used to calculate TiKV RU values from ExecDetailsV2.RuV2.
+	// RUV2 is retained for configuration compatibility and is no longer used.
+	// Deprecated: TiKV RU v2 weight-based accounting has been removed.
 	RUV2 RUV2TiKVConfig `toml:"ru-v2" json:"ru-v2"`
 
 	// TxnChunkWriterAddr is the address of the txn chunk writer for file-based txn.
@@ -138,41 +139,6 @@ type TiKVClient struct {
 	// TxnFileRequestSourceWhitelist is the whitelist of request source types (RequestSource.RequestSourceType) that can use file-based txn.
 	// For internal requests only. External requests can always use file-based txn.
 	TxnFileRequestSourceWhitelist []string `toml:"txn-file-request-source-whitelist" json:"txn-file-request-source-whitelist"`
-}
-
-// RUV2TiKVConfig is the configuration for RU v2 TiKV-side weight calculation.
-type RUV2TiKVConfig struct {
-	// RUScale is the scale factor used to convert RU v2 float values into scaled integer values.
-	// It is intentionally chosen to match legacy RU values for compatibility.
-	RUScale float64 `toml:"ru-scale" json:"ru-scale"`
-
-	TiKVKVEngineCacheMiss             float64 `toml:"tikv-kv-engine-cache-miss" json:"tikv-kv-engine-cache-miss"`
-	ResourceManagerWriteCntTiKV       float64 `toml:"resource-manager-write-cnt-tikv" json:"resource-manager-write-cnt-tikv"`
-	ExecutorInputs                    float64 `toml:"executor-inputs" json:"executor-inputs"`
-	TiKVCoprocessorExecutorIterations float64 `toml:"tikv-coprocessor-executor-iterations" json:"tikv-coprocessor-executor-iterations"`
-	TiKVCoprocessorResponseBytes      float64 `toml:"tikv-coprocessor-response-bytes" json:"tikv-coprocessor-response-bytes"`
-	TiKVRaftstoreStoreWriteTriggerWB  float64 `toml:"tikv-raftstore-store-write-trigger-wb-bytes" json:"tikv-raftstore-store-write-trigger-wb-bytes"`
-	TiKVStorageProcessedKeysBatchGet  float64 `toml:"tikv-storage-processed-keys-batch-get" json:"tikv-storage-processed-keys-batch-get"`
-	TiKVStorageProcessedKeysGet       float64 `toml:"tikv-storage-processed-keys-get" json:"tikv-storage-processed-keys-get"`
-}
-
-// DefaultRUV2TiKVConfig returns the default RU v2 TiKV-side configuration.
-// These coefficients were fitted from test workloads to map TiKV-side ExecDetailsV2.RuV2 counters
-// back to scaled RU values as stably as possible while staying close to the legacy RU v1 accounting.
-// Keep RUScale and the per-counter weights in sync with that fitting procedure when updating them.
-func DefaultRUV2TiKVConfig() RUV2TiKVConfig {
-	return RUV2TiKVConfig{
-		RUScale: 2.10,
-
-		TiKVKVEngineCacheMiss:             0.45975389,
-		ResourceManagerWriteCntTiKV:       0.09642181,
-		ExecutorInputs:                    0.00003150,
-		TiKVCoprocessorExecutorIterations: 0.05775369,
-		TiKVCoprocessorResponseBytes:      0.00000087,
-		TiKVRaftstoreStoreWriteTriggerWB:  0.00006100,
-		TiKVStorageProcessedKeysBatchGet:  0.00266791,
-		TiKVStorageProcessedKeysGet:       0.01416829,
-	}
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.

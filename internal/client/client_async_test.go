@@ -322,18 +322,8 @@ func TestSendRequestFailsClosedForUnpreparedProtectedRequest(t *testing.T) {
 	require.Equal(t, errorpb.IncompatibleRequestReason_IncompatibleRequestReasonUnknown, incompatible.GetReason())
 }
 
-func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
+func TestSendRequestAsyncCollectsCoprocessorResponseBytes(t *testing.T) {
 	ctx := context.Background()
-	original := config.GetGlobalConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalConfig(original)
-	})
-
-	cfg := config.DefaultConfig()
-	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
-	config.StoreGlobalConfig(&cfg)
-	weights := cfg.TiKVClient.RUV2
-
 	srv, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	require.True(t, srv.IsRunning())
@@ -351,7 +341,8 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		prewriteResp := &kvrpcpb.PrewriteResponse{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
 				RuV2: &kvrpcpb.RUV2{
-					KvEngineCacheMiss: 1,
+					CoprocessorResponseBytes: 11,
+					KvEngineCacheMiss:        7,
 				},
 			},
 		}
@@ -374,19 +365,18 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 		called = true
 		require.NoError(t, err)
 		require.IsType(t, &kvrpcpb.PrewriteResponse{}, resp.Resp)
-		require.Equal(t, uint64(1), resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
+		require.Zero(t, resp.GetExecDetailsV2().GetRuV2().GetWriteRpcCount())
 	})
 
 	cli.SendRequestAsync(sendCtx, addr, req, cb)
 	rl.Exec(ctx)
 	require.True(t, called)
 
-	expected := (weights.ResourceManagerWriteCntTiKV + weights.TiKVKVEngineCacheMiss) * weights.RUScale
-	require.InDelta(t, expected, ruDetails.TiKVRUV2(), 1e-9)
 	drained := ruDetails.DrainRUV2()
 	require.NotNil(t, drained)
-	require.Equal(t, uint64(1), drained.GetWriteRpcCount())
-	require.Equal(t, uint64(1), drained.GetKvEngineCacheMiss())
+	require.Equal(t, uint64(11), drained.GetCoprocessorResponseBytes())
+	require.Zero(t, drained.GetKvEngineCacheMiss())
+	require.Zero(t, drained.GetWriteRpcCount())
 	require.Nil(t, ruDetails.DrainRUV2())
 
 	bypassDetails := util.NewRUDetails()
@@ -406,7 +396,6 @@ func TestSendRequestAsyncUpdateTiKVRUV2(t *testing.T) {
 	cli.SendRequestAsync(bypassCtx, addr, bypassReq, cb)
 	rl.Exec(ctx)
 	require.True(t, called)
-	require.Zero(t, bypassDetails.TiKVRUV2())
 	require.Nil(t, bypassDetails.DrainRUV2())
 }
 
