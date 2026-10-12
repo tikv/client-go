@@ -284,6 +284,10 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 		}
 		if task.running {
 			waitRound := task.round
+			// An asynchronous caller only needs to know that an existing
+			// refresh is already in flight; it must not wait for that round
+			// to finish before StartRefreshStoreCache returns.
+			signalStarted()
 			task.mu.Unlock()
 			if waitRound == nil {
 				continue
