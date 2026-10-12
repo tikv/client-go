@@ -81,6 +81,36 @@ const (
 // LabelFilter returns false means label doesn't match, and will ignore this store.
 type LabelFilter = func(labels []*metapb.StoreLabel) bool
 
+// TiFlashRPCContextUnavailableReason is the reason why GetTiFlashRPCContext returns a nil RPCContext.
+type TiFlashRPCContextUnavailableReason string
+
+const (
+	TiFlashRPCContextAvailable                       TiFlashRPCContextUnavailableReason = ""
+	TiFlashRPCContextUnavailableError                TiFlashRPCContextUnavailableReason = "error"
+	TiFlashRPCContextUnavailableCachedRegionMissing  TiFlashRPCContextUnavailableReason = "cached_region_missing"
+	TiFlashRPCContextUnavailableNeedReloadOnAccess   TiFlashRPCContextUnavailableReason = "need_reload_on_access"
+	TiFlashRPCContextUnavailableTTLExpired           TiFlashRPCContextUnavailableReason = "ttl_expired"
+	TiFlashRPCContextUnavailableNoTiFlashAccessStore TiFlashRPCContextUnavailableReason = "no_tiflash_access_store"
+	TiFlashRPCContextUnavailableStoreAddrEmpty       TiFlashRPCContextUnavailableReason = "store_addr_empty"
+	TiFlashRPCContextUnavailableAllStoresFiltered    TiFlashRPCContextUnavailableReason = "all_tiflash_stores_filtered_by_label"
+	TiFlashRPCContextUnavailableAllStoresEpochStale  TiFlashRPCContextUnavailableReason = "all_tiflash_stores_epoch_mismatch"
+	TiFlashRPCContextUnavailableNoAvailableStore     TiFlashRPCContextUnavailableReason = "no_available_tiflash_store"
+)
+
+func (r TiFlashRPCContextUnavailableReason) String() string {
+	return string(r)
+}
+
+type TiFlashRPCContextUnavailableDetail struct {
+	Reason   TiFlashRPCContextUnavailableReason
+	StoreIDs []uint64
+	PeerIDs  []uint64
+}
+
+func (d TiFlashRPCContextUnavailableDetail) String() string {
+	return d.Reason.String()
+}
+
 // LabelFilterOnlyTiFlashWriteNode will only select stores whose label contains: <engine, tiflash> and <engine_role, write>.
 // Only used for tiflash_compute node.
 var LabelFilterOnlyTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
@@ -993,17 +1023,28 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 	return allStores, nonPendingStores
 }
 
-// GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the region
-// must be out of date and already dropped from cache or not flash store found.
+// GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the returned
+// TiFlashRPCContextUnavailableDetail explains why the region cannot access TiFlash.
 // `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
-func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, error) {
+func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, TiFlashRPCContextUnavailableDetail, error) {
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
-		return nil, nil
+		if cachedRegion == nil {
+			return nil, TiFlashRPCContextUnavailableDetail{Reason: TiFlashRPCContextUnavailableCachedRegionMissing}, nil
+		}
+		if cachedRegion.checkSyncFlags(needReloadOnAccess) {
+			return nil, TiFlashRPCContextUnavailableDetail{Reason: TiFlashRPCContextUnavailableNeedReloadOnAccess}, nil
+		}
+		return nil, TiFlashRPCContextUnavailableDetail{Reason: TiFlashRPCContextUnavailableTTLExpired}, nil
 	}
 
 	regionStore := cachedRegion.getStore()
+	accessStoreNum := regionStore.accessStoreNum(tiFlashOnly)
+	if accessStoreNum == 0 {
+		cachedRegion.invalidate(Other)
+		return nil, TiFlashRPCContextUnavailableDetail{Reason: TiFlashRPCContextUnavailableNoTiFlashAccessStore}, nil
+	}
 
 	// sIdx is for load balance of TiFlash store.
 	var sIdx int
@@ -1012,32 +1053,50 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	} else {
 		sIdx = int(regionStore.workTiFlashIdx.Load())
 	}
-	for i := 0; i < regionStore.accessStoreNum(tiFlashOnly); i++ {
-		accessIdx := AccessIndex((sIdx + i) % regionStore.accessStoreNum(tiFlashOnly))
+	labelFilteredCount := 0
+	epochMismatchCount := 0
+	storeIDs := make([]uint64, 0, accessStoreNum)
+	peerIDs := make([]uint64, 0, accessStoreNum)
+	for i := 0; i < accessStoreNum; i++ {
+		accessIdx := AccessIndex((sIdx + i) % accessStoreNum)
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
+		peer := cachedRegion.meta.Peers[storeIdx]
+		storeIDs = append(storeIDs, store.storeID)
+		peerIDs = append(peerIDs, peer.GetId())
 		if !labelFilter(store.labels) {
+			labelFilteredCount++
 			continue
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
 		if err != nil {
-			return nil, err
+			return nil, TiFlashRPCContextUnavailableDetail{
+				Reason:   TiFlashRPCContextUnavailableError,
+				StoreIDs: []uint64{store.storeID},
+				PeerIDs:  []uint64{peer.GetId()},
+			}, err
 		}
 		if len(addr) == 0 {
 			cachedRegion.invalidate(StoreNotFound)
-			return nil, nil
+			return nil, TiFlashRPCContextUnavailableDetail{
+				Reason:   TiFlashRPCContextUnavailableStoreAddrEmpty,
+				StoreIDs: []uint64{store.storeID},
+				PeerIDs:  []uint64{peer.GetId()},
+			}, nil
 		}
 		if store.getResolveState() == needCheck {
 			_, err := store.reResolve(c.stores, c.bg)
 			tikverr.Log(err)
 		}
 		regionStore.workTiFlashIdx.Store(int32(accessIdx))
-		peer := cachedRegion.meta.Peers[storeIdx]
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			cachedRegion.invalidate(Other)
+			epochMismatchCount++
 			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
-				zap.String("store", store.addr))
+				zap.Uint64("store_id", store.storeID),
+				zap.Uint64("peer_id", peer.GetId()),
+				zap.String("store", store.GetAddr()))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
 			continue
 		}
@@ -1051,11 +1110,29 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			Addr:       addr,
 			AccessMode: tiFlashOnly,
 			TiKVNum:    regionStore.accessStoreNum(tiKVOnly),
-		}, nil
+		}, TiFlashRPCContextUnavailableDetail{Reason: TiFlashRPCContextAvailable}, nil
 	}
 
 	cachedRegion.invalidate(Other)
-	return nil, nil
+	if labelFilteredCount == accessStoreNum {
+		return nil, TiFlashRPCContextUnavailableDetail{
+			Reason:   TiFlashRPCContextUnavailableAllStoresFiltered,
+			StoreIDs: storeIDs,
+			PeerIDs:  peerIDs,
+		}, nil
+	}
+	if epochMismatchCount == accessStoreNum {
+		return nil, TiFlashRPCContextUnavailableDetail{
+			Reason:   TiFlashRPCContextUnavailableAllStoresEpochStale,
+			StoreIDs: storeIDs,
+			PeerIDs:  peerIDs,
+		}, nil
+	}
+	return nil, TiFlashRPCContextUnavailableDetail{
+		Reason:   TiFlashRPCContextUnavailableNoAvailableStore,
+		StoreIDs: storeIDs,
+		PeerIDs:  peerIDs,
+	}, nil
 }
 
 // KeyLocation is the region and range that a key is located.
@@ -2171,6 +2248,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
+	pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
 	var backoffErr error
 	for {
 		if backoffErr != nil {
@@ -2181,7 +2259,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		//nolint:staticcheck
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
+		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2200,10 +2278,16 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 
 		if len(regionsInfo) == 0 {
 			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		if regionsHaveGapInRanges([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
@@ -2215,6 +2299,9 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			if len(pdOpts) > 0 {
+				pdOpts = nil
+			}
 			continue
 		}
 		return validRegions, nil
@@ -2232,13 +2319,28 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		defer span1.Finish()
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
-	var opt batchLocateKeyRangesOption
+	var batchOpt batchLocateKeyRangesOption
 	for _, op := range opts {
-		op(&opt)
+		op(&batchOpt)
+	}
+	needFollowerHandle := true
+	initPdOpts := func() []pd.GetRegionOption {
+		pdOpts := []pd.GetRegionOption{
+			pd.WithOutputMustContainAllKeyRange(),
+		}
+		if needFollowerHandle {
+			pdOpts = append(pdOpts, pd.WithAllowFollowerHandle())
+		}
+		if batchOpt.needBuckets {
+			pdOpts = append(pdOpts, pd.WithBuckets())
+		}
+		return pdOpts
 	}
 	// TODO: return start key and end key after redact is introduced.
 	var backoffErr error
 	for {
+		pdOpts := initPdOpts()
+
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
@@ -2246,10 +2348,6 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			}
 		}
 		start := time.Now()
-		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
-		if opt.needBuckets {
-			pdOpts = append(pdOpts, pd.WithBuckets())
-		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2275,6 +2373,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned no region, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		if regionsHaveGapInRanges(keyRanges, regionsInfo, limit) {
@@ -2282,9 +2383,12 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 				"PD returned regions have gaps, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -2293,6 +2397,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		// Retry if there is no valid regions with leaders.
 		if len(validRegions) == 0 {
 			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			if needFollowerHandle {
+				needFollowerHandle = false
+			}
 			continue
 		}
 		return validRegions, nil
