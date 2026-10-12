@@ -27,6 +27,12 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
+// refreshStoreCacheForTest exposes the task-load hook needed to interleave
+// task recycle with a stale pointer in the concurrency regression test.
+func (s *KVStore) refreshStoreCacheForTest(ctx context.Context, storeID uint64, taskLoadedHook func()) StoreCacheRefreshResult {
+	return s.refreshStoreCacheInternal(ctx, storeID, taskLoadedHook, nil)
+}
+
 func TestStoreCacheRefreshUpdatesLeaderFromNotLeader(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
@@ -65,6 +71,65 @@ func TestStoreCacheRefreshUpdatesLeaderFromNotLeader(t *testing.T) {
 		return true
 	})
 	require.Zero(t, n, "ready refresh should drop the store task")
+}
+
+func TestStartRefreshStoreCacheAsyncSemantics(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+				}
+				<-release
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+
+	first := store.StartRefreshStoreCache(storeIDs[0])
+	require.True(t, first.InProgress, "first start must report an in-flight refresh: %+v", first)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh probe did not start")
+	}
+
+	secondDone := make(chan struct{})
+	var second StoreCacheStatus
+	go func() {
+		second = store.StartRefreshStoreCache(storeIDs[0])
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second start waited for the first refresh round")
+	}
+	require.True(t, second.InProgress, "second start must reuse the running task: %+v", second)
+
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.GetStoreCacheStatus(storeIDs[0]).Ready {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("refresh did not become ready after the probe completed")
 }
 
 func TestStoreCacheRefreshStaleTaskDoesNotStartAfterRecycle(t *testing.T) {
@@ -110,7 +175,7 @@ func TestStoreCacheRefreshStaleTaskDoesNotStartAfterRecycle(t *testing.T) {
 	proceed := make(chan struct{})
 	firstCh := make(chan StoreCacheRefreshResult, 1)
 	go func() {
-		firstCh <- store.refreshStoreCache(context.Background(), storeIDs[0], func() {
+		firstCh <- store.refreshStoreCacheForTest(context.Background(), storeIDs[0], func() {
 			close(loaded)
 			<-proceed
 		})

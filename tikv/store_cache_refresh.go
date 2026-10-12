@@ -236,13 +236,7 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	return s.refreshStoreCacheInternal(ctx, storeID, nil, nil)
 }
 
-// afterLoad runs after the task is loaded and before it is locked. Tests use it
-// to interleave recycle with a stale pointer; production passes nil.
-func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
-	return s.refreshStoreCacheInternal(ctx, storeID, afterLoad, nil)
-}
-
-func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func(), started chan<- struct{}) StoreCacheRefreshResult {
+func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, taskLoadedHook func(), started chan<- struct{}) StoreCacheRefreshResult {
 	var startedOnce sync.Once
 	signalStarted := func() {
 		if started != nil {
@@ -273,9 +267,9 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 			return closedStoreCacheResult(storeID)
 		}
 		task = s.getRefreshTask(storeID)
-		if afterLoad != nil {
-			afterLoad()
-			afterLoad = nil
+		if taskLoadedHook != nil {
+			taskLoadedHook()
+			taskLoadedHook = nil
 		}
 		task.mu.Lock()
 		if s.IsClose() || !s.taskStillLive(storeID, task) {
