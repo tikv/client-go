@@ -26,6 +26,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/pd/client/clients/router"
 )
 
 const (
@@ -246,12 +247,6 @@ func (s *KVStore) StartRefreshStoreCache(storeID uint64) StoreCacheStatus {
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
 	return s.refreshStoreCacheInternal(ctx, storeID, nil, nil)
-}
-
-// afterLoad runs after the task is loaded and before it is locked. Tests use it
-// to interleave recycle with a stale pointer; production passes nil.
-func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
-	return s.refreshStoreCacheInternal(ctx, storeID, afterLoad, nil)
 }
 
 func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func(), started chan<- StoreCacheStatus) StoreCacheRefreshResult {
@@ -538,7 +533,9 @@ func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte
 		if ctx.Err() != nil {
 			return progressed
 		}
-		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(bo, cur, endKey, storeCacheRefreshRecoverMaxSpans)
+		regions, err := s.regionCache.BatchLoadRegionsWithKeyRanges(bo,
+			[]router.KeyRange{{StartKey: cur, EndKey: endKey}}, storeCacheRefreshRecoverMaxSpans,
+			locate.WithNeedRegionHasLeaderPeer())
 		if err != nil || len(regions) == 0 {
 			return progressed
 		}
