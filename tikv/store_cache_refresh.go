@@ -220,13 +220,25 @@ func (s *KVStore) GetStoreCacheStatus(storeID uint64) StoreCacheStatus {
 	}
 }
 
+func (s *KVStore) storeCacheStatusLocked(storeID uint64, task *storeCacheRefreshTask) StoreCacheStatus {
+	matched := s.regionCache.CountWorkStoreMatches(storeID)
+	failed := len(task.unresolved)
+	return StoreCacheStatus{
+		StoreID:    storeID,
+		Matched:    matched,
+		Failed:     failed,
+		Ready:      matched == 0 && failed == 0 && !task.running,
+		InProgress: task.running,
+		ObservedAt: time.Now().Unix(),
+	}
+}
+
 // StartRefreshStoreCache starts a background refresh and returns its initial status.
 // A second call for the same store reuses the in-flight refresh task.
 func (s *KVStore) StartRefreshStoreCache(storeID uint64) StoreCacheStatus {
-	started := make(chan struct{})
+	started := make(chan StoreCacheStatus)
 	go s.refreshStoreCacheInternal(context.Background(), storeID, nil, started)
-	<-started
-	return s.GetStoreCacheStatus(storeID)
+	return <-started
 }
 
 // RefreshStoreCache probes the old store with a one-shot Get and updates cache from NotLeader.
@@ -236,23 +248,29 @@ func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCa
 	return s.refreshStoreCacheInternal(ctx, storeID, nil, nil)
 }
 
-func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, taskLoadedHook func(), started chan<- struct{}) StoreCacheRefreshResult {
+// afterLoad runs after the task is loaded and before it is locked. Tests use it
+// to interleave recycle with a stale pointer; production passes nil.
+func (s *KVStore) refreshStoreCache(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
+	return s.refreshStoreCacheInternal(ctx, storeID, afterLoad, nil)
+}
+
+func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func(), started chan<- StoreCacheStatus) StoreCacheRefreshResult {
 	var startedOnce sync.Once
-	signalStarted := func() {
+	signalStarted := func(status StoreCacheStatus) {
 		if started != nil {
-			startedOnce.Do(func() { close(started) })
+			startedOnce.Do(func() { started <- status })
 		}
 	}
-	defer signalStarted()
+	defer signalStarted(StoreCacheStatus{StoreID: storeID, ObservedAt: time.Now().Unix()})
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if storeID == 0 {
-		signalStarted()
+		signalStarted(StoreCacheStatus{Ready: true, ObservedAt: time.Now().Unix()})
 		return StoreCacheRefreshResult{Ready: true, ObservedAt: time.Now().Unix()}
 	}
 	if s.IsClose() {
-		signalStarted()
+		signalStarted(StoreCacheStatus{StoreID: storeID, Ready: false, ObservedAt: time.Now().Unix()})
 		return closedStoreCacheResult(storeID)
 	}
 	var (
@@ -281,7 +299,7 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 			// An asynchronous caller only needs to know that an existing
 			// refresh is already in flight; it must not wait for that round
 			// to finish before StartRefreshStoreCache returns.
-			signalStarted()
+			signalStarted(s.storeCacheStatusLocked(storeID, task))
 			task.mu.Unlock()
 			if waitRound == nil {
 				continue
@@ -306,8 +324,9 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 			stopAfter = context.AfterFunc(ctx, cancel)
 		}
 		task.cancel = cancel
+		status := s.storeCacheStatusLocked(storeID, task)
 		task.mu.Unlock()
-		signalStarted()
+		signalStarted(status)
 		break
 	}
 
