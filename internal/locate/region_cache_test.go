@@ -73,6 +73,7 @@ type inspectedPDClient struct {
 	pd.Client
 	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error)
 	getRegionByID    func(ctx context.Context, cli pd.Client, id uint64, opts ...opt.GetRegionOption) (*router.Region, error)
+	scanRegions      func(ctx context.Context, startKey, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
 	batchScanRegions func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
 }
 
@@ -88,6 +89,13 @@ func (c *inspectedPDClient) GetRegionByID(ctx context.Context, id uint64, opts .
 		return c.getRegionByID(ctx, c.Client, id, opts...)
 	}
 	return c.Client.GetRegionByID(ctx, id, opts...)
+}
+
+func (c *inspectedPDClient) ScanRegions(ctx context.Context, startKey, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	if c.scanRegions != nil {
+		return c.scanRegions(ctx, startKey, endKey, limit, opts...)
+	}
+	return c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
 }
 
 func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
@@ -522,6 +530,105 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
+}
+
+func (s *testRegionCacheSuite) TestRegionAPIFallbackFromStaleFollowerToLeader() {
+	splitKey := []byte("m")
+	oldMeta, oldLeader, _, _ := s.cluster.GetRegionByID(s.region1)
+	s.NotNil(oldMeta)
+	s.NotNil(oldLeader)
+
+	newRegionID := s.cluster.AllocID()
+	newPeers := s.cluster.AllocIDs(2)
+	s.cluster.Split(s.region1, newRegionID, splitKey, newPeers, newPeers[0])
+
+	// Keep the fresh right region in cache. A stale pre-split region returned by
+	// the follower intersects with it and must be rejected before retrying leader.
+	loc, err := s.cache.LocateKey(s.bo, splitKey)
+	s.NoError(err)
+	s.Equal(newRegionID, loc.Region.GetID())
+
+	currentLeft, err := s.cache.pdClient.GetRegion(withPDCircuitBreaker(context.Background()), []byte("a"))
+	s.NoError(err)
+	currentRight, err := s.cache.pdClient.GetRegion(withPDCircuitBreaker(context.Background()), splitKey)
+	s.NoError(err)
+	staleLeftMeta := proto.Clone(currentLeft.Meta).(*metapb.Region)
+	staleLeftMeta.RegionEpoch.Version--
+	staleLeft := &router.Region{
+		Meta:   staleLeftMeta,
+		Leader: proto.Clone(currentLeft.Leader).(*metapb.Peer),
+	}
+	staleWholeRegion := &router.Region{
+		Meta:   oldMeta,
+		Leader: oldLeader,
+	}
+	allowActiveFollower := func(opts ...opt.GetRegionOption) bool {
+		op := &opt.GetRegionOp{}
+		for _, opt := range opts {
+			opt(op)
+		}
+		return op.AllowFollowerHandle || op.AllowRouterServiceHandle
+	}
+
+	originalGetRegion := s.cache.pdClient.GetRegion
+	originalScanRegions := s.cache.pdClient.ScanRegions
+	originalBatchScanRegions := s.cache.pdClient.BatchScanRegions
+
+	getRegionCnt := 0
+	scanRegionsCnt := 0
+	batchScanRegionsCnt := 0
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
+			getRegionCnt++
+			if getRegionCnt == 1 {
+				s.True(allowActiveFollower(opts...))
+				return staleWholeRegion, nil
+			}
+			s.False(allowActiveFollower(opts...))
+			return originalGetRegion(ctx, key, opts...)
+		},
+		scanRegions: func(ctx context.Context, startKey, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+			scanRegionsCnt++
+			if scanRegionsCnt == 1 {
+				s.True(allowActiveFollower(opts...))
+				return []*router.Region{staleLeft}, nil
+			}
+			s.False(allowActiveFollower(opts...))
+			return originalScanRegions(ctx, startKey, endKey, limit, opts...)
+		},
+		batchScanRegions: func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+			batchScanRegionsCnt++
+			if batchScanRegionsCnt == 1 {
+				s.True(allowActiveFollower(opts...))
+				return []*router.Region{staleLeft}, nil
+			}
+			s.False(allowActiveFollower(opts...))
+			return originalBatchScanRegions(ctx, keyRanges, limit, opts...)
+		},
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
+	loc, err = s.cache.LocateKey(bo, []byte("a"))
+	s.NoError(err)
+	s.Equal(2, getRegionCnt)
+	s.Equal(s.region1, loc.Region.GetID())
+	s.Equal(splitKey, loc.EndKey)
+
+	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100)
+	s.NoError(err)
+	s.Equal(2, scanRegionsCnt)
+	s.Equal(2, len(returnedRegions))
+	s.Equal(s.region1, returnedRegions[0].meta.GetId())
+	s.Equal(newRegionID, returnedRegions[1].meta.GetId())
+
+	returnedRegions, err = s.cache.batchScanRegions(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100, WithNeedRegionHasLeaderPeer())
+	s.NoError(err)
+	s.Equal(2, batchScanRegionsCnt)
+	s.Equal(2, len(returnedRegions))
+	s.Equal(s.region1, returnedRegions[0].meta.GetId())
+	s.Equal(newRegionID, returnedRegions[1].meta.GetId())
+	s.Equal(currentRight.Meta.GetId(), returnedRegions[1].meta.GetId())
 }
 
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
