@@ -80,7 +80,7 @@ func TestRedactRegionMeta(t *testing.T) {
 		require.Equal(t, region.Id, redacted.Id)
 		require.Equal(t, region.RegionEpoch, redacted.RegionEpoch)
 		require.Equal(t, region.Peers, redacted.Peers)
-		requireNoSecret(t, fmt.Sprintf("%s", redacted))
+		requireNoSecret(t, redacted.String())
 		// The original region must be untouched.
 		require.Equal(t, []byte(secretStart), region.StartKey)
 		require.Equal(t, []byte(secretEnd), region.EndKey)
