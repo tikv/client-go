@@ -78,6 +78,8 @@ func TestStartRefreshStoreCacheAsyncSemantics(t *testing.T) {
 	require.NoError(t, err)
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseProbe := func() { releaseOnce.Do(func() { close(release) }) }
 	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
 		return &refreshInterceptClient{
 			Client: c,
@@ -93,6 +95,8 @@ func TestStartRefreshStoreCacheAsyncSemantics(t *testing.T) {
 	}, nil, 0)
 	require.NoError(t, err)
 	defer store.Close()
+	// Unblock the probe before Close waits for the refresh, even on Fatal.
+	defer releaseProbe()
 
 	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
 	bo := NewBackofferWithVars(context.Background(), 5000, nil)
@@ -121,7 +125,7 @@ func TestStartRefreshStoreCacheAsyncSemantics(t *testing.T) {
 	}
 	require.True(t, second.InProgress, "second start must reuse the running task: %+v", second)
 
-	close(release)
+	releaseProbe()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if store.GetStoreCacheStatus(storeIDs[0]).Ready {
