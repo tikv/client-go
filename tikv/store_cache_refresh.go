@@ -37,6 +37,7 @@ const (
 	storeCacheRefreshJobTimeout      = 2 * time.Minute
 	storeCacheRefreshRecoverBackoff  = 5000
 	storeCacheRefreshRecoverMaxSpans = 128
+	storeCacheRefreshRecoverInterval = 100 * time.Millisecond
 )
 
 // ErrStoreCacheRefreshBusy means reset found an in-flight refresh for this store.
@@ -73,8 +74,11 @@ type unresolvedFail struct {
 }
 
 type refreshRound struct {
-	done chan struct{}
-	res  StoreCacheRefreshResult
+	done      chan struct{}
+	res       StoreCacheRefreshResult
+	ctx       context.Context
+	cancel    context.CancelFunc
+	stopAfter func() bool
 }
 
 type storeCacheRefreshTask struct {
@@ -237,49 +241,54 @@ func (s *KVStore) storeCacheStatusLocked(storeID uint64, task *storeCacheRefresh
 // StartRefreshStoreCache starts a background refresh and returns its initial status.
 // A second call for the same store reuses the in-flight refresh task.
 func (s *KVStore) StartRefreshStoreCache(storeID uint64) StoreCacheStatus {
-	started := make(chan StoreCacheStatus)
-	go s.refreshStoreCacheInternal(context.Background(), storeID, nil, started)
-	return <-started
+	status, task, round, owner := s.acquireRefreshRound(context.Background(), storeID, nil)
+	if owner {
+		go s.executeRefreshRound(storeID, task, round)
+	}
+	return status
 }
 
 // RefreshStoreCache probes the old store with a one-shot Get and updates cache from NotLeader.
 // It does not use RegionRequestSender.SendReq, so it will not retry on the new leader.
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
-	return s.refreshStoreCacheInternal(ctx, storeID, nil, nil)
+	return s.refreshStoreCacheInternal(ctx, storeID, nil)
 }
 
-func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func(), started chan<- StoreCacheStatus) StoreCacheRefreshResult {
-	var startedOnce sync.Once
-	signalStarted := func(status StoreCacheStatus) {
-		if started != nil {
-			startedOnce.Do(func() { started <- status })
-		}
-	}
-	defer signalStarted(StoreCacheStatus{StoreID: storeID, ObservedAt: time.Now().Unix()})
+func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64, afterLoad func()) StoreCacheRefreshResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if storeID == 0 {
-		signalStarted(StoreCacheStatus{Ready: true, ObservedAt: time.Now().Unix()})
-		return StoreCacheRefreshResult{Ready: true, ObservedAt: time.Now().Unix()}
-	}
-	if s.IsClose() {
-		signalStarted(StoreCacheStatus{StoreID: storeID, Ready: false, ObservedAt: time.Now().Unix()})
+	status, task, round, owner := s.acquireRefreshRound(ctx, storeID, afterLoad)
+	if round == nil {
+		if storeID == 0 {
+			return StoreCacheRefreshResult{Ready: true, ObservedAt: status.ObservedAt}
+		}
 		return closedStoreCacheResult(storeID)
 	}
-	var (
-		task      *storeCacheRefreshTask
-		round     *refreshRound
-		jobCtx    context.Context
-		cancel    context.CancelFunc
-		stopAfter func() bool
-	)
+	if owner {
+		return s.executeRefreshRound(storeID, task, round)
+	}
+	select {
+	case <-ctx.Done():
+		return StoreCacheRefreshResult{StoreID: storeID, Errors: []string{ctx.Err().Error()}, ObservedAt: time.Now().Unix()}
+	case <-round.done:
+		return round.res
+	}
+}
+
+// acquireRefreshRound captures the startup status while holding the live task
+// lock. Only the owner executes a new round; other callers reuse its completion.
+// afterLoad is a test hook for racing task recycling with acquisition.
+func (s *KVStore) acquireRefreshRound(ctx context.Context, storeID uint64, afterLoad func()) (StoreCacheStatus, *storeCacheRefreshTask, *refreshRound, bool) {
+	if storeID == 0 {
+		return StoreCacheStatus{Ready: true, ObservedAt: time.Now().Unix()}, nil, nil, false
+	}
 	for {
 		if s.IsClose() {
-			return closedStoreCacheResult(storeID)
+			return StoreCacheStatus{StoreID: storeID, ObservedAt: time.Now().Unix()}, nil, nil, false
 		}
-		task = s.getRefreshTask(storeID)
+		task := s.getRefreshTask(storeID)
 		if afterLoad != nil {
 			afterLoad()
 			afterLoad = nil
@@ -290,45 +299,34 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 			continue
 		}
 		if task.running {
-			waitRound := task.round
-			// An asynchronous caller only needs to know that an existing
-			// refresh is already in flight; it must not wait for that round
-			// to finish before StartRefreshStoreCache returns.
-			signalStarted(s.storeCacheStatusLocked(storeID, task))
+			status, round := s.storeCacheStatusLocked(storeID, task), task.round
 			task.mu.Unlock()
-			if waitRound == nil {
-				continue
-			}
-			select {
-			case <-ctx.Done():
-				return StoreCacheRefreshResult{StoreID: storeID, Errors: []string{ctx.Err().Error()}, ObservedAt: time.Now().Unix()}
-			case <-waitRound.done:
-				return waitRound.res
-			}
+			return status, task, round, false
 		}
-		round = &refreshRound{done: make(chan struct{})}
+		round := &refreshRound{done: make(chan struct{})}
 		task.running = true
 		task.round = round
 		parent := s.ctx
 		if parent == nil {
 			parent = context.Background()
 		}
-		jobCtx, cancel = context.WithTimeout(parent, storeCacheRefreshJobTimeout)
-		jobCtx = util.WithInternalSourceType(jobCtx, util.InternalTxnStoreCacheRefresh)
-		if ctx != nil {
-			stopAfter = context.AfterFunc(ctx, cancel)
-		}
-		task.cancel = cancel
+		round.ctx, round.cancel = context.WithTimeout(parent, storeCacheRefreshJobTimeout)
+		round.ctx = util.WithInternalSourceType(round.ctx, util.InternalTxnStoreCacheRefresh)
+		round.stopAfter = context.AfterFunc(ctx, round.cancel)
+		task.cancel = round.cancel
 		status := s.storeCacheStatusLocked(storeID, task)
 		task.mu.Unlock()
-		signalStarted(status)
-		break
+		return status, task, round, true
 	}
+}
 
-	res, events := s.runRefresh(jobCtx, storeID)
-	if stopAfter != nil {
-		stopAfter()
-	}
+func (s *KVStore) executeRefreshRound(storeID uint64, task *storeCacheRefreshTask, round *refreshRound) StoreCacheRefreshResult {
+	defer round.cancel()
+	res, events := s.runRefresh(round.ctx, storeID)
+	round.stopAfter()
+	// Idle failed rounds retain their result, but need not retain contexts or
+	// the caller cancellation callback. The deferred cancel is already captured.
+	round.ctx, round.cancel, round.stopAfter = nil, nil, nil
 
 	task.mu.Lock()
 	if task.unresolved == nil {
@@ -359,7 +357,6 @@ func (s *KVStore) refreshStoreCacheInternal(ctx context.Context, storeID uint64,
 	close(round.done)
 	s.recycleIfIdleReadyLocked(storeID, task, res.Remaining, res.Failed)
 	task.mu.Unlock()
-	cancel()
 	return res
 }
 
@@ -495,7 +492,7 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 			located = true
 		}
 	}
-	// LocateKey updates the cache. Check each candidate against current coverage
+	// Range loading updates the cache. Check each candidate against current coverage
 	// after the batch of walks, including any split/merge replacements.
 	for _, candidate := range candidates {
 		it := candidate.item
@@ -521,7 +518,8 @@ func (s *KVStore) recoverGoneUnresolved(ctx context.Context, storeID uint64, hav
 // is loaded. The caller should pass the first uncached hole, not the original
 // start, so a later round is not spent re-walking an already cached prefix.
 // It loads at most storeCacheRefreshRecoverMaxSpans regions per PD batch and
-// continues with the next batch until the complete range is covered.
+// continues with the next batch until the complete range is covered. Successful
+// batches are paced separately from the PD error backoff budget.
 func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte) bool {
 	if ctx.Err() != nil {
 		return false
@@ -534,8 +532,7 @@ func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte
 			return progressed
 		}
 		regions, err := s.regionCache.BatchLoadRegionsWithKeyRanges(bo,
-			[]router.KeyRange{{StartKey: cur, EndKey: endKey}}, storeCacheRefreshRecoverMaxSpans,
-			locate.WithNeedRegionHasLeaderPeer())
+			[]router.KeyRange{{StartKey: cur, EndKey: endKey}}, storeCacheRefreshRecoverMaxSpans)
 		if err != nil || len(regions) == 0 {
 			return progressed
 		}
@@ -551,8 +548,10 @@ func (s *KVStore) locateFailedRange(ctx context.Context, startKey, endKey []byte
 			return progressed
 		}
 		cur = last.EndKey()
-		if len(endKey) > 0 && bytes.Compare(cur, endKey) >= 0 {
-			return true
+		// Successful requests do not consume the error backoff budget. Pace
+		// continued walks, and release the job promptly if it is cancelled.
+		if !sleepCtx(ctx, storeCacheRefreshRecoverInterval) {
+			return progressed
 		}
 	}
 }

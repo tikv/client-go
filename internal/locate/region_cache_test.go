@@ -524,6 +524,18 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
 }
 
+func (s *testRegionCacheSuite) TestBatchScanRegionsFallbackKeepsRegionsWithoutLeader() {
+	s.cluster.ChangeLeader(s.region1, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	bo := retry.NewBackofferWithVars(ctx, 1000, nil)
+	regions, err := s.cache.batchScanRegionsFallback(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100)
+	s.Require().NoError(err)
+	s.Require().Len(regions, 1)
+	s.Equal(s.region1, regions[0].GetID())
+	s.NotZero(regions[0].GetLeaderStoreID(), "missing PD leader must select an available TiKV peer")
+}
+
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	s.onClosed = func() { SetRegionCacheTTLWithJitter(600, 60) }
 	SetRegionCacheTTLWithJitter(2, 0)
