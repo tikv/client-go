@@ -1338,6 +1338,9 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 }
 
 func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKVRedact() {
+	old := pingcaperrors.RedactLogEnabled.Load()
+	s.T().Cleanup(func() { pingcaperrors.RedactLogEnabled.Store(old) })
+
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	cache := NewRegionCache(pdCli)
 	defer cache.Close()
@@ -1353,7 +1356,6 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKVRedact() {
 		if redacted {
 			mode = pingcaperrors.RedactLogEnable
 		}
-		old := pingcaperrors.RedactLogEnabled.Load()
 		pingcaperrors.RedactLogEnabled.Store(mode)
 
 		core, logs := observer.New(zap.InfoLevel)
@@ -1361,7 +1363,6 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKVRedact() {
 		bo := retry.NewBackofferWithVars(ctx, 2000000, nil)
 		rpcCtx := &RPCContext{Region: region.VerID(), Meta: region.GetMeta()}
 		needRetry, err := cache.OnRegionEpochNotMatch(bo, rpcCtx, []*metapb.Region{current})
-		pingcaperrors.RedactLogEnabled.Store(old)
 		s.True(needRetry)
 		s.Nil(err)
 
