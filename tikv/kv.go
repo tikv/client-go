@@ -163,6 +163,9 @@ type KVStore struct {
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
 	gP     Pool
+
+	// storeID -> *storeCacheRefreshTask, used to merge in-flight cache refreshes.
+	refreshTasks sync.Map
 }
 
 var _ Storage = (*KVStore)(nil)
@@ -502,6 +505,7 @@ func (s *KVStore) Close() error {
 	defer s.gP.Close()
 	s.close.Store(true)
 	s.cancel()
+	s.stopRefreshTasks()
 	s.wg.Wait()
 
 	s.oracle.Close()
