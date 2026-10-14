@@ -107,13 +107,45 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
-	defer cancel()
-	if err := cli.Sync(ctx); err != nil {
+	if err := syncEtcdEndpointsWithRetry(addrs, cli.Sync); err != nil {
 		_ = cli.Close()
 		return nil, errors.WithStack(err)
 	}
 	return cli, nil
+}
+
+var (
+	etcdSyncTimeout     = 5 * time.Second
+	etcdSyncMaxAttempts = 3
+	etcdSyncBackoff     = time.Second
+)
+
+// syncEtcdEndpointsWithRetry retries the initial endpoint sync, so that a
+// transient failure (e.g. a DNS lookup of the PD address timing out) does not
+// fail the client creation. Each attempt has its own timeout, while the gRPC
+// connection keeps dialing (and re-resolving the address) in the background.
+func syncEtcdEndpointsWithRetry(addrs []string, sync func(context.Context) error) error {
+	var err error
+	for attempt := 1; attempt <= etcdSyncMaxAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), etcdSyncTimeout)
+		err = sync(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if attempt == etcdSyncMaxAttempts {
+			break
+		}
+		backoff := etcdSyncBackoff * time.Duration(attempt)
+		logutil.BgLogger().Warn("failed to sync etcd endpoints, retrying",
+			zap.Strings("endpoints", addrs),
+			zap.Int("attempt", attempt),
+			zap.Int("maxAttempts", etcdSyncMaxAttempts),
+			zap.Duration("backoff", backoff),
+			zap.Error(err))
+		time.Sleep(backoff)
+	}
+	return err
 }
 
 // Update oracle's lastTS every 2000ms by default. Can override at startup with an option to NewKVStore
