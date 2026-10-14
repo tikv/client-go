@@ -1382,6 +1382,7 @@ func (s pointReadResponseExtraStats) buildPointResponseStats(scanDetail util.Sca
 	stats := PointResponseStats{
 		ScanDetail: PointReadScanDetail{
 			TotalKeys:         scanDetail.TotalKeys,
+			TotalKeysSize:     scanDetail.TotalKeysSize,
 			ProcessedKeys:     scanDetail.ProcessedKeys,
 			ProcessedKeysSize: scanDetail.ProcessedKeysSize,
 		},
