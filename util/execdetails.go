@@ -740,8 +740,8 @@ type ScanDetail struct {
 	// deleted versions, but does not include RocksDB tombstone keys.
 	TotalKeys int64
 	// TotalKeysSize is the reported MVCC key-value size, including skipped versions.
-	// It is populated only in nextgen builds. Zero may mean the backend does not
-	// support this counter; it does not prove that no bytes were scanned.
+	// Zero may mean the backend does not support this counter; it does not
+	// prove that no bytes were scanned.
 	TotalKeysSize int64
 	// ProcessedKeys is the number of user keys scanned from the storage.
 	// It does not include deleted version or RocksDB tombstone keys.
@@ -892,7 +892,7 @@ func (sd *ScanDetail) String() string {
 func (sd *ScanDetail) MergeFromScanDetailV2(scanDetail *kvrpcpb.ScanDetailV2) {
 	if scanDetail != nil {
 		sd.TotalKeys += int64(scanDetail.TotalVersions)
-		sd.TotalKeysSize += scanTotalKeysSize(scanDetail.TotalVersionsSize)
+		sd.TotalKeysSize += int64(scanDetail.TotalVersionsSize)
 		sd.ProcessedKeys += int64(scanDetail.ProcessedVersions)
 		sd.ProcessedKeysSize += int64(scanDetail.ProcessedVersionsSize)
 		sd.RocksdbDeleteSkippedCount += scanDetail.RocksdbDeleteSkippedCount

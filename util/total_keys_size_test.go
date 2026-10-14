@@ -19,17 +19,13 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/util"
 )
 
-func TestCloudTotalKeysSize(t *testing.T) {
+func TestTotalKeysSize(t *testing.T) {
 	for _, size := range []uint64{0, 80} {
 		pb := &kvrpcpb.ScanDetailV2{TotalVersions: 5, ProcessedVersions: 2, ProcessedVersionsSize: 20, TotalVersionsSize: size}
-		want := int64(0)
-		if config.NextGen {
-			want = int64(size)
-		}
+		want := int64(size)
 		var scan util.ScanDetail
 		scan.MergeFromScanDetailV2(nil)
 		scan.MergeFromScanDetailV2(pb)
