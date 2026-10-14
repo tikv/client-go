@@ -418,7 +418,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 	// TODO(youjiali1995): It's possible the region info in PD is stale for now but it can recover.
 	// Maybe we need backoff here.
 	if len(availablePeers) == 0 {
-		return nil, errors.Errorf("no available peers, region: {%v}", r.meta)
+		return nil, errors.Errorf("no available peers, region: {%v}", redact.RegionMeta(r.meta))
 	}
 
 	rs.workTiKVIdx = leaderAccessIdx
@@ -879,7 +879,7 @@ func (c *RPCContext) String() string {
 		runStoreType = c.Store.StoreType().Name()
 	}
 	res := fmt.Sprintf("region ID: %d, meta: %s, peer: %s, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
-		c.Region.GetID(), c.Meta, c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
+		c.Region.GetID(), redact.RegionMeta(c.Meta), c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
 	if c.ProxyStore != nil {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.GetAddr())
 	}
@@ -2898,7 +2898,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 		if meta.GetId() == ctx.Region.id &&
 			(meta.GetRegionEpoch().GetConfVer() < ctx.Region.confVer ||
 				meta.GetRegionEpoch().GetVersion() < ctx.Region.ver) {
-			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, currentRegions)
+			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, redact.RegionMetas(currentRegions))
 			logutil.Logger(bo.GetCtx()).Info("region epoch is ahead of tikv", zap.Error(err))
 			return true, bo.Backoff(retry.BoRegionMiss, err)
 		}
