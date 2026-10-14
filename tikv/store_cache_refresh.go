@@ -248,7 +248,9 @@ func (s *KVStore) StartRefreshStoreCache(storeID uint64) StoreCacheStatus {
 	return status
 }
 
-// RefreshStoreCache probes the old store with a one-shot Get and updates cache from NotLeader.
+// RefreshStoreCache synchronously probes the old store with a one-shot Get and updates cache from NotLeader.
+// It remains the synchronous compatibility API; use StartRefreshStoreCache when the caller
+// needs to start a refresh and poll its progress separately.
 // It does not use RegionRequestSender.SendReq, so it will not retry on the new leader.
 // Concurrent calls for the same store wait for the in-flight job instead of stacking workers.
 func (s *KVStore) RefreshStoreCache(ctx context.Context, storeID uint64) StoreCacheRefreshResult {
