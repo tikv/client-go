@@ -25,7 +25,18 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
+	"go.uber.org/goleak"
 )
+
+// refreshStoreCacheForTest exposes the task-load hook needed to interleave
+// task recycle with a stale pointer in the concurrency regression test.
+func (s *KVStore) refreshStoreCacheForTest(ctx context.Context, storeID uint64, taskLoadedHook func()) StoreCacheRefreshResult {
+	return s.refreshStoreCacheInternal(ctx, storeID, taskLoadedHook)
+}
 
 func TestStoreCacheRefreshUpdatesLeaderFromNotLeader(t *testing.T) {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
@@ -65,6 +76,97 @@ func TestStoreCacheRefreshUpdatesLeaderFromNotLeader(t *testing.T) {
 		return true
 	})
 	require.Zero(t, n, "ready refresh should drop the store task")
+}
+
+func TestStartRefreshStoreCacheAsyncSemantics(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseProbe := func() { releaseOnce.Do(func() { close(release) }) }
+	store, err := NewTestTiKVStore(client, pdClient, func(c Client) Client {
+		return &refreshInterceptClient{
+			Client: c,
+			onGet: func() {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+				}
+				<-release
+			},
+		}
+	}, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+	// Unblock the probe before Close waits for the refresh, even on Fatal.
+	defer releaseProbe()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	bo := NewBackofferWithVars(context.Background(), 5000, nil)
+	_, err = store.GetRegionCache().LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+
+	first := store.StartRefreshStoreCache(storeIDs[0])
+	require.True(t, first.InProgress, "first start must report an in-flight refresh: %+v", first)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh probe did not start")
+	}
+	existingGoroutines := goleak.IgnoreCurrent()
+
+	secondDone := make(chan struct{})
+	var second StoreCacheStatus
+	go func() {
+		second = store.StartRefreshStoreCache(storeIDs[0])
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second start waited for the first refresh round")
+	}
+	require.True(t, second.InProgress, "second start must reuse the running task: %+v", second)
+	for i := 0; i < 32; i++ {
+		require.True(t, store.StartRefreshStoreCache(storeIDs[0]).InProgress)
+	}
+	require.NoError(t, goleak.Find(existingGoroutines), "reused starts must not leave goroutines waiting for the round")
+
+	releaseProbe()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.GetStoreCacheStatus(storeIDs[0]).Ready {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("refresh did not become ready after the probe completed")
+}
+
+func TestStartRefreshStoreCacheEmptyAndClosed(t *testing.T) {
+	client, _, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if !store.IsClose() {
+			require.NoError(t, store.Close())
+		}
+	})
+	for i := 0; i < 32; i++ {
+		status := store.StartRefreshStoreCache(7)
+		require.True(t, status.InProgress, "even an empty round returns its startup snapshot")
+		require.False(t, status.Ready)
+	}
+	require.Eventually(t, func() bool { return store.GetStoreCacheStatus(7).Ready }, time.Second, time.Millisecond)
+	require.NoError(t, store.Close())
+	closed := store.StartRefreshStoreCache(7)
+	require.False(t, closed.Ready)
+	require.False(t, closed.InProgress)
+	require.True(t, store.StartRefreshStoreCache(0).Ready)
 }
 
 func TestStoreCacheRefreshStaleTaskDoesNotStartAfterRecycle(t *testing.T) {
@@ -110,7 +212,7 @@ func TestStoreCacheRefreshStaleTaskDoesNotStartAfterRecycle(t *testing.T) {
 	proceed := make(chan struct{})
 	firstCh := make(chan StoreCacheRefreshResult, 1)
 	go func() {
-		firstCh <- store.refreshStoreCache(context.Background(), storeIDs[0], func() {
+		firstCh <- store.refreshStoreCacheForTest(context.Background(), storeIDs[0], func() {
 			close(loaded)
 			<-proceed
 		})
@@ -696,16 +798,109 @@ func TestStoreCacheRefreshManySplitsConverges(t *testing.T) {
 		cluster.Split(regionID, rightID, []byte(fmt.Sprintf("m%03d", i)), peers, peers[1])
 		regionID = rightID
 	}
-	var last StoreCacheRefreshResult
-	for i := 0; i < 3; i++ {
-		last = store.RefreshStoreCache(context.Background(), storeIDs[0])
-		if last.Ready {
-			require.Equal(t, 0, last.Remaining)
-			require.Equal(t, 0, last.Failed)
-			return
+	last := store.RefreshStoreCache(context.Background(), storeIDs[0])
+	require.True(t, last.Ready, "one refresh must cover more than 128 regions: %+v", last)
+	require.Zero(t, last.Remaining)
+	require.Zero(t, last.Failed)
+}
+
+type refreshInspectPDClient struct {
+	pd.Client
+	onBatch func([]*router.Region, int)
+}
+
+func (c *refreshInspectPDClient) WithCallerComponent(caller.Component) pd.Client { return c }
+
+func (c *refreshInspectPDClient) BatchScanRegions(ctx context.Context, ranges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	regions, err := c.Client.BatchScanRegions(ctx, ranges, limit, opts...)
+	if err == nil && c.onBatch != nil {
+		c.onBatch(regions, limit)
+	}
+	return regions, err
+}
+
+func TestStoreCacheRefreshRecoveryPacesBatches(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var calls []time.Time
+	var limits []int
+	inspected := &refreshInspectPDClient{Client: pdClient, onBatch: func(_ []*router.Region, limit int) {
+		calls = append(calls, time.Now())
+		limits = append(limits, limit)
+	}}
+	store, err := NewTestTiKVStore(client, inspected, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	for i := 0; i < 2*storeCacheRefreshRecoverMaxSpans; i++ {
+		rightID, peers := cluster.AllocID(), cluster.AllocIDs(3)
+		cluster.Split(regionID, rightID, []byte(fmt.Sprintf("m%03d", i)), peers, peers[1])
+		regionID = rightID
+	}
+
+	require.True(t, store.locateFailedRange(context.Background(), nil, nil))
+	require.Len(t, calls, 3, "257 regions require three bounded batches")
+	for i, limit := range limits {
+		require.Equal(t, storeCacheRefreshRecoverMaxSpans, limit)
+		if i > 0 {
+			require.GreaterOrEqual(t, calls[i].Sub(calls[i-1]), storeCacheRefreshRecoverInterval)
 		}
 	}
-	require.True(t, last.Ready, "128-span budget must skip cached prefix and reach suffix: %+v", last)
+	require.True(t, store.GetRegionCache().IsWorkStoreRangeResolved(nil, nil, storeIDs[0]))
+}
+
+func TestStoreCacheRefreshRecoveryCancelsBetweenBatches(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.NoError(t, err)
+	var calls int
+	inspected := &refreshInspectPDClient{Client: pdClient, onBatch: func(_ []*router.Region, _ int) { calls++ }}
+	store, err := NewTestTiKVStore(client, inspected, nil, nil, 0)
+	require.NoError(t, err)
+	defer store.Close()
+
+	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+	cluster.ChangeLeader(regionID, peerIDs[1])
+	for i := 0; i < storeCacheRefreshRecoverMaxSpans; i++ {
+		rightID, peers := cluster.AllocID(), cluster.AllocIDs(3)
+		cluster.Split(regionID, rightID, []byte(fmt.Sprintf("m%03d", i)), peers, peers[1])
+		regionID = rightID
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeCacheRefreshRecoverInterval/2)
+	defer cancel()
+	require.True(t, store.locateFailedRange(ctx, nil, nil), "the first batch makes partial progress")
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.Equal(t, 1, calls, "cancellation during pacing must prevent the next batch")
+	_, complete, resolved := store.GetRegionCache().WorkStoreRangeStatus(nil, nil, storeIDs[0])
+	require.False(t, complete)
+	require.False(t, resolved, "partial coverage must stay unresolved")
+}
+
+func TestStoreCacheRefreshRecoveryKeepsRegionsWithoutPDLeader(t *testing.T) {
+	for _, leader := range []*metapb.Peer{nil, {}} {
+		t.Run(fmt.Sprintf("leader=%v", leader), func(t *testing.T) {
+			client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+			require.NoError(t, err)
+			inspected := &refreshInspectPDClient{Client: pdClient, onBatch: func(regions []*router.Region, _ int) {
+				if len(regions) > 0 {
+					regions[0].Leader = leader
+				}
+			}}
+			store, err := NewTestTiKVStore(client, inspected, nil, nil, 0)
+			require.NoError(t, err)
+			defer store.Close()
+
+			storeIDs, _, regionID, _ := mocktikv.BootstrapWithMultiStores(cluster, 3)
+			rightID, peers := cluster.AllocID(), cluster.AllocIDs(3)
+			cluster.Split(regionID, rightID, []byte("m"), peers, peers[1])
+			require.True(t, store.locateFailedRange(context.Background(), nil, nil))
+			_, complete, resolved := store.GetRegionCache().WorkStoreRangeStatus(nil, nil, storeIDs[0])
+			require.True(t, complete, "PD metadata without a leader must not leave a cache hole")
+			require.False(t, resolved, "the first region still works on the old store")
+			require.Equal(t, 1, store.GetRegionCache().CountWorkStoreMatches(storeIDs[0]))
+		})
+	}
 }
 
 func TestStoreCacheRefreshRecoverGoneCancelled(t *testing.T) {

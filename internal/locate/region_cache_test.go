@@ -513,7 +513,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	}
 
 	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
-	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100)
+	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100, true)
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
@@ -522,6 +522,18 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsFallbackKeepsRegionsWithoutLeader() {
+	s.cluster.ChangeLeader(s.region1, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	bo := retry.NewBackofferWithVars(ctx, 1000, nil)
+	regions, err := s.cache.batchScanRegionsFallback(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100)
+	s.Require().NoError(err)
+	s.Require().Len(regions, 1)
+	s.Equal(s.region1, regions[0].GetID())
+	s.NotZero(regions[0].GetLeaderStoreID(), "missing PD leader must select an available TiKV peer")
 }
 
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
@@ -1423,7 +1435,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + byte(i)}, peers[i+1], peers[i+1][0])
 	}
 
-	scannedRegions, err := s.cache.scanRegions(s.bo, []byte(""), nil, 100)
+	scannedRegions, err := s.cache.scanRegions(s.bo, []byte(""), nil, 100, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 5)
 	for i := 0; i < 5; i++ {
@@ -1434,7 +1446,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.Equal(p.Id, peers[i][0])
 	}
 
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a"), nil, 3)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a"), nil, 3, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 3)
 	for i := 1; i < 4; i++ {
@@ -1445,7 +1457,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.Equal(p.Id, peers[i][0])
 	}
 
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a1"), nil, 1)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a1"), nil, 1, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 1)
 
@@ -1457,7 +1469,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 	// Test region with no leader
 	s.cluster.GiveUpLeader(regions[1])
 	s.cluster.GiveUpLeader(regions[3])
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte(""), nil, 5)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte(""), nil, 5, true)
 	s.Nil(err)
 	for i := 0; i < 3; i++ {
 		r := scannedRegions[i]
@@ -1760,7 +1772,7 @@ func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
 	_, err = s.cache.LocateRegionByID(s.bo, region2)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
-	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10)
+	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10, true)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
 }

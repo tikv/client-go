@@ -2084,7 +2084,7 @@ func (c *RegionCache) LoadRegionsInKeyRange(bo *retry.Backoffer, startKey, endKe
 // BatchLoadRegionsWithKeyRange loads at most given numbers of regions to the RegionCache,
 // within the given key range from the startKey to endKey. Returns the loaded regions.
 func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey []byte, endKey []byte, count int) (regions []*Region, err error) {
-	regions, err = c.scanRegions(bo, startKey, endKey, count)
+	regions, err = c.scanRegions(bo, startKey, endKey, count, true)
 	if err != nil {
 		return
 	}
@@ -2486,7 +2486,7 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 	totalRegions := make([]*Region, 0)
 	startKey := []byte{}
 	for {
-		regions, err := c.scanRegions(bo, startKey, nil, 10000)
+		regions, err := c.scanRegions(bo, startKey, nil, 10000, true)
 		if err != nil {
 			return err
 		}
@@ -2501,8 +2501,8 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 }
 
 // scanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
-// Regions with no leader will not be returned.
-func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+// When needLeader is true, regions with no leader will not be returned.
+func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int, needLeader bool) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -2558,7 +2558,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, needLeader)
 		if err != nil {
 			return nil, err
 		}
@@ -2736,6 +2736,10 @@ func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Regi
 
 func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []router.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
 	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	var batchOpt batchLocateKeyRangesOption
+	for _, op := range opts {
+		op(&batchOpt)
+	}
 	res := make([]*Region, 0, len(keyRanges))
 	var lastRegion *Region
 	for _, keyRange := range keyRanges {
@@ -2752,7 +2756,7 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 				keyRange.StartKey = endKey
 			}
 		}
-		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
