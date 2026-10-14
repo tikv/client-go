@@ -158,6 +158,52 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(ctx)
 }
 
+// TestLockFallbackLeaderReadClearsReplicaRead checks that a read which falls back to the leader after
+// meeting a lock (DisableStaleReadMeetLock) reaches the leader with ReplicaRead=false, whatever replica
+// read mode the request was built with. TiKV treats a request with ReplicaRead=true as a follower read
+// even when it is served by the leader (e.g. v8.5 skips the in-memory engine for it).
+func TestLockFallbackLeaderReadClearsReplicaRead(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	newReq := func(readType kv.ReplicaReadType, staleRead bool) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, readType, nil, kvrpcpb.Context{})
+		if staleRead {
+			req.EnableStaleWithMixedReplicaRead()
+		}
+		return req
+	}
+	cases := []struct {
+		readType  kv.ReplicaReadType
+		staleRead bool
+	}{
+		{kv.ReplicaReadFollower, false},
+		{kv.ReplicaReadMixed, false},
+		{kv.ReplicaReadPreferLeader, false},
+		{kv.ReplicaReadLearner, false},
+		{kv.ReplicaReadMixed, true},
+	}
+	for _, c := range cases {
+		req := newReq(c.readType, c.staleRead)
+		req.DisableStaleReadMeetLock()
+		s.False(req.StaleRead)
+		s.False(req.ReplicaRead)
+		s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+
+		region, err := s.cache.LocateKey(s.bo, []byte("a"))
+		s.Nil(err)
+		selector, err := newReplicaSelector(s.cache, region.Region, req)
+		s.Nil(err)
+		ctx, err := selector.next(s.bo, req)
+		s.Nil(err)
+		s.NotNil(ctx)
+		s.Equal(s.leaderPeer, ctx.Peer.Id, "readType=%v staleRead=%v", c.readType, c.staleRead)
+		s.False(req.ReplicaRead, "readType=%v staleRead=%v", c.readType, c.staleRead)
+		s.False(req.StaleRead, "readType=%v staleRead=%v", c.readType, c.staleRead)
+	}
+}
+
 func TestNextGenReadFeaturesDisabled(t *testing.T) {
 	if !config.NextGen {
 		t.Skip("only runs under NextGen")

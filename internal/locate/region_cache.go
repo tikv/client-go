@@ -2084,7 +2084,7 @@ func (c *RegionCache) LoadRegionsInKeyRange(bo *retry.Backoffer, startKey, endKe
 // BatchLoadRegionsWithKeyRange loads at most given numbers of regions to the RegionCache,
 // within the given key range from the startKey to endKey. Returns the loaded regions.
 func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey []byte, endKey []byte, count int) (regions []*Region, err error) {
-	regions, err = c.scanRegions(bo, startKey, endKey, count)
+	regions, err = c.scanRegions(bo, startKey, endKey, count, true)
 	if err != nil {
 		return
 	}
@@ -2486,7 +2486,7 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 	totalRegions := make([]*Region, 0)
 	startKey := []byte{}
 	for {
-		regions, err := c.scanRegions(bo, startKey, nil, 10000)
+		regions, err := c.scanRegions(bo, startKey, nil, 10000, true)
 		if err != nil {
 			return err
 		}
@@ -2501,8 +2501,8 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 }
 
 // scanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
-// Regions with no leader will not be returned.
-func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+// When needLeader is true, regions with no leader will not be returned.
+func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int, needLeader bool) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -2558,7 +2558,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, needLeader)
 		if err != nil {
 			return nil, err
 		}
@@ -2736,6 +2736,10 @@ func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Regi
 
 func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []router.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
 	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	var batchOpt batchLocateKeyRangesOption
+	for _, op := range opts {
+		op(&batchOpt)
+	}
 	res := make([]*Region, 0, len(keyRanges))
 	var lastRegion *Region
 	for _, keyRange := range keyRanges {
@@ -2752,7 +2756,7 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 				keyRange.StartKey = endKey
 			}
 		}
-		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -3198,7 +3202,7 @@ func (r *Region) GetLeaderPeerID() uint64 {
 // GetLeaderStoreID returns the store ID of the leader region.
 func (r *Region) GetLeaderStoreID() uint64 {
 	store := r.getStore()
-	if int(store.workTiKVIdx) >= store.accessStoreNum(tiKVOnly) {
+	if store == nil || int(store.workTiKVIdx) >= store.accessStoreNum(tiKVOnly) {
 		return 0
 	}
 	storeIdx, _ := store.accessStore(tiKVOnly, store.workTiKVIdx)
@@ -3323,6 +3327,48 @@ retry:
 		goto retry
 	}
 	return
+}
+
+// switchWorkLeaderToPeerIfOnStore CAS-updates the working TiKV to peer only
+// while the current working store is still oldStoreID. applied means this call
+// changed the leader. moved means the cache already left oldStoreID.
+func (r *Region) switchWorkLeaderToPeerIfOnStore(peer *metapb.Peer, oldStoreID uint64) (applied, moved bool) {
+	globalStoreIdx, found := r.getPeerStoreIndex(peer)
+	if !found {
+		return false, false
+	}
+	for {
+		oldRegionStore := r.getStore()
+		if oldRegionStore == nil || int(oldRegionStore.workTiKVIdx) >= oldRegionStore.accessStoreNum(tiKVOnly) {
+			return false, true
+		}
+		_, curStore := oldRegionStore.accessStore(tiKVOnly, oldRegionStore.workTiKVIdx)
+		if curStore == nil || curStore.StoreID() != oldStoreID {
+			return false, true
+		}
+		var leaderIdx AccessIndex
+		foundIdx := false
+		for i, gIdx := range oldRegionStore.accessIndex[tiKVOnly] {
+			if gIdx == globalStoreIdx {
+				leaderIdx = AccessIndex(i)
+				foundIdx = true
+				break
+			}
+		}
+		if !foundIdx {
+			return false, false
+		}
+		if oldRegionStore.workTiKVIdx == leaderIdx {
+			// NotLeader named the current peer; still on oldStoreID, so not moved.
+			return false, false
+		}
+		newRegionStore := oldRegionStore.clone()
+		newRegionStore.workTiKVIdx = leaderIdx
+		newRegionStore.storeEpochs[globalStoreIdx] = atomic.LoadUint32(&newRegionStore.stores[globalStoreIdx].epoch)
+		if r.compareAndSwapStore(oldRegionStore, newRegionStore) {
+			return true, false
+		}
+	}
 }
 
 func (r *regionStore) switchNextFlashPeer(rr *Region, currentPeerIdx AccessIndex) {
