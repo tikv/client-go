@@ -20,6 +20,8 @@ import "github.com/pingcap/kvproto/pkg/kvrpcpb"
 type PointReadScanDetail struct {
 	// TotalKeys is the total number of MVCC versions encountered by storage.
 	TotalKeys int64
+	// TotalKeysSize has the same semantics as ScanDetail.TotalKeysSize.
+	TotalKeysSize int64
 	// ProcessedKeys is the number of user keys processed by storage.
 	ProcessedKeys int64
 	// ProcessedKeysSize is the total size of the processed user keys and values.
@@ -87,6 +89,7 @@ func (stats *PointResponseStats) RecordResponse(scanDetail *kvrpcpb.ScanDetailV2
 	if scanDetail != nil {
 		delta.ScanDetail = PointReadScanDetail{
 			TotalKeys:         int64(scanDetail.TotalVersions),
+			TotalKeysSize:     int64(scanDetail.TotalVersionsSize),
 			ProcessedKeys:     int64(scanDetail.ProcessedVersions),
 			ProcessedKeysSize: int64(scanDetail.ProcessedVersionsSize),
 		}
@@ -105,6 +108,7 @@ func (stats *PointResponseStats) Merge(other PointResponseStats) {
 	*stats = PointResponseStats{
 		ScanDetail: PointReadScanDetail{
 			TotalKeys:         stats.ScanDetail.TotalKeys + other.ScanDetail.TotalKeys,
+			TotalKeysSize:     stats.ScanDetail.TotalKeysSize + other.ScanDetail.TotalKeysSize,
 			ProcessedKeys:     stats.ScanDetail.ProcessedKeys + other.ScanDetail.ProcessedKeys,
 			ProcessedKeysSize: stats.ScanDetail.ProcessedKeysSize + other.ScanDetail.ProcessedKeysSize,
 		},
