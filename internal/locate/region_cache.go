@@ -780,6 +780,13 @@ func (c *RegionCache) Close() {
 	c.bg.shutdown(true)
 }
 
+// IsBackgroundRunnerClosed returns whether RegionCache's background runner context has been canceled.
+//
+// It is intended for tests/debugging only.
+func (c *RegionCache) IsBackgroundRunnerClosed() bool {
+	return c.bg.closed()
+}
+
 // checkAndResolve checks and resolve addr of failed stores.
 // this method isn't thread-safe and only be used by one goroutine.
 func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*Store) bool) []*Store {
@@ -1825,18 +1832,6 @@ func (c *RegionCache) BatchLoadRegionsFromKey(bo *retry.Backoffer, startKey []by
 		return nil, err
 	}
 	return regions[len(regions)-1].EndKey(), nil
-}
-
-// AsyncInvalidateCachedRegion marks a cached region for reload on next access
-// without invalidating it, so in-flight retries can still proceed.
-// It sets needDelayedReloadReady directly, skipping the GC promotion from
-// needDelayedReloadPending for faster reload.
-func (c *RegionCache) AsyncInvalidateCachedRegion(id RegionVerID) {
-	cachedRegion := c.GetCachedRegionWithRLock(id)
-	if cachedRegion == nil {
-		return
-	}
-	cachedRegion.setSyncFlags(needDelayedReloadReady)
 }
 
 // InvalidateCachedRegion removes a cached Region.
