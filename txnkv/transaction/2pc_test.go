@@ -35,19 +35,13 @@
 package transaction
 
 import (
-<<<<<<< HEAD
-=======
 	"context"
 	"fmt"
->>>>>>> 243863e1 (txnkv: prevent kill signals from aborting pessimistic rollback (#2061))
 	"testing"
 	"time"
 
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
->>>>>>> 243863e1 (txnkv: prevent kill signals from aborting pessimistic rollback (#2061))
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config/retry"

@@ -16,6 +16,7 @@ package transaction
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/kv"
@@ -82,27 +84,19 @@ func (m *mockStore) GetTiKVClient() client.Client {
 	return &m.client
 }
 
-<<<<<<< HEAD
-=======
 type recorderStore struct {
 	*mockStore
-	getTimestampWithRetry func(*retry.Backoffer, string) (uint64, error)
-	waitGroup             sync.WaitGroup
+	waitGroup sync.WaitGroup
 }
 
 func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
 	return m.client.SendRequest(bo.GetCtx(), "mock-store", req, timeout)
 }
 
-func (m *recorderStore) GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error) {
-	return m.getTimestampWithRetry(bo, scope)
-}
-
 func (m *recorderStore) WaitGroup() *sync.WaitGroup {
 	return &m.waitGroup
 }
 
->>>>>>> 243863e1 (txnkv: prevent kill signals from aborting pessimistic rollback (#2061))
 func (m *mockStore) GetOracle() oracle.Oracle {
 	return nil
 }
