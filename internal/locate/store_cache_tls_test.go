@@ -81,7 +81,8 @@ func newHealthTestPKI(t *testing.T) healthTestPKI {
 
 func startHealthTestServer(t *testing.T, pki *healthTestPKI, interceptor grpc.UnaryServerInterceptor) (string, *health.Server) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var options []grpc.ServerOption
 	if pki != nil {
