@@ -718,6 +718,13 @@ func WithRequestHealthFeedbackCallback(callback func(ctx context.Context, addr s
 	}
 }
 
+// SetStoreLivenessSecurity selects connector-local TLS credentials for store
+// recovery probes. An empty policy explicitly selects plaintext. Changing the
+// policy starts independent in-flight probes and cannot reuse an old result.
+func (c *RegionCache) SetStoreLivenessSecurity(security config.Security) {
+	c.stores.setStoreLivenessSecurity(security)
+}
+
 // NewRegionCache creates a RegionCache.
 func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	var options regionCacheOptions
