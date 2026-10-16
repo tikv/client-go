@@ -54,6 +54,14 @@ const (
 type testingKnobs interface {
 	getMockRequestLiveness() livenessFunc
 	setMockRequestLiveness(f livenessFunc)
+	getStoreLiveness() *storeLiveness
+}
+
+// A policy owns its in-flight probes so connectors with different credentials
+// never share a health result for the same address.
+type storeLiveness struct {
+	security *config.Security
+	flight   singleflight.Group
 }
 
 type storeRegistry interface {
@@ -75,6 +83,7 @@ type storeCache interface {
 	markTiflashComputeStoresNeedReload()
 	markStoreNeedCheck(store *Store)
 	getCheckStoreEvents() <-chan struct{}
+	setStoreLivenessSecurity(security config.Security)
 }
 
 func newStoreCache(pdClient pd.Client) *storeCacheImpl {
@@ -88,6 +97,7 @@ func newStoreCache(pdClient pd.Client) *storeCacheImpl {
 
 type storeCacheImpl struct {
 	pdClient pd.Client
+	liveness atomic.Pointer[storeLiveness]
 
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
@@ -106,6 +116,22 @@ type storeCacheImpl struct {
 		needReload bool
 		stores     []*Store
 	}
+}
+
+func (c *storeCacheImpl) getStoreLiveness() *storeLiveness {
+	if state := c.liveness.Load(); state != nil {
+		return state
+	}
+	state := &storeLiveness{}
+	if c.liveness.CompareAndSwap(nil, state) {
+		return state
+	}
+	return c.liveness.Load()
+}
+
+func (c *storeCacheImpl) setStoreLivenessSecurity(security config.Security) {
+	security.ClusterVerifyCN = append([]string(nil), security.ClusterVerifyCN...)
+	c.liveness.Store(&storeLiveness{security: &security})
 }
 
 func (c *storeCacheImpl) getMockRequestLiveness() livenessFunc {
@@ -593,7 +619,7 @@ func (l livenessState) injectConstantLiveness(tk testingKnobs) {
 }
 
 var (
-	livenessSf singleflight.Group
+	defaultStoreLiveness storeLiveness
 	// storeLivenessTimeout is the max duration of resolving liveness of a TiKV instance.
 	storeLivenessTimeout = time.Second
 )
@@ -736,8 +762,12 @@ func requestLiveness(ctx context.Context, s *Store, tk testingKnobs) (l liveness
 		return
 	}
 	addr := s.GetAddr()
-	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
-		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
+	state := &defaultStoreLiveness
+	if tk != nil {
+		state = tk.getStoreLiveness()
+	}
+	rsCh := state.flight.DoChan(addr, func() (interface{}, error) {
+		return invokeKVStatusAPI(addr, storeLivenessTimeout, state.security), nil
 	})
 	select {
 	case rs := <-rsCh:
@@ -749,7 +779,7 @@ func requestLiveness(ctx context.Context, s *Store, tk testingKnobs) (l liveness
 	return
 }
 
-func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
+func invokeKVStatusAPI(addr string, timeout time.Duration, security *config.Security) (l livenessState) {
 	start := time.Now()
 	defer func() {
 		if l == reachable {
@@ -762,7 +792,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, cli, err := createKVHealthClient(ctx, addr)
+	conn, cli, err := createKVHealthClient(ctx, addr, security)
 	if err != nil {
 		logutil.BgLogger().Info("[health check] create grpc connection failed", zap.String("store", addr), zap.Error(err))
 		l = unreachable
@@ -800,17 +830,17 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
-	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
-	// access it.
-	// TODO: Pass the config in a better way, or use the connPool inner the client directly rather than creating new
-	// connection.
-
+func createKVHealthClient(ctx context.Context, addr string, security *config.Security) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	cfg := config.GetGlobalConfig()
+	// Retain the legacy default only when no connector policy was supplied.
+	// An explicitly empty policy selects plaintext for this connector.
+	if security == nil {
+		security = &cfg.Security
+	}
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
+	if len(security.ClusterSSLCA) != 0 {
+		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
