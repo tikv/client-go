@@ -247,6 +247,16 @@ func (s *KVStore) CheckVisibility(startTS uint64) error {
 // Option is the option for pool.
 type Option func(*KVStore)
 
+// WithStoreLivenessSecurity configures store recovery probes with the same
+// connector-specific TLS policy supplied to the RPC client. An empty policy
+// explicitly selects plaintext; omitting this option preserves global defaults.
+func WithStoreLivenessSecurity(security config.Security) Option {
+	security.ClusterVerifyCN = append([]string(nil), security.ClusterVerifyCN...)
+	return func(store *KVStore) {
+		store.regionCache.SetStoreLivenessSecurity(security)
+	}
+}
+
 // WithPool set the pool
 func WithPool(gp Pool) Option {
 	return func(o *KVStore) {

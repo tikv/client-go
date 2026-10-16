@@ -26,6 +26,17 @@ There are 2 major versions of the `client-go` package.
 
 Explanation of related concepts and sample code can be found in the [Client-Go Wiki](https://github.com/tikv/client-go/wiki). There are also executable examples in [examples directory](https://github.com/tikv/client-go/tree/master/examples).
 
+### Connector-specific recovery TLS
+
+When constructing a transactional store with an RPC client configured using
+`tikv.WithSecurity(security)`, also pass
+`tikv.WithStoreLivenessSecurity(security)` to `tikv.NewKVStore`. Store recovery
+health probes then use that connector's CA and client certificate/key, with
+normal TLS hostname verification, without changing SDK global configuration. An explicitly empty
+security policy selects plaintext for that connector; omitting the store option
+retains the legacy global security default. In-flight health probes are isolated
+between connectors, including connectors that address the same endpoint.
+
 ## Contributing to client-go
 
 Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBUTING.md).
