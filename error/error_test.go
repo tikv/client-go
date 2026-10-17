@@ -5,10 +5,39 @@ import (
 	"testing"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestErrIncompatibleRequest(t *testing.T) {
+	inner := &errorpb.IncompatibleRequest{
+		Reason:                          errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange,
+		Message:                         "txn protocol version 2 is out of range",
+		ProvidedTxnProtocolVersion:      uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+		MinCompatibleTxnProtocolVersion: 0,
+		MaxCompatibleTxnProtocolVersion: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING),
+	}
+	var typed *ErrIncompatibleRequest
+	require.ErrorAs(t, NewErrIncompatibleRequest(inner), &typed)
+	require.Equal(t, inner, typed.IncompatibleRequest)
+	require.Equal(t, inner.GetReason(), typed.GetReason())
+	require.Equal(t, inner.GetMaxCompatibleTxnProtocolVersion(), typed.GetMaxCompatibleTxnProtocolVersion())
+
+	// The message must remain diagnosable, and must not be the only carrier of
+	// the structured details. It uses the proto text form of the payload, so the
+	// exact shape is proto-owned rather than asserted here.
+	msg := typed.Error()
+	require.Contains(t, msg, inner.GetMessage())
+	require.Contains(t, msg, inner.GetReason().String())
+	require.Contains(t, msg, "provided_txn_protocol_version:2")
+	require.Contains(t, msg, "max_compatible_txn_protocol_version:1")
+
+	require.NotPanics(t, func() {
+		require.NotEmpty(t, (&ErrIncompatibleRequest{}).Error())
+	})
+}
 
 func TestExtractKeyErrLockUpgradeConflict(t *testing.T) {
 	keyErr := &kvrpcpb.KeyError{

@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
+	"github.com/tikv/client-go/v2/internal/txnprotocol"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -314,8 +315,25 @@ func (c *RPCClient) recycleIdleConnArray() {
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }
 
+// PrepareContextForTransport validates the selected declaration against the
+// current payload and returns the request-private protobuf context to attach.
+func PrepareContextForTransport(ctx context.Context, req *tikvrpc.Request) (kvrpcpb.Context, error) {
+	version, err := txnprotocol.VersionForTransport(ctx, req)
+	if err != nil {
+		metrics.TxnProtocolRejectEventCounterWithLocalRejection.Inc()
+		return kvrpcpb.Context{}, err
+	}
+	rpcCtx := req.Context
+	rpcCtx.TxnProtocolVersion = version
+	return rpcCtx, nil
+}
+
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
-	tikvrpc.AttachContext(req, req.Context)
+	rpcCtx, err := PrepareContextForTransport(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	tikvrpc.AttachContext(req, rpcCtx)
 
 	var spanRPC opentracing.Span
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
