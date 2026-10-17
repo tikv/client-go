@@ -418,7 +418,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 	// TODO(youjiali1995): It's possible the region info in PD is stale for now but it can recover.
 	// Maybe we need backoff here.
 	if len(availablePeers) == 0 {
-		return nil, errors.Errorf("no available peers, region: {%v}", r.meta)
+		return nil, errors.Errorf("no available peers, region: {%v}", redact.RegionMeta(r.meta))
 	}
 
 	rs.workTiKVIdx = leaderAccessIdx
@@ -879,7 +879,7 @@ func (c *RPCContext) String() string {
 		runStoreType = c.Store.StoreType().Name()
 	}
 	res := fmt.Sprintf("region ID: %d, meta: %s, peer: %s, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
-		c.Region.GetID(), c.Meta, c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
+		c.Region.GetID(), redact.RegionMeta(c.Meta), c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
 	if c.ProxyStore != nil {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.GetAddr())
 	}
@@ -2084,7 +2084,7 @@ func (c *RegionCache) LoadRegionsInKeyRange(bo *retry.Backoffer, startKey, endKe
 // BatchLoadRegionsWithKeyRange loads at most given numbers of regions to the RegionCache,
 // within the given key range from the startKey to endKey. Returns the loaded regions.
 func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey []byte, endKey []byte, count int) (regions []*Region, err error) {
-	regions, err = c.scanRegions(bo, startKey, endKey, count)
+	regions, err = c.scanRegions(bo, startKey, endKey, count, true)
 	if err != nil {
 		return
 	}
@@ -2486,7 +2486,7 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 	totalRegions := make([]*Region, 0)
 	startKey := []byte{}
 	for {
-		regions, err := c.scanRegions(bo, startKey, nil, 10000)
+		regions, err := c.scanRegions(bo, startKey, nil, 10000, true)
 		if err != nil {
 			return err
 		}
@@ -2501,8 +2501,8 @@ func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
 }
 
 // scanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
-// Regions with no leader will not be returned.
-func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+// When needLeader is true, regions with no leader will not be returned.
+func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, limit int, needLeader bool) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -2558,7 +2558,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, needLeader)
 		if err != nil {
 			return nil, err
 		}
@@ -2736,6 +2736,10 @@ func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Regi
 
 func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []router.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
 	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	var batchOpt batchLocateKeyRangesOption
+	for _, op := range opts {
+		op(&batchOpt)
+	}
 	res := make([]*Region, 0, len(keyRanges))
 	var lastRegion *Region
 	for _, keyRange := range keyRanges {
@@ -2752,7 +2756,7 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 				keyRange.StartKey = endKey
 			}
 		}
-		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -2894,7 +2898,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 		if meta.GetId() == ctx.Region.id &&
 			(meta.GetRegionEpoch().GetConfVer() < ctx.Region.confVer ||
 				meta.GetRegionEpoch().GetVersion() < ctx.Region.ver) {
-			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, currentRegions)
+			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, redact.RegionMetas(currentRegions))
 			logutil.Logger(bo.GetCtx()).Info("region epoch is ahead of tikv", zap.Error(err))
 			return true, bo.Backoff(retry.BoRegionMiss, err)
 		}

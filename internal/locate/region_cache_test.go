@@ -51,6 +51,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	pingcaperrors "github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -60,6 +61,7 @@ import (
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -68,6 +70,8 @@ import (
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 	uatomic "go.uber.org/atomic"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type inspectedPDClient struct {
@@ -514,7 +518,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	}
 
 	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
-	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100)
+	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100, true)
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
@@ -523,6 +527,18 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsFallbackKeepsRegionsWithoutLeader() {
+	s.cluster.ChangeLeader(s.region1, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	bo := retry.NewBackofferWithVars(ctx, 1000, nil)
+	regions, err := s.cache.batchScanRegionsFallback(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100)
+	s.Require().NoError(err)
+	s.Require().Len(regions, 1)
+	s.Equal(s.region1, regions[0].GetID())
+	s.NotZero(regions[0].GetLeaderStoreID(), "missing PD leader must select an available TiKV peer")
 }
 
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
@@ -1334,6 +1350,90 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	s.Equal(bo.ErrorsNum(), 2)
 }
 
+func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKVRedact() {
+	old := pingcaperrors.RedactLogEnabled.Load()
+	s.T().Cleanup(func() { pingcaperrors.RedactLogEnabled.Store(old) })
+
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	cache := NewRegionCache(pdCli)
+	defer cache.Close()
+
+	region := createSampleRegion([]byte("secret-start"), []byte("secret-end"))
+	region.meta.Id = 1
+	region.meta.RegionEpoch = &metapb.RegionEpoch{Version: 10, ConfVer: 10}
+	cache.insertRegionToCache(region, true, true)
+	current := &metapb.Region{Id: 1, StartKey: []byte("secret-start"), EndKey: []byte("secret-end"), RegionEpoch: &metapb.RegionEpoch{Version: 9, ConfVer: 10}}
+
+	for _, redacted := range []bool{false, true} {
+		mode := pingcaperrors.RedactLogDisable
+		if redacted {
+			mode = pingcaperrors.RedactLogEnable
+		}
+		pingcaperrors.RedactLogEnabled.Store(mode)
+
+		core, logs := observer.New(zap.InfoLevel)
+		ctx := context.WithValue(context.Background(), logutil.CtxLogKey, zap.New(core))
+		bo := retry.NewBackofferWithVars(ctx, 2000000, nil)
+		rpcCtx := &RPCContext{Region: region.VerID(), Meta: region.GetMeta()}
+		needRetry, err := cache.OnRegionEpochNotMatch(bo, rpcCtx, []*metapb.Region{current})
+		s.True(needRetry)
+		s.Nil(err)
+
+		entries := logs.FilterMessage("region epoch is ahead of tikv").All()
+		s.Len(entries, 1)
+		msg := fmt.Sprint(entries[0].ContextMap()["error"])
+		s.Contains(msg, "region epoch is ahead of tikv")
+		if redacted {
+			s.NotContains(msg, "secret")
+		} else {
+			s.Contains(msg, "secret-start")
+		}
+	}
+}
+
+func TestRPCContextStringRedact(t *testing.T) {
+	old := pingcaperrors.RedactLogEnabled.Load()
+	defer pingcaperrors.RedactLogEnabled.Store(old)
+
+	meta := &metapb.Region{
+		Id:          1,
+		StartKey:    []byte("secret-start"),
+		EndKey:      []byte("secret-end"),
+		RegionEpoch: &metapb.RegionEpoch{ConfVer: 2, Version: 3},
+		Peers:       []*metapb.Peer{{Id: 11, StoreId: 101}},
+	}
+	rpcCtx := &RPCContext{
+		Region: RegionVerID{id: 1, confVer: 2, ver: 3},
+		Meta:   meta,
+		Peer:   meta.Peers[0],
+		Addr:   "store1",
+	}
+
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogDisable)
+	plain := rpcCtx.String()
+	require.Contains(t, plain, "secret-start")
+	require.Contains(t, plain, "secret-end")
+
+	for _, mode := range []string{pingcaperrors.RedactLogEnable, pingcaperrors.RedactLogMarker} {
+		pingcaperrors.RedactLogEnabled.Store(mode)
+		for _, str := range []string{rpcCtx.String(), fmt.Sprintf("ctx: %v", rpcCtx), fmt.Sprintf("%+v", rpcCtx)} {
+			require.NotContains(t, str, "secret")
+			require.Contains(t, str, "region ID: 1")
+			require.Contains(t, str, "store_id:101")
+			require.Contains(t, str, "addr: store1")
+		}
+		// The region meta itself must not be modified.
+		require.Equal(t, []byte("secret-start"), meta.StartKey)
+	}
+
+	// A nil meta is rendered the same way with and without redaction.
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogEnable)
+	nilMeta := &RPCContext{Region: RegionVerID{id: 1}}
+	redacted := nilMeta.String()
+	pingcaperrors.RedactLogEnabled.Store(pingcaperrors.RedactLogDisable)
+	require.Equal(t, nilMeta.String(), redacted)
+}
+
 func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	// add store3 as tiflash
 	store3 := s.cluster.AllocID()
@@ -1424,7 +1524,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + byte(i)}, peers[i+1], peers[i+1][0])
 	}
 
-	scannedRegions, err := s.cache.scanRegions(s.bo, []byte(""), nil, 100)
+	scannedRegions, err := s.cache.scanRegions(s.bo, []byte(""), nil, 100, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 5)
 	for i := 0; i < 5; i++ {
@@ -1435,7 +1535,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.Equal(p.Id, peers[i][0])
 	}
 
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a"), nil, 3)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a"), nil, 3, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 3)
 	for i := 1; i < 4; i++ {
@@ -1446,7 +1546,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 		s.Equal(p.Id, peers[i][0])
 	}
 
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a1"), nil, 1)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a1"), nil, 1, true)
 	s.Nil(err)
 	s.Equal(len(scannedRegions), 1)
 
@@ -1458,7 +1558,7 @@ func (s *testRegionCacheSuite) TestScanRegions() {
 	// Test region with no leader
 	s.cluster.GiveUpLeader(regions[1])
 	s.cluster.GiveUpLeader(regions[3])
-	scannedRegions, err = s.cache.scanRegions(s.bo, []byte(""), nil, 5)
+	scannedRegions, err = s.cache.scanRegions(s.bo, []byte(""), nil, 5, true)
 	s.Nil(err)
 	for i := 0; i < 3; i++ {
 		r := scannedRegions[i]
@@ -1761,7 +1861,7 @@ func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
 	_, err = s.cache.LocateRegionByID(s.bo, region2)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
-	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10)
+	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10, true)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
 }
