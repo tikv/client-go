@@ -1802,6 +1802,7 @@ func newCleanupBackoffer(ctx context.Context, maxSleep int, vars *tikv.Variables
 	}
 	cleanupVars := *vars
 	cleanupVars.Killed = nil
+	cleanupVars.KillSignalHandler = nil
 	return retry.NewBackofferWithVars(ctx, maxSleep, &cleanupVars)
 }
 
