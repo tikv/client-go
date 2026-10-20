@@ -65,6 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
+	"github.com/tikv/client-go/v2/util/redact"
 	pderr "github.com/tikv/pd/client/errs"
 )
 
