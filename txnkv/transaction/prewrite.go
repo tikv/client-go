@@ -272,11 +272,10 @@ func (action actionPrewrite) handleSingleBatch(
 	var resolvingRecordToken *int
 	defer func() {
 		if err != nil {
-			// If we fail to receive response for async commit prewrite, it will be undetermined whether this
-			// transaction has been successfully committed.
-			// If prewrite has been cancelled, all ongoing prewrite RPCs will become errors, we needn't set undetermined
-			// errors.
-			if (c.isAsyncCommit() || c.isOnePC()) && sender.GetRPCError() != nil && atomic.LoadUint32(&c.prewriteCancelled) == 0 {
+			// A lost async/1PC response can leave the result unknown. Ignore RPC errors caused
+			// by another failed batch's cancellation. A split can disable 1PC locally, whereas
+			// disabling async commit requires TiKV to confirm fallback.
+			if (c.isAsyncCommit() || req.Prewrite().TryOnePc) && sender.GetRPCError() != nil && atomic.LoadUint32(&c.prewriteCancelled) == 0 {
 				c.setUndeterminedErr(sender.GetRPCError())
 			}
 		}
@@ -342,7 +341,19 @@ func (action actionPrewrite) handleSingleBatch(
 			if same {
 				continue
 			}
+			// A split retry can cancel its own sub-batches. That does not resolve an
+			// uncertain request sent before the split.
+			rpcErr := sender.GetRPCError()
+			if atomic.LoadUint32(&c.prewriteCancelled) != 0 {
+				rpcErr = nil
+			}
 			err = c.doActionOnMutations(bo, actionPrewrite{true, action.isInternal, action.hasRpcRetries}, batch.mutations)
+			// Successful 2PC prewrites do not determine whether an earlier 1PC request
+			// committed. Preserve its uncertainty until the primary commit responds.
+			onePCFallback := req.Prewrite().TryOnePc && !c.isOnePC() && !c.isAsyncCommit()
+			if rpcErr != nil && (err != nil || onePCFallback) && (c.isAsyncCommit() || req.Prewrite().TryOnePc) {
+				c.setUndeterminedErr(rpcErr)
+			}
 			return err
 		}
 
