@@ -2,10 +2,13 @@ package redact
 
 import (
 	"encoding/hex"
+	"fmt"
 	"unsafe"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 )
 
 // NeedRedact returns whether to redact log
@@ -138,4 +141,109 @@ func RedactKeyErrIfNecessary(err *kvrpcpb.KeyError) {
 			}
 		}
 	}
+}
+
+// Stringer returns s itself if redact log is disabled, otherwise it returns a
+// fmt.Stringer that prints only the redact marker. It is intended for values
+// such as kvrpcpb requests whose String() may contain user keys or values.
+func Stringer(s fmt.Stringer) fmt.Stringer {
+	if !NeedRedact() {
+		return s
+	}
+	return redactedStringer{}
+}
+
+type redactedStringer struct{}
+
+func (redactedStringer) String() string { return "?" }
+
+// RegionMeta returns region itself if redact log is disabled, otherwise it
+// returns a shallow copy of region whose start key and end key are redacted.
+// The returned value must only be used for logging.
+func RegionMeta(region *metapb.Region) *metapb.Region {
+	if region == nil || !NeedRedact() {
+		return region
+	}
+	return redactRegionMeta(region)
+}
+
+// RegionMetas is like RegionMeta, but for a slice of regions.
+func RegionMetas(regions []*metapb.Region) []*metapb.Region {
+	if len(regions) == 0 || !NeedRedact() {
+		return regions
+	}
+	return redactRegionMetas(regions)
+}
+
+// EpochNotMatch returns e itself if redact log is disabled, otherwise it
+// returns a copy of e whose current regions have redacted start and end keys.
+// The returned value must only be used for logging.
+func EpochNotMatch(e *errorpb.EpochNotMatch) *errorpb.EpochNotMatch {
+	if e == nil || !NeedRedact() {
+		return e
+	}
+	return redactEpochNotMatch(e)
+}
+
+// RegionError returns e itself if redact log is disabled, otherwise it returns
+// a shallow copy of e whose key fields (KeyNotInRegion, EpochNotMatch and
+// BucketVersionNotMatch) are redacted. The returned value must only be used
+// for logging.
+func RegionError(e *errorpb.Error) *errorpb.Error {
+	if e == nil || !NeedRedact() {
+		return e
+	}
+	redacted := *e
+	if k := e.KeyNotInRegion; k != nil {
+		kc := *k
+		kc.Key = redactBytes(kc.Key)
+		kc.StartKey = redactBytes(kc.StartKey)
+		kc.EndKey = redactBytes(kc.EndKey)
+		redacted.KeyNotInRegion = &kc
+	}
+	if en := e.EpochNotMatch; en != nil {
+		redacted.EpochNotMatch = redactEpochNotMatch(en)
+	}
+	if b := e.BucketVersionNotMatch; b != nil {
+		bc := *b
+		bc.Keys = make([][]byte, len(b.Keys))
+		for i := range b.Keys {
+			bc.Keys[i] = redactBytes(b.Keys[i])
+		}
+		redacted.BucketVersionNotMatch = &bc
+	}
+	return &redacted
+}
+
+func redactRegionMeta(region *metapb.Region) *metapb.Region {
+	if region == nil {
+		return nil
+	}
+	redacted := *region
+	redacted.StartKey = redactBytes(region.StartKey)
+	redacted.EndKey = redactBytes(region.EndKey)
+	return &redacted
+}
+
+func redactRegionMetas(regions []*metapb.Region) []*metapb.Region {
+	redacted := make([]*metapb.Region, len(regions))
+	for i, r := range regions {
+		redacted[i] = redactRegionMeta(r)
+	}
+	return redacted
+}
+
+func redactEpochNotMatch(e *errorpb.EpochNotMatch) *errorpb.EpochNotMatch {
+	redacted := *e
+	redacted.CurrentRegions = redactRegionMetas(e.CurrentRegions)
+	return &redacted
+}
+
+// redactBytes replaces a non-empty key with the redact marker. Empty keys are
+// kept as is, since they carry no user data and mark unbounded ranges.
+func redactBytes(key []byte) []byte {
+	if len(key) == 0 {
+		return key
+	}
+	return []byte{'?'}
 }
