@@ -19,7 +19,7 @@ Tests are colocated with packages in `*_test.go` files. Broader integration cove
 
 ## Coding Style & Naming Conventions
 
-Use Go 1.25.x and standard Go formatting. Run `gofmt`/`goimports` through `golangci-lint`, or format touched files before submitting. Keep package names short, lowercase, and consistent with existing directories. Exported identifiers must have clear Go doc comments when they are part of the public client API.
+Use Go 1.27.x and standard Go formatting. Run `gofmt`/`goimports` through `golangci-lint`, or format touched files before submitting. Keep package names short, lowercase, and consistent with existing directories. Exported identifiers must have clear Go doc comments when they are part of the public client API.
 
 Prefer existing error, retry, backoff, logging, metrics, and failpoint helpers instead of introducing parallel mechanisms. Keep public API changes small and deliberate because this module is consumed by multiple TiDB ecosystem components, including TiDB, TiCDC, BR, go-ycsb, and other projects. Design and review for compatibility and stability across these consumers, not only for TiDB.
 
