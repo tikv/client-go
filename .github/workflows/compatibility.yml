@@ -4,6 +4,9 @@ on:
   push:
     branches: [master, "feature/*", release-nextgen-202609]
 
+permissions:
+  contents: read
+
 jobs:
   tidb-compatibility:
     runs-on: ubuntu-latest
@@ -16,11 +19,13 @@ jobs:
       - name: Checkout Client-Go
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           path: client-go
 
       - name: Checkout TiDB
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: pingcap/tidb
           ref: release-nextgen-202609
           path: tidb
@@ -35,6 +40,7 @@ jobs:
       - name: Checkout go-ycsb
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: pingcap/go-ycsb
           path: go-ycsb
 
