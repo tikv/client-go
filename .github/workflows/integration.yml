@@ -2,9 +2,12 @@ name: Integration Test
 
 on:
   push:
-    branches: [master, "feature/*"]
+    branches: [master, "feature/*", "release-nextgen-*"]
   pull_request:
-    branches: [master, "feature/*"]
+    branches: [master, "feature/*", "release-nextgen-*"]
+
+permissions:
+  contents: read
 
 jobs:
   integration-local:
@@ -12,10 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.25.14
 
@@ -31,10 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.25.14
 
@@ -50,10 +57,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.25.14
 
@@ -96,10 +105,12 @@ jobs:
         api_version: [v1ttl, v2]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: 1.25.14
 
