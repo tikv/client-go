@@ -205,6 +205,9 @@ func TestTxnFilePrewriteTxnSizeAfterRegionRegroup(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var captured []capturedPrewrite
+	firstRPCFinished := make(chan struct{})
+	continueCommit := make(chan struct{})
+	var firstRPC sync.Once
 
 	hook := func(req *tikvrpc.Request, resp *tikvrpc.Response, sendErr error) (*tikvrpc.Response, error) {
 		if req.Type != tikvrpc.CmdPrewrite {
@@ -233,13 +236,15 @@ func TestTxnFilePrewriteTxnSizeAfterRegionRegroup(t *testing.T) {
 			regionErr:     regionErr,
 		})
 		mu.Unlock()
+		firstRPC.Do(func() {
+			close(firstRPCFinished)
+			<-continueCommit
+		})
 		return resp, sendErr
 	}
 
 	require.Nil(failpoint.Enable("tikvclient/mockRetrySendReqToRegion", "1*return(true)->return(false)"))
 	defer failpoint.Disable("tikvclient/mockRetrySendReqToRegion")
-	require.Nil(failpoint.Enable("tikvclient/invalidCacheAndRetry", "1*off->pause"))
-	defer failpoint.Disable("tikvclient/invalidCacheAndRetry")
 	require.Nil(failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
 	defer failpoint.Disable("tikvclient/onRPCFinishedHook")
 	ctx := context.WithValue(context.Background(), "onRPCFinishedHook", hook)
@@ -263,10 +268,19 @@ func TestTxnFilePrewriteTxnSizeAfterRegionRegroup(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(3 * time.Second)
+	select {
+	case <-firstRPCFinished:
+	case <-time.After(10 * time.Second):
+		close(continueCommit)
+		require.FailNow("timed out waiting for the first txn-file prewrite RPC")
+	}
 	cluster.Split(regionID, cluster.AllocID(), []byte("h"), []uint64{peerID}, peerID)
-	require.Nil(failpoint.Disable("tikvclient/invalidCacheAndRetry"))
-	<-done
+	close(continueCommit)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		require.FailNow("timed out waiting for the txn-file commit")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
