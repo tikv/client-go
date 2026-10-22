@@ -1,6 +1,6 @@
 module unsafedestoryrange
 
-go 1.27.2
+go 1.27.3
 
 require github.com/tikv/client-go/v2 v2.0.0
 
