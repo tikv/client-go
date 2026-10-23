@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,181 @@ func TestBatchResponse(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+<<<<<<< HEAD
+=======
+func TestKeepOnlyActiveClearsRemovedLeases(t *testing.T) {
+	now := time.Now().UnixNano()
+	canceled := 0
+	activeLease := &Lease{Cancel: func() {}}
+	expiredLease := &Lease{deadline: now, Cancel: func() { canceled++ }}
+	leases := []*Lease{activeLease, expiredLease}
+
+	active := keepOnlyActive(leases, now)
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, 1, canceled)
+}
+
+func TestKeepOnlyActiveWithHardDeadline(t *testing.T) {
+	var canceled int32
+	activeLease := &Lease{Cancel: func() {}}
+	activeLease.SetHardTimeout(time.Hour)
+	expiredLease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&expiredLease.hardDeadline, time.Now().Add(-time.Second).UnixNano())
+
+	leases := []*Lease{activeLease, expiredLease}
+	active := keepOnlyActive(leases, time.Now().UnixNano())
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestKeepOnlyActiveHardDeadlineOverridesRecvDeadline(t *testing.T) {
+	var canceled int32
+	now := time.Now().UnixNano()
+	lease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&lease.deadline, now+int64(time.Hour))
+	atomic.StoreInt64(&lease.hardDeadline, now)
+
+	leases := []*Lease{lease}
+	active := keepOnlyActive(leases, now)
+
+	assert.Empty(t, active)
+	assert.Nil(t, leases[0])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestLeaseSetHardTimeout(t *testing.T) {
+	lease := &Lease{}
+	before := time.Now().Add(time.Hour).UnixNano()
+	lease.SetHardTimeout(time.Hour)
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), before)
+	assert.LessOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), time.Now().Add(time.Hour).UnixNano())
+
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		lease.SetHardTimeout(time.Hour)
+		lease.SetHardTimeout(timeout)
+		assert.Zero(t, atomic.LoadInt64(&lease.hardDeadline))
+	}
+}
+
+func TestDefaultRequestOrigin(t *testing.T) {
+	previousOrigin := GetDefaultRequestOrigin()
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginTiDB)
+	t.Cleanup(func() {
+		SetDefaultRequestOrigin(previousOrigin)
+	})
+
+	req := NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
+
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{})
+	require.True(t, AttachContext(req, kvrpcpb.Context{}))
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.Get().GetContext().GetRequestOrigin())
+
+	for _, tc := range []struct {
+		name   string
+		req    *Request
+		origin func(*Request) kvrpcpb.RequestOrigin
+	}{
+		{
+			name: "scan_lock",
+			req:  NewRequest(CmdScanLock, &kvrpcpb.ScanLockRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.ScanLock().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "cleanup",
+			req:  NewRequest(CmdCleanup, &kvrpcpb.CleanupRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.Cleanup().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "check_txn_status",
+			req:  NewRequest(CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.CheckTxnStatus().GetContext().GetRequestOrigin()
+			},
+		},
+		{
+			name: "check_secondary_locks",
+			req:  NewRequest(CmdCheckSecondaryLocks, &kvrpcpb.CheckSecondaryLocksRequest{}),
+			origin: func(req *Request) kvrpcpb.RequestOrigin {
+				return req.CheckSecondaryLocks().GetContext().GetRequestOrigin()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, AttachContext(tc.req, kvrpcpb.Context{}))
+			require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, tc.origin(tc.req))
+		})
+	}
+
+	SetDefaultRequestOrigin(kvrpcpb.RequestOrigin_RequestOriginUnknown)
+	req = NewRequest(CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		RequestOrigin: kvrpcpb.RequestOrigin_RequestOriginTiDB,
+	})
+	require.Equal(t, kvrpcpb.RequestOrigin_RequestOriginTiDB, req.GetRequestOrigin())
+}
+
+func TestAttachContextSetsRequestContext(t *testing.T) {
+	rpcCtx := kvrpcpb.Context{
+		RegionId:     123,
+		ApiVersion:   kvrpcpb.APIVersion_V2,
+		Keyspace:     &kvrpcpb.Context_KeyspaceId{KeyspaceId: 456},
+		KeyspaceName: "test-keyspace",
+	}
+	nextRPCtx := kvrpcpb.Context{
+		RegionId:     789,
+		ApiVersion:   kvrpcpb.APIVersion_V2,
+		Keyspace:     &kvrpcpb.Context_KeyspaceId{KeyspaceId: 101112},
+		KeyspaceName: "next-test-keyspace",
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *Request
+		ctx  func(*Request) *kvrpcpb.Context
+	}{
+		{
+			name: "get",
+			req:  NewRequest(CmdGet, &kvrpcpb.GetRequest{}),
+			ctx: func(req *Request) *kvrpcpb.Context {
+				return req.Get().GetContext()
+			},
+		},
+		{
+			name: "lock_wait_info",
+			req:  NewRequest(CmdLockWaitInfo, &kvrpcpb.GetLockWaitInfoRequest{}),
+			ctx: func(req *Request) *kvrpcpb.Context {
+				return req.LockWaitInfo().GetContext()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, AttachContext(tc.req, rpcCtx))
+			require.Equal(t, rpcCtx.GetRegionId(), tc.ctx(tc.req).GetRegionId())
+			require.Equal(t, rpcCtx.GetApiVersion(), tc.ctx(tc.req).GetApiVersion())
+			require.Equal(t, rpcCtx.GetKeyspaceId(), tc.ctx(tc.req).GetKeyspaceId())
+			require.Equal(t, rpcCtx.GetKeyspaceName(), tc.ctx(tc.req).GetKeyspaceName())
+
+			oldReq := tc.req.Req
+			require.True(t, AttachContext(tc.req, nextRPCtx))
+			require.NotSame(t, oldReq, tc.req.Req)
+			require.Equal(t, nextRPCtx.GetRegionId(), tc.ctx(tc.req).GetRegionId())
+			require.Equal(t, nextRPCtx.GetApiVersion(), tc.ctx(tc.req).GetApiVersion())
+			require.Equal(t, nextRPCtx.GetKeyspaceId(), tc.ctx(tc.req).GetKeyspaceId())
+			require.Equal(t, nextRPCtx.GetKeyspaceName(), tc.ctx(tc.req).GetKeyspaceName())
+		})
+	}
+}
+
+>>>>>>> 6e53feb8 (tikvrpc: guard MV maintenance stream lease lifetimes (#2130))
 // https://github.com/pingcap/tidb/issues/51921
 func TestTiDB51921(t *testing.T) {
 	for _, r := range []*Request{
