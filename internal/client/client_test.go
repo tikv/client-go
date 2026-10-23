@@ -49,6 +49,7 @@ import (
 
 	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
@@ -57,6 +58,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -422,6 +424,111 @@ func TestCollapseResolveLock(t *testing.T) {
 	case <-reqCh:
 		assert.Fail(t, "unexpected request")
 	default:
+	}
+}
+
+// TestKeyspaceMetadata checks headers received by a real gRPC server, including
+// forwarded requests and streams created after replacing a connection pool.
+func TestKeyspaceMetadata(t *testing.T) {
+	for _, codecCase := range []struct {
+		name       string
+		apiV2      bool
+		keyspaceID uint32
+		withCodec  bool
+		want       []string
+	}{
+		{name: "no_codec"},
+		{name: "api_v1", withCodec: true},
+		{name: "api_v2", withCodec: true, apiV2: true, keyspaceID: 42, want: []string{"42"}},
+		{name: "api_v2_default_keyspace", withCodec: true, apiV2: true, want: []string{"0"}},
+	} {
+		t.Run(codecCase.name, func(t *testing.T) {
+			for _, transport := range []string{"unary", "stream", "batch"} {
+				t.Run(transport, func(t *testing.T) {
+					defer config.UpdateGlobal(func(conf *config.Config) {
+						conf.TiKVClient.GrpcConnectionCount = 1
+						conf.TiKVClient.MaxBatchSize = 0
+						if transport == "batch" {
+							conf.TiKVClient.MaxBatchSize = 128
+						}
+					})()
+					server, port := mockserver.StartMockTikvService()
+					require.Positive(t, port)
+					defer server.Stop()
+					received := make(chan metadata.MD, 16)
+					server.SetMetaChecker(func(ctx context.Context) error {
+						md, _ := metadata.FromIncomingContext(ctx)
+						received <- md.Copy()
+						return nil
+					})
+
+					var opts []Opt
+					if codecCase.withCodec {
+						codec := apicodec.NewCodecV1(apicodec.ModeTxn)
+						if codecCase.apiV2 {
+							var err error
+							codec, err = apicodec.NewCodecV2(apicodec.ModeTxn, &keyspacepb.KeyspaceMeta{
+								Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: codecCase.keyspaceID},
+							})
+							require.NoError(t, err)
+						}
+						opts = append(opts, WithCodec(codec))
+					}
+					client := NewRPCClient(opts...)
+					defer client.Close()
+					ctx := metadata.AppendToOutgoingContext(context.Background(), "test-header", "preserved")
+
+					for _, replacePool := range []bool{false, true} {
+						if replacePool {
+							require.NoError(t, client.CloseAddr(server.Addr()))
+						}
+						for _, host := range []string{"", "127.0.0.1:6666"} {
+							for range 2 {
+								var req *tikvrpc.Request
+								switch transport {
+								case "unary":
+									req = tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+								case "stream":
+									req = tikvrpc.NewRequest(tikvrpc.CmdBatchCop, &coprocessor.BatchRequest{})
+								case "batch":
+									req = tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
+								}
+								req.ForwardedHost = host
+								resp, err := client.SendRequest(ctx, server.Addr(), req, 5*time.Second)
+								require.NoError(t, err)
+								if transport == "stream" {
+									resp.Resp.(*tikvrpc.BatchCopStreamResponse).Close()
+								}
+							}
+							// BatchCommands sends headers once per stream, not once per message.
+							wantCalls := 2
+							if transport == "batch" {
+								wantCalls = 1
+							}
+							for range wantCalls {
+								select {
+								case md := <-received:
+									require.Equal(t, codecCase.want, md.Get(keyspaceIdMetadataKey))
+									if host == "" {
+										require.Empty(t, md.Get(forwardMetadataKey))
+									} else {
+										require.Equal(t, []string{host}, md.Get(forwardMetadataKey))
+									}
+									if transport == "batch" {
+										require.Equal(t, []string{"0"}, md.Get(batchConnIdxMetadataKey))
+									} else {
+										require.Equal(t, []string{"preserved"}, md.Get("test-header"))
+									}
+								case <-time.After(5 * time.Second):
+									t.Fatal("server did not receive RPC metadata")
+								}
+							}
+							require.Empty(t, received)
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
