@@ -391,9 +391,14 @@ func longestCommonPrefixByChunk(l1Key, l2Key artKey, depth uint32) uint32 {
 			return limit - remaining + uint32(bits.TrailingZeros64(xor)>>3) - depth
 		}
 
+		remaining -= 8
+		if remaining < 8 {
+			break
+		}
+		// Advance only when another chunk will be read. Advancing past the
+		// final chunk can produce a pointer outside the backing allocation.
 		p1 = unsafe.Add(p1, 8)
 		p2 = unsafe.Add(p2, 8)
-		remaining -= 8
 	}
 
 	// Compare rest bytes

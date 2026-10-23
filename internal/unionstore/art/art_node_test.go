@@ -426,3 +426,24 @@ func TestKey2Chunk(t *testing.T) {
 		require.Equal(t, uint32(i), longestCommonPrefix(key, diffKey, 0))
 	}
 }
+
+func TestLCPMatchingChunkAtAllocationEnd(t *testing.T) {
+	for _, size := range []int{16, 32, 64} {
+		for length := 0; length < size; length++ {
+			left := newLCPKeyAtAllocationEnd(size, length)
+			right := newLCPKeyAtAllocationEnd(size, length+1)
+			for depth := 0; depth <= length; depth++ {
+				want := uint32(length - depth)
+				require.Equal(t, want, longestCommonPrefix(left, right, uint32(depth)))
+				require.Equal(t, want, longestCommonPrefix(right, left, uint32(depth)))
+				require.Equal(t, want, longestCommonPrefix(left, left, uint32(depth)))
+			}
+		}
+	}
+}
+
+//go:noinline
+func newLCPKeyAtAllocationEnd(size, length int) artKey {
+	key := make(artKey, size)
+	return key[size-length:]
+}
