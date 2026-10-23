@@ -62,6 +62,13 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64, opts ...opt
 	return &metapb.Store{
 		Id:      storeID,
 		Address: "mock-store",
+		// A modern store advertises the transaction protocol versions its
+		// admission accepts. Shared-lock payloads still need the process to
+		// declare version 2 explicitly.
+		TxnProtocolVersionRange: &metapb.TxnProtocolVersionRange{
+			Min: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY),
+			Max: uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK),
+		},
 	}, nil
 }
 
@@ -217,6 +224,16 @@ func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
 	}
 }
 
+// useTxnProtocolVersion declares a process-wide transaction protocol capability
+// for the duration of the test. Shared-lock payloads require version 2, which the
+// library does not assume on its own.
+func useTxnProtocolVersion(t *testing.T, version kvrpcpb.TxnProtocolVersion) {
+	t.Helper()
+	previous := tikvrpc.GetDefaultTxnProtocolVersion()
+	require.NoError(t, tikvrpc.SetDefaultTxnProtocolVersion(version))
+	t.Cleanup(func() { require.NoError(t, tikvrpc.SetDefaultTxnProtocolVersion(previous)) })
+}
+
 func TestLockKeys(t *testing.T) {
 
 	requireNoRequest := func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -279,6 +296,7 @@ func TestLockKeys(t *testing.T) {
 	})
 
 	t.Run("PessimisticShared", func(t *testing.T) {
+		useTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 		key1 := []byte("k1")
 		key2 := []byte("k2")
 		txn := newTestTxn(t, 1)
@@ -347,6 +365,7 @@ func TestLockKeys(t *testing.T) {
 	})
 
 	t.Run("UpgradeSharedToExclusive", func(t *testing.T) {
+		useTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
 		key1 := []byte("k1")
 		key2 := []byte("k2")
 		txn := newTestTxn(t, 1)
@@ -393,6 +412,10 @@ func TestLockKeys(t *testing.T) {
 }
 
 func TestSharedLockUpgrade(t *testing.T) {
+	// This test drives shared-lock upgrades end to end, so the process must
+	// declare the shared-lock capability the library does not assume by default.
+	useTxnProtocolVersion(t, kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK)
+
 	type requestSummary struct {
 		cmd  tikvrpc.CmdType
 		keys [][]byte
