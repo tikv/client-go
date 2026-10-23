@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,6 +58,64 @@ func TestBatchResponse(t *testing.T) {
 	batchResp, err := FromBatchCommandsResponse(resp)
 	assert.Nil(t, batchResp)
 	assert.NotNil(t, err)
+}
+
+func TestKeepOnlyActiveClearsRemovedLeases(t *testing.T) {
+	now := time.Now().UnixNano()
+	canceled := 0
+	activeLease := &Lease{Cancel: func() {}}
+	expiredLease := &Lease{deadline: now, Cancel: func() { canceled++ }}
+	leases := []*Lease{activeLease, expiredLease}
+
+	active := keepOnlyActive(leases, now)
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, 1, canceled)
+}
+
+func TestKeepOnlyActiveWithHardDeadline(t *testing.T) {
+	var canceled int32
+	activeLease := &Lease{Cancel: func() {}}
+	activeLease.SetHardTimeout(time.Hour)
+	expiredLease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&expiredLease.hardDeadline, time.Now().Add(-time.Second).UnixNano())
+
+	leases := []*Lease{activeLease, expiredLease}
+	active := keepOnlyActive(leases, time.Now().UnixNano())
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestKeepOnlyActiveHardDeadlineOverridesRecvDeadline(t *testing.T) {
+	var canceled int32
+	now := time.Now().UnixNano()
+	lease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&lease.deadline, now+int64(time.Hour))
+	atomic.StoreInt64(&lease.hardDeadline, now)
+
+	leases := []*Lease{lease}
+	active := keepOnlyActive(leases, now)
+
+	assert.Empty(t, active)
+	assert.Nil(t, leases[0])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestLeaseSetHardTimeout(t *testing.T) {
+	lease := &Lease{}
+	before := time.Now().Add(time.Hour).UnixNano()
+	lease.SetHardTimeout(time.Hour)
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), before)
+	assert.LessOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), time.Now().Add(time.Hour).UnixNano())
+
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		lease.SetHardTimeout(time.Hour)
+		lease.SetHardTimeout(timeout)
+		assert.Zero(t, atomic.LoadInt64(&lease.hardDeadline))
+	}
 }
 
 func TestDefaultRequestOrigin(t *testing.T) {
