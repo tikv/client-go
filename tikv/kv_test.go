@@ -415,3 +415,44 @@ func TestKVStoreCloseCheckRegionCacheClosedBeforePDClose(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 }
+
+func TestSyncEtcdEndpointsWithRetry(t *testing.T) {
+	defer func(backoff time.Duration) { etcdSyncBackoff = backoff }(etcdSyncBackoff)
+	etcdSyncBackoff = time.Millisecond
+
+	addrs := []string{"pd:2379"}
+	transientErr := fmt.Errorf("context deadline exceeded")
+
+	// Succeeds after transient failures, each attempt with its own deadline.
+	calls := 0
+	err := syncEtcdEndpointsWithRetry(addrs, func(ctx context.Context) error {
+		calls++
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.LessOrEqual(t, time.Until(deadline), etcdSyncTimeout)
+		if calls < etcdSyncMaxAttempts {
+			return transientErr
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, etcdSyncMaxAttempts, calls)
+
+	// Returns the last error once the attempts are exhausted.
+	calls = 0
+	err = syncEtcdEndpointsWithRetry(addrs, func(ctx context.Context) error {
+		calls++
+		return transientErr
+	})
+	require.ErrorIs(t, err, transientErr)
+	require.Equal(t, etcdSyncMaxAttempts, calls)
+
+	// Does not retry after a success.
+	calls = 0
+	err = syncEtcdEndpointsWithRetry(addrs, func(ctx context.Context) error {
+		calls++
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+}
