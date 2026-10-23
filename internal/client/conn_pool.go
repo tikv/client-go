@@ -26,6 +26,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -42,6 +43,8 @@ type connPool struct {
 	target string
 	// version of the connection pool, increase by 1 when reconnect.
 	ver uint64
+	// keyspaceID is used to identify the keyspace of the request.
+	keyspaceID apicodec.KeyspaceID
 
 	index uint32
 	// streamTimeout binds with a background goroutine to process coprocessor streaming timeout.
@@ -57,11 +60,12 @@ type connPool struct {
 	metrics atomic.Pointer[storeMetrics]
 }
 
-func newConnPool(maxSize uint, addr string, ver uint64, security config.Security,
+func newConnPool(maxSize uint, addr string, ver uint64, keyspaceID apicodec.KeyspaceID, security config.Security,
 	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], opts []grpc.DialOption) (*connPool, error) {
 	a := &connPool{
 		ver:           ver,
 		index:         0,
+		keyspaceID:    keyspaceID,
 		conns:         make([]*monitoredConn, maxSize),
 		streamTimeout: make(chan *tikvrpc.Lease, 1024),
 		done:          make(chan struct{}),
@@ -170,6 +174,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 			batchClient := &batchCommandsClient{
 				target:           a.target,
 				connIdx:          connIdx,
+				keyspaceID:       a.keyspaceID,
 				conn:             conn.ClientConn,
 				forwardedClients: make(map[string]*batchCommandsStream),
 				batched:          sync.Map{},

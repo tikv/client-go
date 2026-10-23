@@ -91,6 +91,8 @@ const forwardMetadataKey = "tikv-forwarded-host"
 // batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
 const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 
+const keyspaceIdMetadataKey = "tikv-keyspace-id"
+
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
@@ -259,11 +261,18 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 		for _, opt := range opts {
 			opt(&client)
 		}
+
+		keyspaceID := apicodec.NullspaceID
+		if c.option.codec != nil {
+			keyspaceID = c.option.codec.GetKeyspaceID()
+		}
+
 		ver := c.vers[addr] + 1
 		pool, err = newConnPool(
 			client.GrpcConnectionCount,
 			addr,
 			ver,
+			keyspaceID,
 			c.option.security,
 			&c.idleNotify,
 			enableBatch,
@@ -391,6 +400,15 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if req.ForwardedHost != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, req.ForwardedHost)
 	}
+
+	// Set metadata for keyspace id. Needn't forward DebugReq.
+	if codec := c.option.codec; codec != nil && codec.GetKeyspaceID() != apicodec.NullspaceID {
+		ctx = metadata.AppendToOutgoingContext(
+			ctx, keyspaceIdMetadataKey,
+			strconv.FormatUint(uint64(codec.GetKeyspaceID()), 10),
+		)
+	}
+
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
 		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connPool))
