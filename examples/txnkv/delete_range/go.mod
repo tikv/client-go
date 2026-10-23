@@ -1,6 +1,6 @@
 module delete_range
 
-go 1.25.14
+go 1.27.3
 
 require github.com/tikv/client-go/v2 v2.0.0
 
