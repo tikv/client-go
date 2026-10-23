@@ -125,10 +125,10 @@ func TestStreamHardTTLForMVMaintenance(t *testing.T) {
 	}{
 		{name: "ordinary request", ctx: context.Background()},
 		{name: "other internal request", reqSource: "internal_gc", ctx: util.WithInternalSourceType(context.Background(), "ddl")},
-		{name: "MV request source", reqSource: "internal_mview_maintain", ctx: context.Background(), want: time.Hour},
-		{name: "MV request source with task", reqSource: "internal_mview_maintain_refresh", ctx: context.Background(), want: time.Hour},
-		{name: "MV context source", ctx: util.WithInternalSourceType(context.Background(), "mview_maintain"), want: time.Hour},
-		{name: "MV context source with task", reqSource: "external_select", ctx: util.WithInternalSourceAndTaskType(context.Background(), "mview_maintain", "refresh"), want: time.Hour},
+		{name: "MV request source", reqSource: "internal_mview_maintain", ctx: context.Background(), want: 3 * time.Hour},
+		{name: "MV request source with task", reqSource: "internal_mview_maintain_refresh", ctx: context.Background(), want: 3 * time.Hour},
+		{name: "MV context source", ctx: util.WithInternalSourceType(context.Background(), "mview_maintain"), want: 3 * time.Hour},
+		{name: "MV context source with task", reqSource: "external_select", ctx: util.WithInternalSourceAndTaskType(context.Background(), "mview_maintain", "refresh"), want: 3 * time.Hour},
 		{name: "similar source names", reqSource: "internal_mview_maintainfoo", ctx: util.WithInternalSourceType(context.Background(), "mview_maintenance")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

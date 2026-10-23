@@ -94,7 +94,7 @@ const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 const (
 	// Matches TiDB's kv.InternalTxnMViewMaintenance ("mview_maintain").
 	mvMaintenanceRequestSource = "internal_mview_maintain"
-	mvMaintenanceStreamHardTTL = time.Hour
+	mvMaintenanceStreamHardTTL = 3 * time.Hour
 )
 
 // Client is a client that sends RPC.
