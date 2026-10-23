@@ -310,6 +310,7 @@ func (c *RPCClient) recycleIdleConnArray() {
 	for i, addr := range addrs {
 		c.CloseAddrVer(addr, vers[i])
 	}
+	metrics.TiKVBatchClientRecycledConnCounter.Add(float64(len(addrs)))
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }

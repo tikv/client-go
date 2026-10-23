@@ -54,11 +54,14 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
@@ -1513,4 +1516,43 @@ func TestBatchPolicy(t *testing.T) {
 			require.Equal(t, trigger.opts, presetBatchPolicies[config.DefBatchPolicy])
 		}
 	})
+}
+
+func TestRecycleIdleConnArrayMetric(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 8
+	})()
+
+	client := NewRPCClient()
+	defer client.Close()
+
+	idleAddr, busyAddr := "127.0.0.1:6379", "127.0.0.1:6380"
+	idlePool, err := client.getConnPool(idleAddr, true)
+	require.NoError(t, err)
+	require.NotNil(t, idlePool.batchConn)
+	_, err = client.getConnPool(busyAddr, true)
+	require.NoError(t, err)
+
+	before := counterValue(t, metrics.TiKVBatchClientRecycledConnCounter)
+
+	// Nothing is idle yet, so nothing is recycled.
+	client.recycleIdleConnArray()
+	require.Equal(t, before, counterValue(t, metrics.TiKVBatchClientRecycledConnCounter))
+
+	atomic.StoreUint32(&idlePool.batchConn.idle, 1)
+	client.recycleIdleConnArray()
+	require.Equal(t, before+1, counterValue(t, metrics.TiKVBatchClientRecycledConnCounter))
+
+	client.RLock()
+	_, idleExists := client.connPools[idleAddr]
+	_, busyExists := client.connPools[busyAddr]
+	client.RUnlock()
+	require.False(t, idleExists)
+	require.True(t, busyExists)
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	var m dto.Metric
+	require.NoError(t, c.Write(&m))
+	return m.GetCounter().GetValue()
 }
