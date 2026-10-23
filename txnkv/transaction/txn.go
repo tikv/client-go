@@ -925,9 +925,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	if useTxnFile {
 		err = committer.executeTxnFile(ctx)
 		// TODO: fall back to normal 2PC when tikv-worker is unavailable.
-		if val == nil || sessionID > 0 {
-			txn.onCommitted(err)
-		}
+		txn.onCommitted(err)
 		return err
 	}
 
@@ -936,9 +934,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	// transaction with pipelined memdb should also bypass latch.
 	if txn.store.TxnLatches() == nil || txn.IsPessimistic() || txn.IsPipelined() {
 		err = committer.execute(ctx)
-		if val == nil || sessionID > 0 {
-			txn.onCommitted(err)
-		}
+		txn.onCommitted(err)
 		logutil.Logger(ctx).Debug("[kv] txnLatches disabled, 2pc directly", zap.Error(err))
 		return err
 	}
@@ -957,9 +953,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		return &tikverr.ErrWriteConflictInLatch{StartTS: txn.startTS}
 	}
 	err = committer.execute(ctx)
-	if val == nil || sessionID > 0 {
-		txn.onCommitted(err)
-	}
+	txn.onCommitted(err)
 	if err == nil {
 		lock.SetCommitTS(committer.commitTS)
 	}
