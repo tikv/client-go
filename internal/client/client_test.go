@@ -116,6 +116,29 @@ func (s *firstRecvErrMPPStream) Recv() (*mpp.MPPDataPacket, error) {
 	return nil, s.err
 }
 
+func TestStreamHardTTLForMVMaintenance(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		reqSource string
+		ctx       context.Context
+		want      time.Duration
+	}{
+		{name: "ordinary request", ctx: context.Background()},
+		{name: "other internal request", reqSource: "internal_gc", ctx: util.WithInternalSourceType(context.Background(), "ddl")},
+		{name: "MV request source", reqSource: "internal_mview_maintain", ctx: context.Background(), want: time.Hour},
+		{name: "MV request source with task", reqSource: "internal_mview_maintain_refresh", ctx: context.Background(), want: time.Hour},
+		{name: "MV context source", ctx: util.WithInternalSourceType(context.Background(), "mview_maintain"), want: time.Hour},
+		{name: "MV context source with task", reqSource: "external_select", ctx: util.WithInternalSourceAndTaskType(context.Background(), "mview_maintain", "refresh"), want: time.Hour},
+		{name: "similar source names", reqSource: "internal_mview_maintainfoo", ctx: util.WithInternalSourceType(context.Background(), "mview_maintenance")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := tikvrpc.NewRequest(tikvrpc.CmdCopStream, &coprocessor.Request{})
+			req.RequestSource = tt.reqSource
+			require.Equal(t, tt.want, streamHardTTL(tt.ctx, req))
+		})
+	}
+}
+
 func TestStreamFirstRecvErrorClosesLease(t *testing.T) {
 	rpcClient := &RPCClient{}
 	recvErr := errors.New("first recv failed")
