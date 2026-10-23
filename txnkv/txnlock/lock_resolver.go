@@ -722,6 +722,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		txnStatus TxnStatus
 		firstLock *Lock
 		keys      [][]byte
+		seenKeys  map[string]struct{}
 	}
 	// TxnID -> locks that should use the lite ResolveLock path. They are
 	// collected first so a transaction with multiple encountered locks sends at
@@ -745,12 +746,18 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			}
 			txn, ok := batchLiteResolveTxnList[l.TxnID]
 			if ok {
-				txn.keys = append(txn.keys, l.Key)
+				// Repeated lock errors must not produce duplicate keys in one
+				// ResolveLock request, which can generate duplicate MVCC writes.
+				if _, seen := txn.seenKeys[string(l.Key)]; !seen {
+					txn.seenKeys[string(l.Key)] = struct{}{}
+					txn.keys = append(txn.keys, l.Key)
+				}
 			} else {
 				batchLiteResolveTxnList[l.TxnID] = &batchLiteResolveTxn{
 					txnStatus: status,
 					firstLock: l,
 					keys:      [][]byte{l.Key},
+					seenKeys:  map[string]struct{}{string(l.Key): {}},
 				}
 			}
 		}
