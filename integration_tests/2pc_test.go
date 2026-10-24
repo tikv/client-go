@@ -1611,6 +1611,28 @@ func (s *testCommitterSuite) TestAggressiveLockingExitIfInapplicable() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingExitKeepsLocksOfLastAttempt() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k2")))
+
+	txn.RetryAggressiveLocking(context.Background())
+	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", "pause"))
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k1"), s.key("k3")))
+	s.False(txn.IsInAggressiveLockingMode())
+	s.NoError(failpoint.Disable("tikvclient/beforeAsyncPessimisticRollback"))
+	time.Sleep(time.Millisecond * 50)
+	s.checkIsKeyLocked(s.key("k1"), true)
+	s.checkIsKeyLocked(s.key("k2"), false)
+	s.checkIsKeyLocked(s.key("k3"), true)
+
+	s.NoError(txn.Rollback())
+}
+
 func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	// Not blocked
 	txn := s.begin()

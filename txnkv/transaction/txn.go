@@ -1405,6 +1405,14 @@ func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockC
 		// Then the previously-locked keys during execution in this statement (if any) will be turned into the state
 		// as if they were locked in normal way.
 		// Note that the issue https://github.com/pingcap/tidb/issues/35682 also exists here.
+		// The keys locked in the previous attempt that are going to be locked again must not be released by
+		// DoneAggressiveLocking, because the release is asynchronous and may remove the locks acquired below.
+		for _, key := range keys {
+			if _, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
+				delete(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks, string(key))
+				txn.lockedCnt--
+			}
+		}
 		txn.DoneAggressiveLocking(ctx)
 	}
 	return nil
