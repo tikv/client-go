@@ -124,6 +124,8 @@ type kvstore interface {
 	IsClose() bool
 	// Go run the function in a separate goroutine.
 	Go(f func()) error
+	// CheckVisibility checks if it is safe to read or write using the given ts.
+	CheckVisibility(startTS uint64) error
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -1830,6 +1832,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				break
 			}
 		}
+	}
+
+	// Once the txn safe point passes the start ts, GC may have removed the versions the prewrite would conflict with.
+	if err = c.store.CheckVisibility(c.startTS); err != nil {
+		return err
 	}
 
 	// TODO(youjiali1995): It's better to use different maxSleep for different operations
