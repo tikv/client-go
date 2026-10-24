@@ -91,6 +91,12 @@ const forwardMetadataKey = "tikv-forwarded-host"
 // batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
 const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 
+const (
+	// Matches TiDB's kv.InternalTxnMViewMaintenance ("mview_maintain").
+	mvMaintenanceRequestSource = "internal_mview_maintain"
+	mvMaintenanceStreamHardTTL = 3 * time.Hour
+)
+
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
@@ -455,6 +461,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
 	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -491,6 +498,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -526,6 +534,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -541,6 +550,17 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	}
 	copStream.MPPDataPacket = first
 	return resp, nil
+}
+
+func streamHardTTL(ctx context.Context, req *tikvrpc.Request) time.Duration {
+	if isMVMaintenanceRequestSource(req.GetRequestSource()) || isMVMaintenanceRequestSource(util.RequestSourceFromCtx(ctx)) {
+		return mvMaintenanceStreamHardTTL
+	}
+	return 0
+}
+
+func isMVMaintenanceRequestSource(source string) bool {
+	return source == mvMaintenanceRequestSource || strings.HasPrefix(source, mvMaintenanceRequestSource+"_")
 }
 
 // Close closes all connections.
