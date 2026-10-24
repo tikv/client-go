@@ -1622,15 +1622,41 @@ func (s *testCommitterSuite) TestAggressiveLockingExitKeepsLocksOfLastAttempt() 
 	txn.RetryAggressiveLocking(context.Background())
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", "pause"))
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k1"), s.key("k3")))
-	s.False(txn.IsInAggressiveLockingMode())
+	lockErr := make(chan error, 1)
+	go func() {
+		lockErr <- txn.LockKeys(context.Background(), lockCtx, s.key("k1"), s.key("k3"))
+	}()
+	time.Sleep(time.Millisecond * 50)
 	s.NoError(failpoint.Disable("tikvclient/beforeAsyncPessimisticRollback"))
+	s.NoError(<-lockErr)
+	s.False(txn.IsInAggressiveLockingMode())
 	time.Sleep(time.Millisecond * 50)
 	s.checkIsKeyLocked(s.key("k1"), true)
 	s.checkIsKeyLocked(s.key("k2"), false)
 	s.checkIsKeyLocked(s.key("k3"), true)
 
 	s.NoError(txn.Rollback())
+	s.checkIsKeyLocked(s.key("k1"), false)
+	s.checkIsKeyLocked(s.key("k3"), false)
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingExitKeepsLocksTrackedOnError() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k1")))
+
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), LockOnlyIfExists: true}
+	err := txn.LockKeys(context.Background(), lockCtx, s.key("k1"), s.key("k2"))
+	var noReturnValueErr *tikverr.ErrLockOnlyIfExistsNoReturnValue
+	s.ErrorAs(err, &noReturnValueErr)
+	s.False(txn.IsInAggressiveLockingMode())
+
+	s.NoError(txn.Rollback())
+	s.checkIsKeyLocked(s.key("k1"), false)
+	s.checkIsKeyLocked(s.key("k2"), false)
 }
 
 func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
