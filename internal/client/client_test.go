@@ -1556,3 +1556,45 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	require.NoError(t, c.Write(&m))
 	return m.GetCounter().GetValue()
 }
+
+func TestCloseAddrVerReportsRemovedPool(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+	})()
+	client := NewRPCClient()
+	defer client.Close()
+	addr := "127.0.0.1:6379"
+	pool, err := client.getConnPool(addr, false)
+	require.NoError(t, err)
+
+	require.False(t, client.closeAddrVer(addr, pool.ver-1))
+	client.RLock()
+	current := client.connPools[addr]
+	client.RUnlock()
+	require.Same(t, pool, current)
+
+	var removed int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if client.closeAddrVer(addr, pool.ver) {
+				atomic.AddInt32(&removed, 1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.EqualValues(t, 1, removed)
+	require.False(t, client.closeAddrVer(addr, pool.ver))
+
+	replacement, err := client.getConnPool(addr, false)
+	require.NoError(t, err)
+	require.Greater(t, replacement.ver, pool.ver)
+	require.False(t, client.closeAddrVer(addr, pool.ver))
+	require.NoError(t, client.Close())
+	require.False(t, client.closeAddrVer(addr, math.MaxUint64))
+}
