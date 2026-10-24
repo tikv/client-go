@@ -1870,8 +1870,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	// Once the txn safe point passes the start ts, GC may have removed the versions the prewrite would conflict with.
-	if err = c.store.CheckVisibility(c.startTS); err != nil {
-		return err
+	// A pipelined txn checks it after its flushes finish, so that cleanup cannot race with a flush.
+	if !c.txn.IsPipelined() {
+		if err = c.store.CheckVisibility(c.startTS); err != nil {
+			return err
+		}
 	}
 
 	if c.sessionID > 0 {
@@ -1895,6 +1898,9 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if len(c.pipelinedCommitInfo.pipelinedStart) == 0 || len(c.pipelinedCommitInfo.pipelinedEnd) == 0 {
 			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
 				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
+		}
+		if err = c.store.CheckVisibility(c.startTS); err != nil {
+			return err
 		}
 		return c.commitFlushedMutations(bo)
 	}
