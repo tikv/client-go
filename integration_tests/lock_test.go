@@ -1024,9 +1024,9 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 	config.StoreGlobalConfig(&testConf)
 	defer config.StoreGlobalConfig(&originalConf)
 
-	// Prewrite all keys but commit only the primary key. The secondary locks stay
-	// unresolved and become the inputs to ResolveLocksWithOpts below.
-	prepareTxn := func(primary []byte, secondaryKeys [][]byte, txnSize int) (uint64, uint64, []*txnkv.Lock) {
+	// Prewrite all keys but commit or roll back only the primary key. The
+	// secondary locks stay unresolved and become the inputs to ResolveLocksWithOpts below.
+	prepareTxn := func(primary []byte, secondaryKeys [][]byte, txnSize int, rollback bool) (uint64, uint64, []*txnkv.Lock) {
 		txn, err := s.store.Begin()
 		s.Nil(err)
 		s.Nil(txn.Set(primary, []byte("primary_value")))
@@ -1041,10 +1041,22 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 		committer.SetLockTTL(3000)
 		s.Nil(committer.PrewriteAllMutations(context.Background()))
 
-		commitTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-		s.Nil(err)
-		committer.SetCommitTS(commitTS)
-		s.Nil(committer.CommitMutations(context.Background()))
+		var commitTS uint64
+		if rollback {
+			mutations := committer.GetMutations()
+			for i := 0; i < mutations.Len(); i++ {
+				if bytes.Equal(mutations.GetKey(i), primary) {
+					committer.SetMutations(mutations.Slice(i, i+1))
+					break
+				}
+			}
+			s.Nil(committer.CleanupMutations(context.Background()))
+		} else {
+			commitTS, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			s.Nil(err)
+			committer.SetCommitTS(commitTS)
+			s.Nil(committer.CommitMutations(context.Background()))
+		}
 
 		locks := make([]*txnkv.Lock, 0, len(secondaryKeys))
 		for _, key := range secondaryKeys {
@@ -1059,7 +1071,7 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 		}
 	}
 
-	runCase := func(name string, forRead bool) {
+	runCase := func(name string, forRead, rollback bool) {
 		s.Run(name, func() {
 			key := func(suffix string) []byte {
 				return s.key(fmt.Sprintf("batch_lite_%s_%s", name, suffix))
@@ -1085,6 +1097,7 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 				key("multi_primary"),
 				multiKeyTxnKeys,
 				len(multiKeyTxnKeys)+1,
+				rollback,
 			)
 
 			// A small transaction with one lock. It should keep the old
@@ -1094,6 +1107,7 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 				key("single_primary"),
 				singleKeyTxnKeys,
 				len(singleKeyTxnKeys)+1,
+				rollback,
 			)
 
 			// A large transaction. It should bypass the batched-lite path and
@@ -1103,6 +1117,7 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 				key("region_primary"),
 				regionLevelTxnKeys,
 				int(resolveLiteThreshold)+1,
+				rollback,
 			)
 
 			// Pin the resolver branch condition directly on the Lock inputs.
@@ -1175,9 +1190,16 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 			}
 
 			bo := tikv.NewBackofferWithVars(ctx, getMaxBackoff, nil)
-			locks := make([]*txnkv.Lock, 0, len(multiKeyLocks)+len(singleKeyLocks)+len(regionLevelLocks))
+			locks := make([]*txnkv.Lock, 0, 2*(len(multiKeyLocks)+len(singleKeyLocks))+len(regionLevelLocks))
 			locks = append(locks, multiKeyLocks...)
 			locks = append(locks, singleKeyLocks...)
+			// BatchGet can return the same lock more than once. Use separate key
+			// allocations to verify deduplication by value, including the first key.
+			for _, lock := range locks {
+				duplicate := *lock
+				duplicate.Key = bytes.Clone(lock.Key)
+				locks = append(locks, &duplicate)
+			}
 			locks = append(locks, regionLevelLocks...)
 			if forRead {
 				resolver.SetAsyncResolveContext(ctx)
@@ -1288,8 +1310,10 @@ func (s *testLockSuite) TestBatchLiteResolveLocksByRegion() {
 		})
 	}
 
-	runCase("write", false)
-	runCase("for_read", true)
+	runCase("write", false, false)
+	runCase("for_read", true, false)
+	runCase("write_rollback", false, true)
+	runCase("for_read_rollback", true, true)
 }
 
 func (s *testLockSuite) TestBatchLiteResolveLocksForReadIgnoresInlineCleanupError() {
