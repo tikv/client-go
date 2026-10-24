@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -381,6 +382,100 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommitErrors() {
 			s.Equal(value, result.Value)
 		})
 	}
+}
+
+type blockFlushClient struct {
+	tikv.Client
+	flushing     chan struct{}
+	release      chan struct{}
+	flushDone    chan struct{}
+	resolved     chan struct{}
+	once         sync.Once
+	resolvedOnce sync.Once
+}
+
+func (c *blockFlushClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type == tikvrpc.CmdBroadcastTxnStatus {
+		return &tikvrpc.Response{Resp: &kvrpcpb.BroadcastTxnStatusResponse{}}, nil
+	}
+	if req.Type == tikvrpc.CmdResolveLock {
+		defer c.resolvedOnce.Do(func() { close(c.resolved) })
+	}
+	if req.Type != tikvrpc.CmdFlush {
+		return c.Client.SendRequest(ctx, addr, req, timeout)
+	}
+	first := false
+	c.once.Do(func() { first = true })
+	if !first {
+		return c.Client.SendRequest(ctx, addr, req, timeout)
+	}
+	close(c.flushing)
+	<-c.release
+	defer close(c.flushDone)
+	return c.Client.SendRequest(ctx, addr, req, timeout)
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedCommitAfterTxnSafePointWaitsForFlush() {
+	originalClient := s.store.GetTiKVClient()
+	client := &blockFlushClient{
+		Client:    originalClient,
+		flushing:  make(chan struct{}),
+		release:   make(chan struct{}),
+		flushDone: make(chan struct{}),
+		resolved:  make(chan struct{}),
+	}
+	s.store.SetTiKVClient(client)
+	defer s.store.SetTiKVClient(originalClient)
+
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
+	s.Require().NoError(err)
+	keys := [][]byte{s.key("txn_safe_point_a"), s.key("txn_safe_point_b")}
+	for _, key := range keys {
+		s.Require().NoError(txn.Set(key, []byte("value")))
+	}
+	flushed, err := txn.GetMemBuffer().Flush(true)
+	s.Require().NoError(err)
+	s.Require().True(flushed)
+	<-client.flushing
+
+	s.store.UpdateTxnSafePointCache(txn.StartTS()+1, time.Now())
+	commitDone := make(chan error, 1)
+	go func() { commitDone <- txn.Commit(context.Background()) }()
+	select {
+	case err = <-commitDone:
+		// Let the flush land only after the cleanup has resolved the locks.
+		select {
+		case <-client.resolved:
+		case <-time.After(5 * time.Second):
+		}
+		close(client.release)
+	case <-time.After(200 * time.Millisecond):
+		close(client.release)
+		err = <-commitDone
+	}
+	<-client.flushDone
+	transaction.TxnProbe{KVTxn: txn}.GetCommitter().WaitCleanup()
+	_, ok := errors.Cause(err).(*tikverr.ErrTxnAbortedByGC)
+	s.True(ok, errors.WithStack(err))
+
+	// The flushed locks must be rolled back by the cleanup.
+	s.Eventually(func() bool {
+		ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+		s.Require().NoError(err)
+		bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
+		for _, key := range keys {
+			loc, err := s.store.GetRegionCache().LocateKey(bo, key)
+			s.Require().NoError(err)
+			req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key, Version: ver})
+			resp, err := s.store.SendReq(bo, req, loc.Region, tikv.ReadTimeoutShort)
+			s.Require().NoError(err)
+			getResp := resp.Resp.(*kvrpcpb.GetResponse)
+			if getResp.GetError() != nil || len(getResp.GetValue()) != 0 {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 50*time.Millisecond, "the flushed locks are left behind")
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
