@@ -1834,11 +1834,6 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 
-	// Once the txn safe point passes the start ts, GC may have removed the versions the prewrite would conflict with.
-	if err = c.store.CheckVisibility(c.startTS); err != nil {
-		return err
-	}
-
 	// TODO(youjiali1995): It's better to use different maxSleep for different operations
 	// and distinguish permanent errors from temporary errors, for example:
 	//   - If all PDs are down, all requests to PD will fail due to network error.
@@ -1872,6 +1867,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if err = c.calculateMaxCommitTS(ctx); err != nil {
 			return err
 		}
+	}
+
+	// Once the txn safe point passes the start ts, GC may have removed the versions the prewrite would conflict with.
+	if err = c.store.CheckVisibility(c.startTS); err != nil {
+		return err
 	}
 
 	if c.sessionID > 0 {

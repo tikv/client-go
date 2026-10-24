@@ -757,10 +757,6 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 
 	logutil.Logger(ctx).Debug("execute txn file", zap.Uint64("startTS", c.startTS))
 
-	if err = c.store.CheckVisibility(c.startTS); err != nil {
-		return
-	}
-
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
 
 	rcReq := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{
@@ -788,6 +784,10 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	err = c.preSplitTxnFileRegions(buildBo)
 	stepDone("pre-split")
 	if err != nil {
+		return
+	}
+
+	if err = c.store.CheckVisibility(c.startTS); err != nil {
 		return
 	}
 
