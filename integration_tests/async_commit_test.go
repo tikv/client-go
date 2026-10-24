@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -673,4 +674,39 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLifecycleHooks() {
 	s.Equal(reachedPre.Load(), true)
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
+}
+
+func (s *testAsyncCommitSuite) TestCommitTSUpperBoundCheckAfterMinCommitTSPushed() {
+	key := s.key("commit_ts_upper_bound")
+	txn := s.begin()
+	s.Nil(txn.Set(key, []byte("v")))
+	var checks atomic.Int32
+	txn.SetCommitTSUpperBoundCheck(func(uint64) bool {
+		return checks.Add(1) == 1
+	})
+	var commits atomic.Int32
+	reachedCommit := make(chan struct{})
+	pushed := make(chan struct{})
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("hold-first-commit", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdCommit && commits.Add(1) == 1 {
+				close(reachedCommit)
+				<-pushed
+			}
+			return next(target, req)
+		}
+	}))
+	commitDone := make(chan error, 1)
+	go func() { commitDone <- txn.Commit(context.Background()) }()
+	<-reachedCommit
+
+	// The reader pushes the min commit ts of the lock past the commit ts, so TiKV rejects the commit.
+	_, err := s.begin().Get(context.Background(), key)
+	s.True(tikverr.IsErrNotFound(err), errors.WithStack(err))
+	close(pushed)
+
+	err = <-commitDone
+	s.ErrorContains(err, "check commit ts upper bound fail")
+	s.Equal(int32(1), commits.Load())
+	s.Equal(int32(2), checks.Load())
 }
