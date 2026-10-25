@@ -698,7 +698,11 @@ func (s *testAsyncCommitSuite) TestCommitTSUpperBoundCheckAfterMinCommitTSPushed
 	}))
 	commitDone := make(chan error, 1)
 	go func() { commitDone <- txn.Commit(context.Background()) }()
-	<-reachedCommit
+	select {
+	case <-reachedCommit:
+	case err := <-commitDone:
+		s.FailNow("commit returned before its first Commit RPC", "%v", err)
+	}
 
 	// The reader pushes the min commit ts of the lock past the commit ts, so TiKV rejects the commit.
 	_, err := s.begin().Get(context.Background(), key)
