@@ -16,7 +16,6 @@ package locate
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -54,9 +53,10 @@ type replicaSelector struct {
 	// request's group pinned the selector there. Re-decided per attempt, since
 	// the probe or exhaustion may move a pinned retry off the leader.
 	pinnedToOverloadedLeader bool
-	// Set by pinRetryToLeader once a reply blamed the request's own group. It
-	// is what marks the pinned retries, so their latency stays out of the
-	// store's slow score the same way the first steered attempt's does.
+	// Set by pinRetryToLeader once a busy or timed-out attempt landed on a
+	// store whose health feedback blames the request's own group. It is what
+	// marks the pinned retries, so their latency stays out of the store's slow
+	// score the same way the first steered attempt's does.
 	pinnedByNoisyReply bool
 }
 
@@ -654,15 +654,6 @@ func (s *replicaSelector) onRegionNotFound(
 // cached leader within one selector that triggers a suspect-not-leader probe.
 const leaderBusyProbeThreshold = 2
 
-// Kept in step with NOISY_TENANT_REASON_SUFFIX in TiKV's resource_control crate.
-const noisyTenantReasonSuffix = "|noisy_tenant"
-
-// Whether TiKV blamed this request's own resource group for the overload.
-func isNoisyTenantBusy(serverIsBusy *errorpb.ServerIsBusy) bool {
-	return serverIsBusy != nil &&
-		strings.HasSuffix(serverIsBusy.GetReason(), noisyTenantReasonSuffix)
-}
-
 // Backs off and returns to the leader: a follower read comes back to this same
 // leader as a ReadIndex, and the store is not slow, one tenant is over quota.
 func (s *replicaSelector) onNoisyTenantServerIsBusy(
@@ -671,11 +662,6 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	metrics.TiKVNoisyTenantServerBusyCounter.Inc()
 	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
 	// store with no group dimension.
-	//
-	// The error names this request's own group as the cause, so its retries
-	// are pinned here and now rather than waiting for the store's next health
-	// feedback to say the same thing. Only this request: a rejection carries
-	// no group set, so others are steered once health feedback names the group.
 	s.pinRetryToLeader(req)
 	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
 	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
@@ -686,10 +672,10 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 
 // Whether the store this attempt targeted blames the request's own resource
 // group, as last reported in that store's health feedback. That report is the
-// only attribution available when a request times out locally, since no
-// response carrying a reason ever arrives. It has to be recent: a timeout on a
-// disk or network stall must not renew an overload the store diagnosed and
-// has since stopped reporting.
+// only attribution there is: a busy reply carries no group, and a local
+// timeout brings no reply at all. It has to be recent: a timeout on a disk or
+// network stall must not renew an overload the store diagnosed and has since
+// stopped reporting.
 func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
 	if req == nil || s.target == nil || s.target.store == nil {
 		return false
@@ -743,15 +729,16 @@ func (s *replicaSelector) onNoisyTenantTimeout(
 	return true, nil
 }
 
-// onServerIsBusy handles a ServerIsBusy region error. A reply that blames the
-// request's own resource group goes to onNoisyTenantServerIsBusy, which pins
-// the retry to the leader. Any other reply keeps upstream's handling: the
-// store's load and health are updated, the target is flagged busy, and the
-// request is retried either at once or after a backoff.
+// onServerIsBusy handles a ServerIsBusy region error. A reply from a store
+// whose health feedback blames the request's own resource group goes to
+// onNoisyTenantServerIsBusy, which pins the retry to the leader. Any other
+// reply keeps upstream's handling: the store's load and health are updated,
+// the target is flagged busy, and the request is retried either at once or
+// after a backoff.
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	if isNoisyTenantBusy(serverIsBusy) {
+	if s.targetBlamesRequestGroup(req) {
 		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
 	}
 	var store *Store
