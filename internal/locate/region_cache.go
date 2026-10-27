@@ -347,6 +347,12 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 	var leaderAccessIdx AccessIndex
 	availablePeers := r.meta.GetPeers()[:0]
 	for _, p := range r.meta.Peers {
+		// A witness may temporarily lead Raft recovery, but it cannot serve data
+		// requests. Exclude it before resolving its store, even when PD reports
+		// it as the leader, and probe the remaining data peers instead.
+		if p.IsWitness {
+			continue
+		}
 		store, exists := c.stores.get(p.StoreId)
 		if !exists {
 			store = c.stores.getOrInsertDefault(p.StoreId)
@@ -362,13 +368,6 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*R
 
 		// Filter out the peer on a tombstone or down store.
 		if addr == "" || slices.ContainsFunc(pdRegion.DownPeers, func(dp *metapb.Peer) bool { return isSamePeer(dp, p) }) {
-			continue
-		}
-
-		// Since the witness is read-write prohibited, it does not make sense to send requests to it
-		// unless it is the leader. When it is the leader and transfer leader encounters a problem,
-		// the backoff timeout will be triggered, and the client can give a more accurate error message.
-		if p.IsWitness && !isSamePeer(p, leader) {
 			continue
 		}
 
@@ -911,8 +910,8 @@ func WithMatchStores(stores []uint64) StoreSelectorOption {
 	}
 }
 
-// GetTiKVRPCContext returns RPCContext for a region. If it returns nil, the region
-// must be out of date and already dropped from cache.
+// GetTiKVRPCContext returns RPCContext for a region. It returns nil when the
+// region has no available TiKV data peer or its cached metadata is out of date.
 func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, replicaRead kv.ReplicaReadType, followerStoreSeed uint32, opts ...StoreSelectorOption) (*RPCContext, error) {
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
@@ -920,6 +919,9 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	}
 
 	regionStore := cachedRegion.getStore()
+	if regionStore.accessStoreNum(tiKVOnly) == 0 {
+		return nil, nil
+	}
 	var (
 		store     *Store
 		peer      *metapb.Peer
@@ -1844,6 +1846,11 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 	}
 
 	rs := r.getStore()
+	if ctx.AccessIdx < 0 || int(ctx.AccessIdx) >= rs.accessStoreNum(ctx.AccessMode) {
+		// Filtering unavailable peers can change the access mode's length
+		// without changing the total peer count. This RPC context is stale.
+		return
+	}
 
 	if err != nil {
 		storeIdx, s := rs.accessStore(ctx.AccessMode, ctx.AccessIdx)
@@ -2088,6 +2095,16 @@ func (c *RegionCache) UpdateLeader(regionID RegionVerID, leader *metapb.Peer, cu
 		return
 	}
 
+	if leader.GetIsWitness() {
+		// A witness hint can also reveal that a cached data peer changed roles.
+		// Refresh that stale metadata, but keep already filtered data peers usable
+		// while a witness temporarily leads recovery.
+		if _, found := r.getPeerStoreIndex(leader); found {
+			r.invalidate(StoreNotFound)
+		}
+		return
+	}
+
 	if leader == nil {
 		rs := r.getStore()
 		rs.switchNextTiKVPeer(r, currentPeerIdx)
@@ -2160,7 +2177,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		// in the region and the leader info in PD is stale until requests are sent to followers or hibernate timeout.
 		// To solve it, one solution is always to try a different peer if the invalid reason of the old cached region is no-leader.
 		// There is a small probability that the current peer who reports no-leader becomes a leader and TiDB has to retry once in this case.
-		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader {
+		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader && store.accessStoreNum(tiKVOnly) > 0 {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
@@ -3216,20 +3233,26 @@ func (r *Region) getPeerStoreIndex(peer *metapb.Peer) (idx int, found bool) {
 }
 
 // switchWorkLeaderToPeer switches current store to the one on specific store. It returns
-// false if no peer matches the peer.
+// false if no data peer matches the peer.
 func (r *Region) switchWorkLeaderToPeer(peer *metapb.Peer) (found bool) {
+	if peer.GetIsWitness() {
+		return false
+	}
 	globalStoreIdx, found := r.getPeerStoreIndex(peer)
-	if !found {
-		return
+	if !found || r.meta.Peers[globalStoreIdx].GetIsWitness() {
+		return false
 	}
 retry:
 	// switch to new leader.
 	oldRegionStore := r.getStore()
-	var leaderIdx AccessIndex
+	leaderIdx := AccessIndex(-1)
 	for i, gIdx := range oldRegionStore.accessIndex[tiKVOnly] {
 		if gIdx == globalStoreIdx {
 			leaderIdx = AccessIndex(i)
 		}
+	}
+	if leaderIdx < 0 {
+		return false
 	}
 	if oldRegionStore.workTiKVIdx == leaderIdx {
 		return
@@ -3251,7 +3274,7 @@ func (r *regionStore) switchNextFlashPeer(rr *Region, currentPeerIdx AccessIndex
 }
 
 func (r *regionStore) switchNextTiKVPeer(rr *Region, currentPeerIdx AccessIndex) {
-	if r.workTiKVIdx != currentPeerIdx {
+	if r.workTiKVIdx != currentPeerIdx || r.accessStoreNum(tiKVOnly) == 0 {
 		return
 	}
 	nextIdx := (currentPeerIdx + 1) % AccessIndex(r.accessStoreNum(tiKVOnly))

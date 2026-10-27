@@ -800,6 +800,14 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 	if leader == nil {
 		return -1
 	}
+	if leader.IsWitness {
+		// A hint for an already filtered witness does not require PD access.
+		// If it identifies a cached data peer, its role metadata is stale.
+		if _, found := s.region.getPeerStoreIndex(leader); found {
+			s.region.invalidate(StoreNotFound)
+		}
+		return -1
+	}
 	for i, replica := range s.replicas {
 		if isSamePeer(replica.peer, leader) {
 			// If hibernate region is enabled and the leader is not reachable, the raft group
@@ -809,11 +817,12 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 			if replica.store.getLivenessState() != reachable {
 				return -1
 			}
-			replica.onUpdateLeader()
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
-				panic("the store must exist")
+				s.region.invalidate(StoreNotFound)
+				return -1
 			}
+			replica.onUpdateLeader()
 			logutil.BgLogger().Debug(
 				"switch region leader to specific leader due to kv return NotLeader",
 				zap.Uint64("regionID", s.region.GetID()),
@@ -1969,8 +1978,13 @@ func (s *RegionRequestSender) onRegionError(
 			}
 			return false, nil
 		} else {
-			// don't backoff if a new leader is returned.
 			s.regionCache.UpdateLeader(ctx.Region, notLeader.GetLeader(), ctx.AccessIdx)
+			if notLeader.GetLeader().GetIsWitness() {
+				// A witness leader cannot serve this request; wait for a data leader.
+				err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("witness leader", ctx))
+				return err == nil, err
+			}
+			// Don't backoff if a data leader is returned.
 			return true, nil
 		}
 	}
