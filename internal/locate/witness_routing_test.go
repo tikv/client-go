@@ -337,17 +337,32 @@ func TestWitnessRegionWithOnlyColumnarDataPeerHasNoTiKVTarget(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
+	// Start with only one available Full peer and retain its in-flight context.
+	s.cache.SetRegionCacheStore(s.storeIDs[2], "store3", "", tikvrpc.TiFlash, uint64(resolved), nil)
+	oldMeta, leader, _, _ := s.cluster.GetRegionByID(s.regionID)
+	oldMeta.Peers[2].Role = metapb.PeerRole_Learner
+	oldRegion, err := newRegion(s.bo, s.cache, &router.Region{Meta: oldMeta, Leader: leader, DownPeers: oldMeta.Peers[1:]})
+	s.Require().NoError(err)
+	s.cache.insertRegionToCache(oldRegion, true, true)
+	oldCtx, err := s.cache.GetTiKVRPCContext(s.bo, oldRegion.VerID(), kv.ReplicaReadLeader, 0)
+	s.Require().NoError(err)
+	s.Require().NotNil(oldCtx)
+	s.Len(oldCtx.Meta.Peers, 1)
+
 	meta, _, _, _ := s.cluster.GetRegionByID(s.regionID)
 	witness := meta.Peers[0]
 	witness.IsWitness = true
 	meta.Peers[1].IsWitness = true
 	meta.Peers[2].Role = metapb.PeerRole_Learner
-	s.cache.SetRegionCacheStore(s.storeIDs[2], "store3", "", tikvrpc.TiFlash, uint64(resolved), nil)
-	s.getRegion().invalidate(NoLeader)
+	oldRegion.invalidate(NoLeader)
 	r, err := newRegion(s.bo, s.cache, &router.Region{Meta: meta, Leader: witness})
 	s.Require().NoError(err)
 	s.cache.insertRegionToCache(r, true, true)
 	s.False(r.switchWorkLeaderToPeer(r.meta.Peers[0]))
+	// Legacy callbacks must also tolerate the loss of all TiKV candidates,
+	// even though the filtered Region still has the same total peer count.
+	s.cache.UpdateLeader(r.VerID(), nil, 0)
+	s.cache.OnSendFail(s.bo, oldCtx, false, errors.New("Full peer became unavailable"))
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{})
 	selector, err := newReplicaSelector(s.cache, r.VerID(), req)

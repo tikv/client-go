@@ -1923,6 +1923,11 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 	}
 
 	rs := r.getStore()
+	if ctx.AccessIdx < 0 || int(ctx.AccessIdx) >= rs.accessStoreNum(ctx.AccessMode) {
+		// Filtering unavailable peers can change the access mode's length
+		// without changing the total peer count. This RPC context is stale.
+		return
+	}
 
 	if err != nil {
 		storeIdx, s := rs.accessStore(ctx.AccessMode, ctx.AccessIdx)
@@ -3351,7 +3356,7 @@ func (r *regionStore) switchNextFlashPeer(rr *Region, currentPeerIdx AccessIndex
 }
 
 func (r *regionStore) switchNextTiKVPeer(rr *Region, currentPeerIdx AccessIndex) {
-	if r.workTiKVIdx != currentPeerIdx {
+	if r.workTiKVIdx != currentPeerIdx || r.accessStoreNum(tiKVOnly) == 0 {
 		return
 	}
 	nextIdx := (currentPeerIdx + 1) % AccessIndex(r.accessStoreNum(tiKVOnly))
