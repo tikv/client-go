@@ -530,10 +530,10 @@ func (s ReplicaSelectLeaderWithProxyStrategy) isCandidate(r *replica, isLeader b
 func (s *replicaSelector) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
-	if s.target != nil {
+	leader := notLeader.GetLeader()
+	if s.target != nil && !leader.GetIsWitness() {
 		s.target.addFlag(notLeaderFlag)
 	}
-	leader := notLeader.GetLeader()
 	if leader == nil || leader.IsWitness {
 		// A witness may temporarily lead recovery, but only a data peer can
 		// serve the request. Use the election backoff instead of following it.
@@ -542,8 +542,7 @@ func (s *replicaSelector) onNotLeader(
 		if leader.GetIsWitness() && s.region.isValid() && s.target != nil && !s.target.peer.IsWitness {
 			// This data peer answered while the witness is recovering the group.
 			// Keep it retryable without a PD reload. Undo only this NotLeader
-			// attempt; transport failures, elapsed time and other flags still count.
-			s.target.deleteFlag(notLeaderFlag)
+			// attempt; transport failures, elapsed time and prior flags still count.
 			if s.target.attempts > 0 {
 				s.target.attempts--
 			}
