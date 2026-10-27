@@ -1,6 +1,7 @@
 package art
 
 import (
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -263,6 +264,44 @@ func TestLCP(t *testing.T) {
 	k2 := []byte{1, 2, 3, 4, 5, 7, 7, 8}
 	for i := 0; i < 6; i++ {
 		require.Equal(t, uint32(5-i), longestCommonPrefix(k1, k2, uint32(i)))
+	}
+}
+
+func TestLCPHeapAllocationBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		key1, key2 string
+		depth      uint32
+		want       uint32
+	}{
+		{name: "empty keys"},
+		{name: "empty key", key2: "abcdefgh"},
+		{name: "exhausted depth", key1: "abcdefgh", key2: "abcdefgh", depth: 8},
+		{name: "less than one chunk", key1: "abcdefg", key2: "abcdefg", want: 7},
+		{name: "equal one chunk", key1: "abcdefgh", key2: "abcdefgh", want: 8},
+		{name: "equal two chunks", key1: "abcdefghijklmnop", key2: "abcdefghijklmnop", want: 16},
+		{name: "one chunk prefix", key1: "abcdefgh", key2: "abcdefghi", want: 8},
+		{name: "two chunk prefix", key1: "abcdefghijklmnop", key2: "abcdefghijklmnopq", want: 16},
+		{name: "nonzero depth", key1: "abcdefghijklmnop", key2: "abcdefghijklmnop", depth: 8, want: 8},
+		{name: "unaligned depth", key1: "abcdefghi", key2: "abcdefghi", depth: 1, want: 8},
+		{name: "matching tail", key1: "abcdefghi", key2: "abcdefghi", want: 9},
+		{name: "mismatching tail", key1: "abcdefghi", key2: "abcdefghj", want: 8},
+		{name: "mismatching chunk", key1: "abcdefghijklmnop", key2: "abcdefghijklmnoq", want: 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key1, key2 := make(artKey, len(tt.key1)), make(artKey, len(tt.key2))
+			copy(key1, tt.key1)
+			copy(key2, tt.key2)
+			// Capture the keys in an escaping closure to force heap allocation.
+			// Stack allocation can hide pointers advancing past an allocation.
+			t.Cleanup(func() {
+				runtime.KeepAlive(key1)
+				runtime.KeepAlive(key2)
+			})
+			require.Equal(t, tt.want, longestCommonPrefix(key1, key2, tt.depth))
+			require.Equal(t, tt.want, longestCommonPrefix(key2, key1, tt.depth))
+		})
 	}
 }
 
