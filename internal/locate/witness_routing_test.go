@@ -235,6 +235,17 @@ func TestWitnessLeaderHintDoesNotResetOtherRetryBudgets(t *testing.T) {
 	s.True(target.hasFlag(serverIsBusyFlag))
 	s.False(target.hasFlag(notLeaderFlag))
 	s.Equal(1, bo.GetBackoffTimes()["regionScheduling"])
+
+	// A previous NotLeader result must not be cleared by the recovery retry.
+	target.addFlag(notLeaderFlag)
+	target.attempts++
+	shouldRetry, err = selector.onNotLeader(bo, ctx, &errorpb.NotLeader{Leader: witness})
+	s.NoError(err)
+	s.True(shouldRetry)
+	s.Equal(3, target.attempts)
+	s.Equal(time.Second, target.attemptedTime)
+	s.True(target.hasFlag(serverIsBusyFlag))
+	s.True(target.hasFlag(notLeaderFlag))
 }
 
 func TestWitnessLeaderHintRefreshesStaleDataPeerRole(t *testing.T) {
