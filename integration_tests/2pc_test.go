@@ -1611,6 +1611,21 @@ func (s *testCommitterSuite) TestAggressiveLockingExitIfInapplicable() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingExitOnFirstAttemptLocksAllKeys() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, s.key("k1"), s.key("k2")))
+	s.False(txn.IsInAggressiveLockingMode())
+	s.checkIsKeyLocked(s.key("k1"), true)
+	s.checkIsKeyLocked(s.key("k2"), true)
+
+	s.NoError(txn.Rollback())
+	s.checkIsKeyLocked(s.key("k1"), false)
+	s.checkIsKeyLocked(s.key("k2"), false)
+}
+
 func (s *testCommitterSuite) TestAggressiveLockingExitKeepsLocksOfLastAttempt() {
 	txn := s.begin()
 	txn.SetPessimistic(true)
