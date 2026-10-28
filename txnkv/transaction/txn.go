@@ -1324,17 +1324,14 @@ func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) *s
 		key := []byte(keyStr)
 		keys = append(keys, key)
 	}
-	if len(keys) != 0 {
-		// The committer must have been initialized if some keys are locked
-		forUpdateTS := txn.committer.forUpdateTS
-		if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
-			forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
-		}
-		wg := txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
-		txn.lockedCnt -= len(keys)
-		return wg
+	// The committer must have been initialized if some keys are locked
+	forUpdateTS := txn.committer.forUpdateTS
+	if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
+		forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 	}
-	return nil
+	wg := txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
+	txn.lockedCnt -= len(keys)
+	return wg
 }
 
 func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]byte) ([][]byte, error) {
@@ -1423,7 +1420,7 @@ func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockC
 				break
 			}
 		}
-		if wg := txn.doneAggressiveLocking(); relock && wg != nil {
+		if wg := txn.doneAggressiveLocking(); relock {
 			wg.Wait()
 		}
 	}
