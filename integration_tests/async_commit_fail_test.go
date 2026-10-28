@@ -348,10 +348,11 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 
 type maxTxnTimeExpiredOracle struct {
 	oracle.Oracle
+	expired func() bool
 }
 
 func (o maxTxnTimeExpiredOracle) IsExpired(lockTS, ttl uint64, opt *oracle.Option) bool {
-	if ttl == transaction.MaxTxnTimeUse {
+	if ttl == transaction.MaxTxnTimeUse && o.expired() {
 		return true
 	}
 	return o.Oracle.IsExpired(lockTS, ttl, opt)
@@ -359,7 +360,7 @@ func (o maxTxnTimeExpiredOracle) IsExpired(lockTS, ttl uint64, opt *oracle.Optio
 
 func (s *testAsyncCommitFailSuite) TestAsyncCommitTooOldTxnNotPrewritten() {
 	baseOracle := s.store.GetOracle()
-	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle})
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: func() bool { return true }})
 	defer s.store.SetOracle(baseOracle)
 
 	txn := s.beginAsyncCommit()
@@ -382,4 +383,31 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitTooOldTxnNotPrewritten() {
 	s.store.SetOracle(baseOracle)
 	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("a"))
 	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("b"))
+}
+
+func (s *testAsyncCommitFailSuite) TestAsyncCommitTxnTooOldAfterPrewriteIsCommitted() {
+	var prewritten atomic.Bool
+	baseOracle := s.store.GetOracle()
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: prewritten.Load})
+	defer s.store.SetOracle(baseOracle)
+
+	txn := s.beginAsyncCommit()
+	s.Nil(txn.Set(s.key("a"), []byte("a")))
+	s.Nil(txn.Set(s.key("b"), []byte("b")))
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("mark-prewritten", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if req.Type == tikvrpc.CmdPrewrite {
+				prewritten.Store(true)
+			}
+			return resp, err
+		}
+	}))
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	s.Nil(txn.Commit(ctx))
+	s.True(txn.GetCommitter().IsAsyncCommit())
+
+	s.store.SetOracle(baseOracle)
+	s.mustGetFromSnapshot(math.MaxUint64, s.key("a"), []byte("a"))
+	s.mustGetFromSnapshot(math.MaxUint64, s.key("b"), []byte("b"))
 }
