@@ -50,15 +50,9 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 	collectF func(k []byte, v kv.ValueEntry),
 ) (err error) {
 	var (
-<<<<<<< HEAD
-		runloop   = async.NewRunLoop()
-		completed = 0
-=======
 		runloop      = async.NewRunLoop()
 		completed    = 0
 		retryWorkers sync.WaitGroup
-		lastForkedBo *retry.Backoffer
->>>>>>> 01294c01 (txnkv: wait for async BatchGet retry processing on cancel (#2074))
 	)
 	runloop.Pool = &poolWrapper{pool: s.store}
 	forkedBo, cancel := bo.Fork()
@@ -88,16 +82,10 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			break
 		}
 	}
-<<<<<<< HEAD
-=======
 	// Cancel any work that is still in flight, then wait until it can no longer
 	// collect results or update stats owned by this BatchGet request.
 	cancel()
 	retryWorkers.Wait()
-	if lastForkedBo != nil {
-		bo.UpdateUsingForked(lastForkedBo)
-	}
->>>>>>> 01294c01 (txnkv: wait for async BatchGet retry processing on cancel (#2074))
 	return err
 }
 
