@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -48,9 +49,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -341,4 +344,70 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 	s.ErrorIs(err, context.Canceled)
 	s.False(txn.GetCommitter().IsAsyncCommit())
 	s.Nil(txn.GetCommitter().GetUndeterminedErr())
+}
+
+type maxTxnTimeExpiredOracle struct {
+	oracle.Oracle
+	expired func() bool
+}
+
+func (o maxTxnTimeExpiredOracle) IsExpired(lockTS, ttl uint64, opt *oracle.Option) bool {
+	if ttl == transaction.MaxTxnTimeUse && o.expired() {
+		return true
+	}
+	return o.Oracle.IsExpired(lockTS, ttl, opt)
+}
+
+func (s *testAsyncCommitFailSuite) TestAsyncCommitTooOldTxnNotPrewritten() {
+	baseOracle := s.store.GetOracle()
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: func() bool { return true }})
+	defer s.store.SetOracle(baseOracle)
+
+	txn := s.beginAsyncCommit()
+	s.Nil(txn.Set(s.key("a"), []byte("a")))
+	s.Nil(txn.Set(s.key("b"), []byte("b")))
+	var prewrites atomic.Int32
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("count-prewrite", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdPrewrite {
+				prewrites.Add(1)
+			}
+			return next(target, req)
+		}
+	}))
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	err := txn.Commit(ctx)
+	s.ErrorContains(err, "txn takes too much time")
+	s.Equal(int32(0), prewrites.Load())
+
+	s.store.SetOracle(baseOracle)
+	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("a"))
+	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("b"))
+}
+
+func (s *testAsyncCommitFailSuite) TestAsyncCommitTxnTooOldAfterPrewriteIsCommitted() {
+	var prewritten atomic.Bool
+	baseOracle := s.store.GetOracle()
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: prewritten.Load})
+	defer s.store.SetOracle(baseOracle)
+
+	txn := s.beginAsyncCommit()
+	s.Nil(txn.Set(s.key("a"), []byte("a")))
+	s.Nil(txn.Set(s.key("b"), []byte("b")))
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("mark-prewritten", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if req.Type == tikvrpc.CmdPrewrite {
+				prewritten.Store(true)
+			}
+			return resp, err
+		}
+	}))
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	s.Nil(txn.Commit(ctx))
+	s.True(txn.GetCommitter().IsAsyncCommit())
+
+	s.store.SetOracle(baseOracle)
+	s.mustGetFromSnapshot(math.MaxUint64, s.key("a"), []byte("a"))
+	s.mustGetFromSnapshot(math.MaxUint64, s.key("b"), []byte("b"))
 }
