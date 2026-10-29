@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -886,6 +887,7 @@ type batchCommandsStream struct {
 	tikvpb.Tikv_BatchCommandsClient
 	forwardedHost string
 	connIdx       string
+	keyspaceID    apicodec.KeyspaceID
 	maxRespReqID  atomic.Uint64
 }
 
@@ -917,6 +919,9 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 	if s.connIdx != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, batchConnIdxMetadataKey, s.connIdx)
 	}
+	if s.keyspaceID != apicodec.NullspaceID {
+		ctx = metadata.AppendToOutgoingContext(ctx, keyspaceIdMetadataKey, strconv.FormatUint(uint64(s.keyspaceID), 10))
+	}
 	streamClient, err := tikvClient.BatchCommands(ctx)
 	if err != nil {
 		return errors.WithStack(err)
@@ -930,6 +935,9 @@ type batchCommandsClient struct {
 	// The target host.
 	target  string
 	connIdx string
+
+	// keyspaceID is the keyspace ID
+	keyspaceID apicodec.KeyspaceID
 
 	conn *grpc.ClientConn
 	// client and forwardedClients are protected by tryLock.
@@ -1400,7 +1408,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 }
 
 func (c *batchCommandsClient) newBatchStream(forwardedHost string) (*batchCommandsStream, error) {
-	batchStream := &batchCommandsStream{forwardedHost: forwardedHost, connIdx: c.connIdx}
+	batchStream := &batchCommandsStream{forwardedHost: forwardedHost, connIdx: c.connIdx, keyspaceID: c.keyspaceID}
 	if err := batchStream.recreate(c.conn); err != nil {
 		return nil, err
 	}
