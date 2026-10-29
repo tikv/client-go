@@ -1243,6 +1243,12 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 // DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
 // these keys are locked in nomral way. If there's any unneeded locks, they will be released.
 func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
+	txn.doneAggressiveLocking()
+}
+
+// doneAggressiveLocking implements DoneAggressiveLocking. It returns the wait group of the release of the unneeded
+// locks, or nil if there are none.
+func (txn *KVTxn) doneAggressiveLocking() *sync.WaitGroup {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
@@ -1262,7 +1268,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 		txn.committer.reset()
 	}
 
-	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
+	wg := txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 
 	if txn.forUpdateTSChecks == nil {
 		txn.forUpdateTSChecks = make(map[string]uint64, len(txn.aggressiveLockingContext.currentLockedKeys))
@@ -1286,6 +1292,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 			txn.committer.maxLockedWithConflictTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 		}
 	}
+	return wg
 }
 
 // IsInAggressiveLockingMode checks if the transaction is currently in aggressive locking mode.
@@ -1308,24 +1315,23 @@ func (txn *KVTxn) mayAggressiveLockingLastLockedKeysExpire() bool {
 		time.Since(txn.aggressiveLockingContext.lastAttemptStartTime).Milliseconds() >= int64(ttl)
 }
 
-func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
+func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) *sync.WaitGroup {
 	if len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks) == 0 {
-		return
+		return nil
 	}
 	keys := make([][]byte, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
 	for keyStr := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
 		key := []byte(keyStr)
 		keys = append(keys, key)
 	}
-	if len(keys) != 0 {
-		// The committer must have been initialized if some keys are locked
-		forUpdateTS := txn.committer.forUpdateTS
-		if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
-			forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
-		}
-		txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
-		txn.lockedCnt -= len(keys)
+	// The committer must have been initialized if some keys are locked
+	forUpdateTS := txn.committer.forUpdateTS
+	if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
+		forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 	}
+	wg := txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
+	txn.lockedCnt -= len(keys)
+	return wg
 }
 
 func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]byte) ([][]byte, error) {
@@ -1405,7 +1411,18 @@ func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockC
 		// Then the previously-locked keys during execution in this statement (if any) will be turned into the state
 		// as if they were locked in normal way.
 		// Note that the issue https://github.com/pingcap/tidb/issues/35682 also exists here.
-		txn.DoneAggressiveLocking(ctx)
+		// If some of the keys locked in the previous attempt are going to be locked again, wait until they are
+		// released, otherwise the asynchronous release may remove the locks acquired below.
+		relock := false
+		for _, key := range keys {
+			if _, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
+				relock = true
+				break
+			}
+		}
+		if wg := txn.doneAggressiveLocking(); relock {
+			wg.Wait()
+		}
 	}
 	return nil
 }
