@@ -54,11 +54,14 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
@@ -1536,4 +1539,85 @@ func TestBatchPolicy(t *testing.T) {
 			require.Equal(t, trigger.opts, presetBatchPolicies[config.DefBatchPolicy])
 		}
 	})
+}
+
+func TestRecycleIdleConnArrayMetric(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 8
+	})()
+
+	client := NewRPCClient()
+	defer client.Close()
+
+	idleAddr, busyAddr := "127.0.0.1:6379", "127.0.0.1:6380"
+	idlePool, err := client.getConnPool(idleAddr, true)
+	require.NoError(t, err)
+	require.NotNil(t, idlePool.batchConn)
+	_, err = client.getConnPool(busyAddr, true)
+	require.NoError(t, err)
+
+	before := counterValue(t, metrics.TiKVBatchClientRecycledConnCounter)
+
+	// Nothing is idle yet, so nothing is recycled.
+	client.recycleIdleConnArray()
+	require.Equal(t, before, counterValue(t, metrics.TiKVBatchClientRecycledConnCounter))
+
+	atomic.StoreUint32(&idlePool.batchConn.idle, 1)
+	client.recycleIdleConnArray()
+	require.Equal(t, before+1, counterValue(t, metrics.TiKVBatchClientRecycledConnCounter))
+
+	client.RLock()
+	_, idleExists := client.connPools[idleAddr]
+	_, busyExists := client.connPools[busyAddr]
+	client.RUnlock()
+	require.False(t, idleExists)
+	require.True(t, busyExists)
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	var m dto.Metric
+	require.NoError(t, c.Write(&m))
+	return m.GetCounter().GetValue()
+}
+
+func TestCloseAddrVerReportsRemovedPool(t *testing.T) {
+	defer config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+	})()
+	client := NewRPCClient()
+	defer client.Close()
+	addr := "127.0.0.1:6379"
+	pool, err := client.getConnPool(addr, false)
+	require.NoError(t, err)
+
+	require.False(t, client.closeAddrVer(addr, pool.ver-1))
+	client.RLock()
+	current := client.connPools[addr]
+	client.RUnlock()
+	require.Same(t, pool, current)
+
+	var removed int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if client.closeAddrVer(addr, pool.ver) {
+				atomic.AddInt32(&removed, 1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.EqualValues(t, 1, removed)
+	require.False(t, client.closeAddrVer(addr, pool.ver))
+
+	replacement, err := client.getConnPool(addr, false)
+	require.NoError(t, err)
+	require.Greater(t, replacement.ver, pool.ver)
+	require.False(t, client.closeAddrVer(addr, pool.ver))
+	require.NoError(t, client.Close())
+	require.False(t, client.closeAddrVer(addr, math.MaxUint64))
 }

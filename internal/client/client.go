@@ -314,7 +314,9 @@ func (c *RPCClient) recycleIdleConnArray() {
 	c.RUnlock()
 
 	for i, addr := range addrs {
-		c.CloseAddrVer(addr, vers[i])
+		if c.closeAddrVer(addr, vers[i]) {
+			metrics.TiKVBatchClientRecycledConnCounter.Inc()
+		}
 	}
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
@@ -575,10 +577,16 @@ func (c *RPCClient) CloseAddr(addr string) error {
 }
 
 func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
+	c.closeAddrVer(addr, ver)
+	return nil
+}
+
+// closeAddrVer reports whether this call removed the selected connection pool.
+func (c *RPCClient) closeAddrVer(addr string, ver uint64) bool {
 	c.Lock()
 	if c.isClosed {
 		c.Unlock()
-		return nil
+		return false
 	}
 	pool, ok := c.connPools[addr]
 	if ok {
@@ -594,8 +602,9 @@ func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 
 	if pool != nil {
 		pool.Close()
+		return true
 	}
-	return nil
+	return false
 }
 
 // SetEventListener registers an event listener for the Client instance. If it's called more than once, the
