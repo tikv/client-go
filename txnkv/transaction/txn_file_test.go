@@ -241,6 +241,10 @@ func (s *txnFileCommitTSStore) GetLockResolver() *txnlock.LockResolver {
 	return s.lockResolver
 }
 
+func (s *txnFileCommitTSStore) CheckVisibility(uint64) error {
+	return nil
+}
+
 type txnFileSchemaVer int64
 
 func (v txnFileSchemaVer) SchemaMetaVersion() int64 {
@@ -1373,6 +1377,7 @@ func (s *stubKVStore) TxnLatches() *latch.LatchesScheduler    { panic("not imple
 func (s *stubKVStore) GetClusterID() uint64                   { return 0 }
 func (s *stubKVStore) IsClose() bool                          { return false }
 func (s *stubKVStore) Go(_ func()) error                      { panic("not implemented") }
+func (s *stubKVStore) CheckVisibility(_ uint64) error         { panic("not implemented") }
 
 func TestPreSplitTxnFileRegionsUsesDedicatedSplitPath(t *testing.T) {
 	// Given
