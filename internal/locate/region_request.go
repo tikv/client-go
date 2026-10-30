@@ -2182,7 +2182,7 @@ func (s *RegionRequestSender) onRegionError(
 		// A blamed tenant is excluded: its deadline went on a queue of its own
 		// making, so it takes the backoff path below rather than retrying the
 		// same overloaded leader straight away.
-		if s.replicaSelector != nil && !s.replicaSelector.targetBlamesRequestGroup(req) &&
+		if s.replicaSelector != nil && (ctx == nil || !storeBlamesRequestGroup(ctx.Store, req)) &&
 			strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil

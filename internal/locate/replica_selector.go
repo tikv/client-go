@@ -166,6 +166,13 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	if s.target == nil {
 		return nil, nil
 	}
+	// A retry pinned by a blamed reply is on the leader for the same reason the
+	// first steered attempt was, and is marked the same way, so its latency
+	// stays out of the store's slow score. The probe or exhaustion may have
+	// moved it elsewhere, in which case it is an ordinary attempt.
+	if s.pinnedByNoisyReply && s.target.peer != nil && s.target.peer.Id == s.region.GetLeaderPeerID() {
+		s.pinnedToOverloadedLeader = true
+	}
 	if err := s.backoffStaleRetryOnBlamingStore(bo, req); err != nil {
 		return nil, err
 	}
@@ -670,17 +677,26 @@ func (s *replicaSelector) onNoisyTenantServerIsBusy(
 	return true, nil
 }
 
-// Whether the store this attempt targeted blames the request's own resource
-// group, as last reported in that store's health feedback. That report is the
-// only attribution there is: a busy reply carries no group, and a local
-// timeout brings no reply at all. It has to be recent: a timeout on a disk or
-// network stall must not renew an overload the store diagnosed and has since
-// stopped reporting.
-func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
-	if req == nil || s.target == nil || s.target.store == nil {
+// Whether store blames the request's own resource group, as last reported in
+// its health feedback. That report is the only attribution there is: a busy
+// reply carries no group, and a local timeout brings no reply at all. It has
+// to be recent: a timeout on a disk or network stall must not renew an
+// overload the store diagnosed and has since stopped reporting.
+func storeBlamesRequestGroup(store *Store, req *tikvrpc.Request) bool {
+	if req == nil || store == nil {
 		return false
 	}
-	return s.target.store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now())
+	return store.noisyGroups.contains(req.GetResourceControlContext().GetResourceGroupName(), time.Now())
+}
+
+// Whether the store this attempt targeted blames the request's group. For a
+// local timeout, which brings no reply, the target is the only store there is
+// to ask. A reply is judged by the store that sent it, see onServerIsBusy.
+func (s *replicaSelector) targetBlamesRequestGroup(req *tikvrpc.Request) bool {
+	if s.target == nil {
+		return false
+	}
+	return storeBlamesRequestGroup(s.target.store, req)
 }
 
 // pinRetryToLeader keeps the remaining attempts on the leader for as long as it
@@ -738,12 +754,21 @@ func (s *replicaSelector) onNoisyTenantTimeout(
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	if s.targetBlamesRequestGroup(req) {
-		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
-	}
 	var store *Store
 	if ctx != nil && ctx.Store != nil {
 		store = ctx.Store
+	}
+	// The reply is judged by the store that sent it, which is the one whose
+	// feedback can blame the group. It is the target today, but that is
+	// buildRPCContext's business, not this function's. Batched coprocessor
+	// tasks are left to upstream's handling below, which hands them back to the
+	// caller instead of retrying: the caller re-plans them, pinned or not.
+	batchedCopNoRetry := serverIsBusy.EstimatedWaitMs != 0 && s.busyThreshold != 0 &&
+		req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0
+	if !batchedCopNoRetry && storeBlamesRequestGroup(store, req) {
+		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
+	}
+	if store != nil {
 		// A ServerIsBusy can be produced by either the read path (read pool,
 		// coprocessor, raftstore local reader) or the write path (write flow
 		// control, e.g. pending compaction bytes exceeding the soft limit).
