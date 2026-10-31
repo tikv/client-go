@@ -316,11 +316,95 @@ func fillDefaultRequestOrigin(ctx *kvrpcpb.Context) {
 	}
 }
 
+const (
+	// clientMinSupportedTxnProtocolVersion is the lowest transaction protocol
+	// version this library can declare. TXN_VER_LEGACY makes no promise that the
+	// caller can handle a structured IncompatibleRequest. It is used for unknown
+	// or legacy Stores, or as a manual process-wide compatibility escape hatch.
+	clientMinSupportedTxnProtocolVersion = kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY
+
+	// clientMaxSupportedTxnProtocolVersion is the highest transaction protocol
+	// version this library is compiled to handle. It bounds what
+	// SetDefaultTxnProtocolVersion accepts; it is never sent to TiKV on its own,
+	// because declaring a version is a statement about every transaction RPC path
+	// of the hosting process and must be configured explicitly by that process.
+	clientMaxSupportedTxnProtocolVersion = kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_SHARED_LOCK
+
+	// clientDefaultTxnProtocolVersion is the version declared by default. It must
+	// be at least clientMinSupportedTxnProtocolVersion and at most
+	// clientMaxSupportedTxnProtocolVersion, or the setter would reject the value
+	// the process starts with.
+	clientDefaultTxnProtocolVersion = kvrpcpb.TxnProtocolVersion_TXN_VER_SUPPORT_INCOMPATIBLE_ERROR_HANDLING
+)
+
+// Compile-time guards for the relationship between the version boundaries above.
+// Each guards one direction, and the array size becomes an invalid negative
+// constant when the corresponding invariant is violated:
+//
+//   - default <= max
+//   - min <= default
+//
+// They do not fire when kvproto raises the maximum: that only makes the first
+// array longer. Their purpose is to catch a default that falls outside the range
+// the setter accepts, which would leave the process unable to declare the version
+// it starts with.
+var (
+	_ [int(clientMaxSupportedTxnProtocolVersion) - int(clientDefaultTxnProtocolVersion)]struct{}
+	_ [int(clientDefaultTxnProtocolVersion) - int(clientMinSupportedTxnProtocolVersion)]struct{}
+)
+
+// defaultTxnProtocolVersion is the process-wide transaction protocol version
+// declared on every transaction RPC context. It must not rely on the zero value
+// of the atomic, because version 0 means legacy and does not promise that the
+// caller can handle a structured IncompatibleRequest.
+var defaultTxnProtocolVersion atomic.Uint32
+
+func init() {
+	defaultTxnProtocolVersion.Store(uint32(clientDefaultTxnProtocolVersion))
+}
+
+// SetDefaultTxnProtocolVersion sets the process-wide ceiling for transaction
+// protocol declarations. Each protected physical RPC selects a version no higher
+// than this ceiling or its execution Store's advertised maximum.
+//
+// It accepts every version from TXN_VER_LEGACY up to the version this library
+// is compiled to handle, and rejects anything else without changing the current
+// setting. TXN_VER_LEGACY is a manual compatibility escape hatch, not a default.
+//
+// Production processes should call it once during initialization, before they
+// start sending transaction RPCs. Changing it while requests are in flight is
+// only intended for controlled tests and special compatibility procedures; it
+// is not a rolling-upgrade mechanism.
+func SetDefaultTxnProtocolVersion(version kvrpcpb.TxnProtocolVersion) error {
+	if version < clientMinSupportedTxnProtocolVersion || version > clientMaxSupportedTxnProtocolVersion {
+		return errors.Errorf(
+			"unsupported txn protocol version %d, expected [%d, %d]",
+			version,
+			clientMinSupportedTxnProtocolVersion,
+			clientMaxSupportedTxnProtocolVersion,
+		)
+	}
+	defaultTxnProtocolVersion.Store(uint32(version))
+	return nil
+}
+
+// GetDefaultTxnProtocolVersion returns the process-wide transaction protocol
+// version ceiling used by the internal selector.
+func GetDefaultTxnProtocolVersion() kvrpcpb.TxnProtocolVersion {
+	return kvrpcpb.TxnProtocolVersion(defaultTxnProtocolVersion.Load())
+}
+
+const txnProtocolVersionLegacy = uint32(kvrpcpb.TxnProtocolVersion_TXN_VER_LEGACY)
+
 // NewRequest returns new kv rpc request.
 func NewRequest(typ CmdType, pointer interface{}, ctxs ...kvrpcpb.Context) *Request {
 	if len(ctxs) > 0 {
 		ctx := ctxs[0]
 		fillDefaultRequestOrigin(&ctx)
+		// A version supplied by the caller is never a trusted declaration: it does
+		// not come from the execution Store range or the current attempt. The
+		// controlled send path installs the real declaration right before sending.
+		ctx.TxnProtocolVersion = txnProtocolVersionLegacy
 		return &Request{
 			Type:    typ,
 			Req:     pointer,
