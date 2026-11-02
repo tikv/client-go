@@ -150,10 +150,8 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		}
 		if regionErr != nil {
 			if regionErr.GetUndeterminedResult() != nil && !c.isAsyncCommit() && batch.isPrimary {
-				// If the current transaction is not async, and commit fails with error `UndeterminedResult`,
-				// it means the transaction's commit state is unknown.
-				// We should return the error `ErrResultUndetermined` to the caller
-				// to do the further handling (.i.e disconnect the connection).
+				// Record the unknown outcome so failure handling does not roll back the transaction.
+				c.setUndeterminedErr(errors.New(regionErr.String()))
 				return errors.WithStack(tikverr.ErrResultUndetermined)
 			}
 
@@ -174,10 +172,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
-		// Here we can make sure tikv has processed the commit primary key request. So
-		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {
-			c.setUndeterminedErr(nil)
 			reqDuration := time.Since(reqBegin)
 			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
@@ -195,6 +190,11 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 						zap.String("primary", redact.Key(c.primary())),
 						zap.Bool("batchIsPrimary", batch.isPrimary))
 					return errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
+				}
+				if !c.isAsyncCommit() {
+					// The primary lock proves that earlier commit attempts did not succeed.
+					c.setUndeterminedErr(nil)
+					sender.SetRPCError(nil)
 				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
@@ -251,6 +251,9 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				zap.Uint64("sessionID", c.sessionID),
 			)
 			return err
+		}
+		if batch.isPrimary && !c.isAsyncCommit() {
+			c.setUndeterminedErr(nil)
 		}
 		break
 	}

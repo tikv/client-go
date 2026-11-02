@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestTxnFilePrewriteTxnSize(t *testing.T) {
@@ -116,6 +117,7 @@ func TestTxnFilePrewriteTxnSize(t *testing.T) {
 	require.Nil(failpoint.Enable("tikvclient/beforeSendReqToRegion", "return"))
 	defer failpoint.Disable("tikvclient/beforeSendReqToRegion")
 	ctx := context.WithValue(context.Background(), "sendReqToRegionHook", hook)
+	ctx = context.WithValue(ctx, util.SessionID, uint64(0))
 
 	commitTxn := func(keys [][]byte) {
 		tx, err := store.Begin()
@@ -131,9 +133,21 @@ func TestTxnFilePrewriteTxnSize(t *testing.T) {
 			require.Nil(txn.Set(key, val))
 		}
 
-		// The mock environment is only used to inspect outgoing txn-file prewrite requests.
-		// Commit may fail later because the mock stack does not fully model txn-file follow-up behavior.
-		_ = txn.Commit(ctx)
+		var callbackCalled bool
+		var callbackErr error
+		txn.SetCommitCallback(func(infoStr string, err error) {
+			callbackCalled = true
+			callbackErr = err
+			var info transaction.TxnInfo
+			require.NoError(json.Unmarshal([]byte(infoStr), &info))
+			require.Equal(txn.CommitTS(), info.CommitTS)
+		})
+
+		// Commit may fail after prewrite because the mock stack does not fully
+		// model txn-file follow-up behavior. Its callback must still report the outcome.
+		err = txn.Commit(ctx)
+		require.True(callbackCalled)
+		require.Equal(err, callbackErr)
 	}
 
 	assertCaptured := func(expectedRequests int, expectedTxnSize uint64) {

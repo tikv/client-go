@@ -280,96 +280,48 @@ func TestRUDetailsDrainRUV2(t *testing.T) {
 	require.Nil(t, nilDetails.DrainRUV2())
 	ruDetails := NewRUDetails()
 	ruDetails.AddRUV2(&kvrpcpb.RUV2{
-		ReadRpcCount:                 1,
-		StorageProcessedKeysBatchGet: 2,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchSelection: 3,
-		},
+		ReadRpcCount:             1,
+		CoprocessorResponseBytes: 2,
 	})
 	ruDetails.AddRUV2(&kvrpcpb.RUV2{
-		WriteRpcCount:                     4,
-		StorageProcessedKeysGet:           5,
-		RaftstoreStoreWriteTriggerWbBytes: 6,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchSelection: 7,
-		},
+		WriteRpcCount:            4,
+		CoprocessorResponseBytes: 5,
 	})
 
 	drained := ruDetails.DrainRUV2()
 	assert.NotNil(t, drained)
-	assert.Equal(t, uint64(1), drained.ReadRpcCount)
-	assert.Equal(t, uint64(4), drained.WriteRpcCount)
-	assert.Equal(t, uint64(2), drained.StorageProcessedKeysBatchGet)
-	assert.Equal(t, uint64(5), drained.StorageProcessedKeysGet)
-	assert.Equal(t, uint64(6), drained.RaftstoreStoreWriteTriggerWbBytes)
-	assert.Equal(t, uint64(10), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchSelection)
+	assert.Equal(t, uint64(7), drained.CoprocessorResponseBytes)
+	assert.Zero(t, drained.ReadRpcCount)
+	assert.Zero(t, drained.WriteRpcCount)
 	assert.Nil(t, ruDetails.DrainRUV2())
 }
 
 func TestRUDetailsDrainRUV2Ownership(t *testing.T) {
-	delta := &kvrpcpb.RUV2{
-		ReadRpcCount: 1,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
-		},
-	}
-	ruDetails := NewRUDetails()
-	ruDetails.AddRUV2(delta)
-	cloned := ruDetails.Clone()
+	delta := &kvrpcpb.RUV2{CoprocessorResponseBytes: 2}
+	details := NewRUDetails()
+	details.AddRUV2(delta)
+	cloned := details.Clone()
 	merged := NewRUDetails()
-	merged.Merge(ruDetails)
-
-	// Neither the input nor a non-draining snapshot owns the pending counters.
-	delta.ReadRpcCount = 3
-	delta.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 4
-	raw := ruDetails.getRawRUV2()
-	raw.ReadRpcCount = 5
-	raw.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 6
-	drained := ruDetails.DrainRUV2()
-	require.Equal(t, uint64(1), drained.ReadRpcCount)
-	require.Equal(t, uint64(2), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
-	require.Nil(t, ruDetails.DrainRUV2())
-
-	// Mutating the transferred counters cannot affect an earlier clone or merge.
-	drained.ReadRpcCount = 7
-	drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 8
+	merged.Merge(details)
+	delta.CoprocessorResponseBytes = 4
+	drained := details.DrainRUV2()
+	require.Equal(t, uint64(2), drained.CoprocessorResponseBytes)
+	require.Nil(t, details.DrainRUV2())
+	drained.CoprocessorResponseBytes = 8
 	for _, independent := range []*RUDetails{cloned, merged} {
-		counters := independent.DrainRUV2()
-		require.Equal(t, uint64(1), counters.ReadRpcCount)
-		require.Equal(t, uint64(2), counters.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+		require.Equal(t, uint64(2), independent.DrainRUV2().CoprocessorResponseBytes)
 	}
-
-	// Later adds start a separate batch, including its nested executor counters.
-	ruDetails.AddRUV2(delta)
-	ruDetails.AddRUV2(delta)
-	require.Equal(t, uint64(7), drained.ReadRpcCount)
-	require.Equal(t, uint64(8), drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
-	next := ruDetails.DrainRUV2()
-	require.Equal(t, uint64(6), next.ReadRpcCount)
-	require.Equal(t, uint64(8), next.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
-	drained.ReadRpcCount = 9
-	drained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan = 10
-	require.Equal(t, uint64(6), next.ReadRpcCount)
-	require.Equal(t, uint64(8), next.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
-	require.Nil(t, ruDetails.DrainRUV2())
+	details.AddRUV2(delta)
+	details.AddRUV2(delta)
+	next := details.DrainRUV2()
+	drained.CoprocessorResponseBytes = 10
+	require.Equal(t, uint64(8), next.CoprocessorResponseBytes)
+	require.Nil(t, details.DrainRUV2())
 }
 
 func TestRUDetailsConcurrentAddAndDrainRUV2(t *testing.T) {
 	const writers, addsPerWriter = 4, 250
-	delta := &kvrpcpb.RUV2{
-		KvEngineCacheMiss: 1, CoprocessorExecutorIterations: 2, CoprocessorResponseBytes: 3,
-		RaftstoreStoreWriteTriggerWbBytes: 4, StorageProcessedKeysBatchGet: 5,
-		StorageProcessedKeysGet: 6, ReadRpcCount: 7, WriteRpcCount: 8,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan:    9,
-			TikvCoprocessorExecutorWorkTotalBatchTableScan:    10,
-			TikvCoprocessorExecutorWorkTotalBatchSelection:    11,
-			TikvCoprocessorExecutorWorkTotalBatchTopN:         12,
-			TikvCoprocessorExecutorWorkTotalBatchLimit:        13,
-			TikvCoprocessorExecutorWorkTotalBatchSimpleAggr:   14,
-			TikvCoprocessorExecutorWorkTotalBatchFastHashAggr: 15,
-		},
-	}
+	delta := &kvrpcpb.RUV2{CoprocessorResponseBytes: 3}
 	ruDetails := NewRUDetails()
 	start, done := make(chan struct{}), make(chan struct{})
 	var wg sync.WaitGroup
@@ -388,32 +340,24 @@ func TestRUDetailsConcurrentAddAndDrainRUV2(t *testing.T) {
 		close(done)
 	}()
 	close(start)
-	total := &kvrpcpb.RUV2{}
+	var total uint64
+	drain := func() {
+		if counters := ruDetails.DrainRUV2(); counters != nil {
+			total += counters.CoprocessorResponseBytes
+		}
+	}
 draining:
 	for {
-		mergeRUV2(total, ruDetails.DrainRUV2())
+		drain()
 		select {
 		case <-done:
 			break draining
 		default:
 		}
 	}
-	mergeRUV2(total, ruDetails.DrainRUV2())
+	drain()
 	const count = writers * addsPerWriter
-	require.Equal(t, &kvrpcpb.RUV2{
-		KvEngineCacheMiss: count, CoprocessorExecutorIterations: 2 * count, CoprocessorResponseBytes: 3 * count,
-		RaftstoreStoreWriteTriggerWbBytes: 4 * count, StorageProcessedKeysBatchGet: 5 * count,
-		StorageProcessedKeysGet: 6 * count, ReadRpcCount: 7 * count, WriteRpcCount: 8 * count,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan:    9 * count,
-			TikvCoprocessorExecutorWorkTotalBatchTableScan:    10 * count,
-			TikvCoprocessorExecutorWorkTotalBatchSelection:    11 * count,
-			TikvCoprocessorExecutorWorkTotalBatchTopN:         12 * count,
-			TikvCoprocessorExecutorWorkTotalBatchLimit:        13 * count,
-			TikvCoprocessorExecutorWorkTotalBatchSimpleAggr:   14 * count,
-			TikvCoprocessorExecutorWorkTotalBatchFastHashAggr: 15 * count,
-		},
-	}, total)
+	require.Equal(t, uint64(3*count), total)
 	require.Nil(t, ruDetails.DrainRUV2())
 }
 
@@ -423,10 +367,7 @@ func BenchmarkRUDetailsDrainRUV2(b *testing.B) {
 		delta *kvrpcpb.RUV2
 	}{
 		{name: "empty"},
-		{name: "scalar", delta: &kvrpcpb.RUV2{ReadRpcCount: 1}},
-		{name: "executor", delta: &kvrpcpb.RUV2{ReadRpcCount: 1, ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
-		}}},
+		{name: "response-bytes", delta: &kvrpcpb.RUV2{CoprocessorResponseBytes: 1}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			ruDetails := NewRUDetails()
@@ -434,7 +375,7 @@ func BenchmarkRUDetailsDrainRUV2(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				// Include the clone needed to own each newly accumulated batch.
+				// Include accumulating each batch before draining it.
 				ruDetails.AddRUV2(tc.delta)
 				drained = ruDetails.DrainRUV2()
 			}
@@ -444,39 +385,31 @@ func BenchmarkRUDetailsDrainRUV2(b *testing.B) {
 	}
 }
 
-func TestRUDetailsCloneAndMergeRawRUV2(t *testing.T) {
+func TestRUDetailsCloneAndMergeRUV2(t *testing.T) {
 	orig := NewRUDetails()
 	orig.AddRUV2(&kvrpcpb.RUV2{
-		ReadRpcCount: 1,
-		ExecutorInputs: &kvrpcpb.ExecutorInputs{
-			TikvCoprocessorExecutorWorkTotalBatchIndexScan: 2,
-		},
+		CoprocessorResponseBytes: 2,
 	})
 
 	cloned := orig.Clone()
-	cloned.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 3})
+	cloned.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 3})
 
 	origDrained := orig.DrainRUV2()
-	assert.Equal(t, uint64(1), origDrained.ReadRpcCount)
-	assert.Zero(t, origDrained.WriteRpcCount)
-	assert.Equal(t, uint64(2), origDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(2), origDrained.CoprocessorResponseBytes)
 
 	clonedDrained := cloned.DrainRUV2()
-	assert.Equal(t, uint64(1), clonedDrained.ReadRpcCount)
-	assert.Equal(t, uint64(3), clonedDrained.WriteRpcCount)
-	assert.Equal(t, uint64(2), clonedDrained.ExecutorInputs.TikvCoprocessorExecutorWorkTotalBatchIndexScan)
+	assert.Equal(t, uint64(5), clonedDrained.CoprocessorResponseBytes)
 
 	left := NewRUDetails()
-	left.AddRUV2(&kvrpcpb.RUV2{ReadRpcCount: 5})
+	left.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 5})
 	right := NewRUDetails()
-	right.AddRUV2(&kvrpcpb.RUV2{WriteRpcCount: 7})
+	right.AddRUV2(&kvrpcpb.RUV2{CoprocessorResponseBytes: 7})
 	left.Merge(right)
 
 	merged := left.DrainRUV2()
-	assert.Equal(t, uint64(5), merged.ReadRpcCount)
-	assert.Equal(t, uint64(7), merged.WriteRpcCount)
+	assert.Equal(t, uint64(12), merged.CoprocessorResponseBytes)
 	rightDrained := right.DrainRUV2()
-	assert.Equal(t, uint64(7), rightDrained.WriteRpcCount)
+	assert.Equal(t, uint64(7), rightDrained.CoprocessorResponseBytes)
 }
 
 func TestPoolTaskDetailsStringUsesAverageTimes(t *testing.T) {
@@ -1356,9 +1289,21 @@ func TestRUDetailsUpdateTiFlash(t *testing.T) {
 
 	assert.InDelta(t, 4.5, rd.RRU(), 1e-9)
 	assert.InDelta(t, 6.5, rd.WRU(), 1e-9)
-	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 	assert.Equal(t, 3*time.Millisecond, rd.RUWaitDuration())
+	assert.InDelta(t, 7.0, rd.TiflashRU(), 1e-9)
 
 	cloned := rd.Clone()
+	assert.InDelta(t, rd.RRU(), cloned.RRU(), 1e-9)
+	assert.InDelta(t, rd.WRU(), cloned.WRU(), 1e-9)
 	assert.InDelta(t, rd.TiflashRU(), cloned.TiflashRU(), 1e-9)
+
+	merged := NewRUDetails()
+	merged.Merge(rd)
+	assert.InDelta(t, rd.TiflashRU(), merged.TiflashRU(), 1e-9)
+}
+
+func TestRUDetailsTiKVRUV2CompatibilityIsNoop(t *testing.T) {
+	rd := NewRUDetails()
+	rd.AddTiKVRUV2(42)
+	assert.Zero(t, rd.TiKVRUV2())
 }

@@ -1383,6 +1383,7 @@ func (s pointReadResponseExtraStats) buildPointResponseStats(scanDetail *util.Sc
 	}
 	return util.NewPointResponseStatsFromAggregate(PointReadScanDetail{
 		TotalKeys:         scanDetail.TotalKeys,
+		TotalKeysSize:     scanDetail.TotalKeysSize,
 		ProcessedKeys:     scanDetail.ProcessedKeys,
 		ProcessedKeysSize: scanDetail.ProcessedKeysSize,
 	}, s.payloadBytes, s.missingScanDetail)
@@ -1521,6 +1522,16 @@ func (rs *SnapshotRuntimeStats) GetPointResponseStats() PointResponseStats {
 		return stats
 	}
 	return rs.pointResponseExtra.buildPointResponseStats(&rs.scanDetail)
+}
+
+// GetScanDetail returns a copy of the aggregated scan details, or nil if the
+// receiver is nil. It must be called after concurrent statistics updates finish.
+func (rs *SnapshotRuntimeStats) GetScanDetail() *util.ScanDetail {
+	if rs == nil {
+		return nil
+	}
+	detail := rs.scanDetail
+	return &detail
 }
 
 // GetTimeDetail returns the timeDetail

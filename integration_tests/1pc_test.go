@@ -325,7 +325,9 @@ func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
 		// it will make the prewrite in 1pc fail.
 		`1*return("undeterminedResult")->return("")`,
 	))
+	defer func() { s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult")) }()
 	err := txn.Commit(context.Background())
 	s.NotNil(err)
 	s.True(tikverr.IsErrorUndetermined(err))
+	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
 }

@@ -91,6 +91,12 @@ const forwardMetadataKey = "tikv-forwarded-host"
 // batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
 const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 
+const (
+	// Matches TiDB's kv.InternalTxnMViewMaintenance ("mview_maintain").
+	mvMaintenanceRequestSource = "internal_mview_maintain"
+	mvMaintenanceStreamHardTTL = 3 * time.Hour
+)
+
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
@@ -347,12 +353,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		elapsed := time.Since(start)
 		storeMetrics.updateRPCMetrics(req, resp, elapsed)
 		if resp != nil && !bypass {
-			readRPCCount, writeRPCCount := completedTiKVRUV2RPCCount(req)
 			switch resp.Resp.(type) {
 			case *tikvrpc.CopStreamResponse, *tikvrpc.BatchCopStreamResponse:
 				// Stream responses are handled in Recv().
 			default:
-				config.UpdateTiKVRUV2FromExecDetailsV2(ctx, resp.GetExecDetailsV2(), readRPCCount, writeRPCCount)
+				collectRUV2FromExecDetails(ctx, resp.GetExecDetailsV2())
 			}
 		}
 
@@ -406,14 +411,14 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
-func completedTiKVRUV2RPCCount(req *tikvrpc.Request) (readRPCCount, writeRPCCount int64) {
-	if req == nil || req.StoreTp != tikvrpc.TiKV || req.IsDebugReq() {
-		return 0, 0
+func collectRUV2FromExecDetails(ctx context.Context, details *kvrpcpb.ExecDetailsV2) {
+	if ctx == nil || details == nil {
+		return
 	}
-	if req.IsTxnWriteRequest() || req.IsRawWriteRequest() {
-		return 0, 1
+	ruDetails, _ := ctx.Value(util.RUDetailsCtxKey).(*util.RUDetails)
+	if ruDetails != nil {
+		ruDetails.AddRUV2(details.RuV2)
 	}
-	return 1, 0
 }
 
 // SendRequest sends a Request to server and receives Response.
@@ -454,7 +459,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream.Cancel = cancel
 	copStream.Ctx = ctx
 	copStream.Bypass = resourcecontrol.MakeRequestInfo(req).Bypass()
-	copStream.CountRPC = true
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -491,8 +496,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
-	copStream.Ctx = ctx
-	copStream.CountRPC = true
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -528,6 +532,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Cancel = cancel
+	copStream.SetHardTimeout(streamHardTTL(ctx, req))
 	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -543,6 +548,17 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	}
 	copStream.MPPDataPacket = first
 	return resp, nil
+}
+
+func streamHardTTL(ctx context.Context, req *tikvrpc.Request) time.Duration {
+	if isMVMaintenanceRequestSource(req.GetRequestSource()) || isMVMaintenanceRequestSource(util.RequestSourceFromCtx(ctx)) {
+		return mvMaintenanceStreamHardTTL
+	}
+	return 0
+}
+
+func isMVMaintenanceRequestSource(source string) bool {
+	return source == mvMaintenanceRequestSource || strings.HasPrefix(source, mvMaintenanceRequestSource+"_")
 }
 
 // Close closes all connections.

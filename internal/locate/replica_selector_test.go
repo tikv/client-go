@@ -158,6 +158,52 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(ctx)
 }
 
+// TestLockFallbackLeaderReadClearsReplicaRead checks that a read which falls back to the leader after
+// meeting a lock (DisableStaleReadMeetLock) reaches the leader with ReplicaRead=false, whatever replica
+// read mode the request was built with. TiKV treats a request with ReplicaRead=true as a follower read
+// even when it is served by the leader (e.g. v8.5 skips the in-memory engine for it).
+func TestLockFallbackLeaderReadClearsReplicaRead(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	newReq := func(readType kv.ReplicaReadType, staleRead bool) *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, readType, nil, kvrpcpb.Context{})
+		if staleRead {
+			req.EnableStaleWithMixedReplicaRead()
+		}
+		return req
+	}
+	cases := []struct {
+		readType  kv.ReplicaReadType
+		staleRead bool
+	}{
+		{kv.ReplicaReadFollower, false},
+		{kv.ReplicaReadMixed, false},
+		{kv.ReplicaReadPreferLeader, false},
+		{kv.ReplicaReadLearner, false},
+		{kv.ReplicaReadMixed, true},
+	}
+	for _, c := range cases {
+		req := newReq(c.readType, c.staleRead)
+		req.DisableStaleReadMeetLock()
+		s.False(req.StaleRead)
+		s.False(req.ReplicaRead)
+		s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+
+		region, err := s.cache.LocateKey(s.bo, []byte("a"))
+		s.Nil(err)
+		selector, err := newReplicaSelector(s.cache, region.Region, req)
+		s.Nil(err)
+		ctx, err := selector.next(s.bo, req)
+		s.Nil(err)
+		s.NotNil(ctx)
+		s.Equal(s.leaderPeer, ctx.Peer.Id, "readType=%v staleRead=%v", c.readType, c.staleRead)
+		s.False(req.ReplicaRead, "readType=%v staleRead=%v", c.readType, c.staleRead)
+		s.False(req.StaleRead, "readType=%v staleRead=%v", c.readType, c.staleRead)
+	}
+}
+
 func TestNextGenReadFeaturesDisabled(t *testing.T) {
 	if !config.NextGen {
 		t.Skip("only runs under NextGen")
@@ -2920,6 +2966,98 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
+// A ServerIsBusy that blames the request's own group does not count toward the
+// suspect-not-leader probe: the pinned retries stay on the cached leader for as
+// long as it keeps answering with that reason. Only an ordinary ServerIsBusy(0)
+// from the leader arms the probe.
+func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// 2 noisy rejections from the cached leader: each retry is pinned to the leader
+	// and backs off, and the probe is never armed, so the third attempt is on the
+	// leader again.
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, NoisyTenantServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		afterRun: func(selector *replicaSelector) {
+			s.False(selector.leaderBusyProbed)
+			s.Equal(0, selector.leaderBusyCount)
+			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// A follower read pinned by a noisy rejection behaves the same: the pin keeps
+	// it on the leader and nothing is probed.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, NoisyTenantServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		afterRun: func(selector *replicaSelector) {
+			s.False(selector.leaderBusyProbed)
+			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// An ordinary ServerIsBusy(0) from the leader after a noisy one still arms the
+	// probe on its own: the noisy rejection contributed nothing to the count.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NoisyTenantServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      3,
+			backoffDetail:   []string{"tikvServerBusy+3"},
+			regionIsValid:   true,
+		},
+		afterRun: func(selector *replicaSelector) {
+			s.True(selector.leaderBusyProbed)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
+			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
 func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 	if config.NextGen {
 		t.Skip("NextGen does not support replica read")
@@ -3649,6 +3787,7 @@ const (
 	EpochNotMatchErr
 	ServerIsBusyErr
 	ServerIsBusyWithEstimatedWaitMsErr
+	NoisyTenantServerIsBusyErr
 	StaleCommandErr
 	StoreNotMatchErr
 	RaftEntryTooLargeErr
@@ -3684,6 +3823,8 @@ func (tp RegionErrorType) GenRegionError() *errorpb.Error {
 		err.ServerIsBusy = &errorpb.ServerIsBusy{}
 	case ServerIsBusyWithEstimatedWaitMsErr:
 		err.ServerIsBusy = &errorpb.ServerIsBusy{EstimatedWaitMs: 10}
+	case NoisyTenantServerIsBusyErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{Reason: "scheduler is busy" + noisyTenantReasonSuffix}
 	case StaleCommandErr:
 		err.StaleCommand = &errorpb.StaleCommand{}
 	case StoreNotMatchErr:
@@ -3795,6 +3936,8 @@ func (tp RegionErrorType) String() string {
 		return "ServerIsBusyErr"
 	case ServerIsBusyWithEstimatedWaitMsErr:
 		return "ServerIsBusyWithEstimatedWaitMsErr"
+	case NoisyTenantServerIsBusyErr:
+		return "NoisyTenantServerIsBusyErr"
 	case StaleCommandErr:
 		return "StaleCommandErr"
 	case StoreNotMatchErr:

@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,7 +48,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/util"
 	"google.golang.org/grpc/metadata"
 )
@@ -57,6 +57,64 @@ func TestBatchResponse(t *testing.T) {
 	batchResp, err := FromBatchCommandsResponse(resp)
 	assert.Nil(t, batchResp)
 	assert.NotNil(t, err)
+}
+
+func TestKeepOnlyActiveClearsRemovedLeases(t *testing.T) {
+	now := time.Now().UnixNano()
+	canceled := 0
+	activeLease := &Lease{Cancel: func() {}}
+	expiredLease := &Lease{deadline: now, Cancel: func() { canceled++ }}
+	leases := []*Lease{activeLease, expiredLease}
+
+	active := keepOnlyActive(leases, now)
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, 1, canceled)
+}
+
+func TestKeepOnlyActiveWithHardDeadline(t *testing.T) {
+	var canceled int32
+	activeLease := &Lease{Cancel: func() {}}
+	activeLease.SetHardTimeout(time.Hour)
+	expiredLease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&expiredLease.hardDeadline, time.Now().Add(-time.Second).UnixNano())
+
+	leases := []*Lease{activeLease, expiredLease}
+	active := keepOnlyActive(leases, time.Now().UnixNano())
+
+	assert.Equal(t, []*Lease{activeLease}, active)
+	assert.Nil(t, leases[1])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestKeepOnlyActiveHardDeadlineOverridesRecvDeadline(t *testing.T) {
+	var canceled int32
+	now := time.Now().UnixNano()
+	lease := &Lease{Cancel: func() { atomic.AddInt32(&canceled, 1) }}
+	atomic.StoreInt64(&lease.deadline, now+int64(time.Hour))
+	atomic.StoreInt64(&lease.hardDeadline, now)
+
+	leases := []*Lease{lease}
+	active := keepOnlyActive(leases, now)
+
+	assert.Empty(t, active)
+	assert.Nil(t, leases[0])
+	assert.Equal(t, int32(1), atomic.LoadInt32(&canceled))
+}
+
+func TestLeaseSetHardTimeout(t *testing.T) {
+	lease := &Lease{}
+	before := time.Now().Add(time.Hour).UnixNano()
+	lease.SetHardTimeout(time.Hour)
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), before)
+	assert.LessOrEqual(t, atomic.LoadInt64(&lease.hardDeadline), time.Now().Add(time.Hour).UnixNano())
+
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		lease.SetHardTimeout(time.Hour)
+		lease.SetHardTimeout(timeout)
+		assert.Zero(t, atomic.LoadInt64(&lease.hardDeadline))
+	}
 }
 
 func TestDefaultRequestOrigin(t *testing.T) {
@@ -273,20 +331,12 @@ func (c *mockCoprocessorStreamClient) Recv() (*coprocessor.Response, error) {
 }
 
 func TestCopStreamResponseRecvBypass(t *testing.T) {
-	original := config.GetGlobalConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalConfig(original)
-	})
-
-	cfg := config.DefaultConfig()
-	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
-	config.StoreGlobalConfig(&cfg)
-
 	makeResponse := func() *coprocessor.Response {
 		return &coprocessor.Response{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
 				RuV2: &kvrpcpb.RUV2{
 					KvEngineCacheMiss:            1,
+					CoprocessorResponseBytes:     4,
 					StorageProcessedKeysGet:      2,
 					StorageProcessedKeysBatchGet: 3,
 				},
@@ -300,19 +350,18 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 		resp := &CopStreamResponse{
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
-			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
-		require.Greater(t, ruDetails.TiKVRUV2(), 0.0)
-		require.Equal(t, uint64(1), resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
 		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
 		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
 		drained := ruDetails.DrainRUV2()
 		require.NotNil(t, drained)
-		require.Equal(t, uint64(1), drained.GetReadRpcCount())
-		require.Equal(t, uint64(2), drained.GetStorageProcessedKeysGet())
-		require.Equal(t, uint64(3), drained.GetStorageProcessedKeysBatchGet())
+		require.Equal(t, uint64(4), drained.GetCoprocessorResponseBytes())
+		require.Zero(t, drained.GetKvEngineCacheMiss())
+		require.Zero(t, drained.GetStorageProcessedKeysGet())
+		require.Zero(t, drained.GetStorageProcessedKeysBatchGet())
 		require.Nil(t, ruDetails.DrainRUV2())
 	})
 
@@ -323,11 +372,9 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
 			Bypass:                       true,
-			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
-		require.Zero(t, ruDetails.TiKVRUV2())
 		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
 		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
 		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
