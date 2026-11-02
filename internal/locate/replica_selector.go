@@ -61,6 +61,9 @@ func newReplicaSelector(
 		return nil, nil
 	}
 	replicas := buildTiKVReplicas(cachedRegion)
+	if len(replicas) == 0 {
+		return nil, nil
+	}
 	option := storeSelectorOp{}
 	for _, op := range opts {
 		op(&option)
@@ -505,13 +508,24 @@ func (s ReplicaSelectLeaderWithProxyStrategy) isCandidate(r *replica, isLeader b
 func (s *replicaSelector) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
-	if s.target != nil {
+	leader := notLeader.GetLeader()
+	if s.target != nil && !leader.GetIsWitness() {
 		s.target.addFlag(notLeaderFlag)
 	}
-	leader := notLeader.GetLeader()
-	if leader == nil {
-		// The region may be during transferring leader.
-		err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("no leader", ctx))
+	if leader == nil || leader.IsWitness {
+		// A witness may temporarily lead recovery, but only a data peer can
+		// serve the request. Use the election backoff instead of following it.
+		// updateLeader also invalidates stale data-to-witness role metadata.
+		s.updateLeader(leader)
+		if leader.GetIsWitness() && s.region.isValid() && s.target != nil && !s.target.peer.IsWitness {
+			// This data peer answered while the witness is recovering the group.
+			// Keep it retryable without a PD reload. Undo only this NotLeader
+			// attempt; transport failures, elapsed time and prior flags still count.
+			if s.target.attempts > 0 {
+				s.target.attempts--
+			}
+		}
+		err = bo.Backoff(retry.BoRegionScheduling, newBackoffErrWithRPCContext("no data leader", ctx))
 		return err == nil, err
 	}
 	leaderIdx := s.updateLeader(leader)
