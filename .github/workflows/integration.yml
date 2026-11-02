@@ -2,71 +2,159 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master, tidb-8.5 ]
+    branches: [master, tidb-8.5, tidb-8.5-20261028-v8.5.7]
   pull_request:
-    branches: [ master, tidb-8.5 ]
+    branches: [master, tidb-8.5, tidb-8.5-20261028-v8.5.7]
+
+permissions:
+  contents: read
 
 jobs:
-
-  integration-local:
+  prepare-binaries:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_CI: ${{ (github.base_ref || github.ref_name) == 'tidb-8.5-20261028-v8.5.7' }}
+      TIKV_PACKAGE: us-docker.pkg.dev/pingcap-testing-account/hub/tikv/tikv/package:release-8.5-20260716-v8.5.7_linux_amd64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - name: Checkout PD
+        if: env.RELEASE_CI == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: tikv/pd
+          ref: release-8.5-20261028-v8.5.7
+          fetch-depth: 0
+          path: pd
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        if: env.RELEASE_CI == 'true'
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.25.8
+          go-version: 1.25.14
+          cache-dependency-path: pd/go.sum
 
-      - name: Test
-        run: go test ./...
-        working-directory: integration_tests
+      - name: Build PD
+        if: env.RELEASE_CI == 'true'
+        run: |
+          make pd-server-basic
+          mkdir -p ../binaries
+          cp bin/pd-server ../binaries/
+        working-directory: pd
 
-  integration-local-race:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - name: Set up ORAS
+        if: env.RELEASE_CI == 'true'
+        uses: oras-project/setup-oras@v1
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.25.8
+      # Use the branch package published by PingCAP's component build pipeline.
+      - name: Fetch release TiKV
+        if: env.RELEASE_CI == 'true'
+        run: |
+          oras manifest fetch "$TIKV_PACKAGE" > tikv-manifest.json
+          digest=$(jq -er '.layers[] | select(.annotations["org.opencontainers.image.title"] | test("^tikv-v.*\\.tar\\.gz$")) | .digest' tikv-manifest.json)
+          oras blob fetch "${TIKV_PACKAGE%:*}@$digest" --output tikv.tar.gz
+          tar -xzf tikv.tar.gz -C binaries tikv-server
 
-      - name: Test
-        run: go test ./... -race
-        working-directory: integration_tests
-
-  integration-tikv:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.25.8
-
-      - name: Fetch PD
+      - name: Fetch nightly PD
+        if: env.RELEASE_CI != 'true'
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
           image: pingcap/pd:nightly
           path: /pd-server
 
-      - name: Fetch TiKV
+      - name: Fetch nightly TiKV
+        if: env.RELEASE_CI != 'true'
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
           image: pingcap/tikv:nightly
           path: /tikv-server
 
+      - name: Collect nightly binaries
+        if: env.RELEASE_CI != 'true'
+        run: |
+          mkdir -p binaries
+          cp "${{ steps.extract-pd.outputs.destination }}/pd-server" binaries/
+          cp "${{ steps.extract-tikv.outputs.destination }}/tikv-server" binaries/
+
+      - name: Upload integration binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-binaries
+          path: binaries/
+          if-no-files-found: error
+          retention-days: 1
+
+  integration-local:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.14
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test
+        run: gotestsum --format short-verbose -- ./...
+        working-directory: integration_tests
+
+  integration-local-race:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.14
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test
+        run: gotestsum --format short-verbose -- ./... -race
+        working-directory: integration_tests
+
+  integration-tikv:
+    needs: prepare-binaries
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.14
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Download integration binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: integration-binaries
+          path: integration_tests
+
       - name: Run PD & TiKV
         run: |
-          mv ../${{steps.extract-pd.outputs.destination}}/pd-server .
-          mv ../${{steps.extract-tikv.outputs.destination}}/tikv-server .
+          chmod +x pd-server tikv-server
           ./pd-server > pd.log 2>&1 &
           sleep 5
           ./tikv-server -C tikv.toml > tikv.log 2>&1 &
@@ -74,41 +162,39 @@ jobs:
         working-directory: integration_tests
 
       - name: Test
-        run: go test --with-tikv
+        run: gotestsum --format short-verbose -- --with-tikv
         working-directory: integration_tests
 
   integration-raw-tikv:
+    needs: prepare-binaries
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         api_version: [v1ttl, v2]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.25.8
+          go-version: 1.25.14
 
-      - name: Fetch PD
-        uses: shrink/actions-docker-extract@v1
-        id: extract-pd
-        with:
-          image: pingcap/pd:nightly
-          path: /pd-server
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
 
-      - name: Fetch TiKV
-        uses: shrink/actions-docker-extract@v1
-        id: extract-tikv
+      - name: Download integration binaries
+        uses: actions/download-artifact@v4
         with:
-          image: pingcap/tikv:nightly
-          path: /tikv-server
+          name: integration-binaries
+          path: integration_tests/raw
 
       - name: Run PD & TiKV
         run: |
-          mv ../../${{steps.extract-pd.outputs.destination}}/pd-server .
-          mv ../../${{steps.extract-tikv.outputs.destination}}/tikv-server .
+          chmod +x pd-server tikv-server
           ./pd-server > pd.log 2>&1 &
           sleep 5
           ./tikv-server -C tikv-${{ matrix.api_version }}.toml > tikv.log 2>&1 &
@@ -116,5 +202,5 @@ jobs:
         working-directory: integration_tests/raw
 
       - name: Test
-        run: go test --with-tikv
+        run: gotestsum --format short-verbose -- --with-tikv
         working-directory: integration_tests/raw
