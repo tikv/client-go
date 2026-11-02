@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.25.14
+          go-version: 1.27.3
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -43,7 +43,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.25.14
+          go-version: 1.27.3
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -64,7 +64,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.25.14
+          go-version: 1.27.3
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -112,7 +112,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.25.14
+          go-version: 1.27.3
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
