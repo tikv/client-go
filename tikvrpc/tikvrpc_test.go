@@ -47,7 +47,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/util"
 	"google.golang.org/grpc/metadata"
 )
@@ -273,20 +272,12 @@ func (c *mockCoprocessorStreamClient) Recv() (*coprocessor.Response, error) {
 }
 
 func TestCopStreamResponseRecvBypass(t *testing.T) {
-	original := config.GetGlobalConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalConfig(original)
-	})
-
-	cfg := config.DefaultConfig()
-	cfg.TiKVClient.RUV2 = config.DefaultRUV2TiKVConfig()
-	config.StoreGlobalConfig(&cfg)
-
 	makeResponse := func() *coprocessor.Response {
 		return &coprocessor.Response{
 			ExecDetailsV2: &kvrpcpb.ExecDetailsV2{
 				RuV2: &kvrpcpb.RUV2{
 					KvEngineCacheMiss:            1,
+					CoprocessorResponseBytes:     4,
 					StorageProcessedKeysGet:      2,
 					StorageProcessedKeysBatchGet: 3,
 				},
@@ -300,19 +291,18 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 		resp := &CopStreamResponse{
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
-			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
-		require.Greater(t, ruDetails.TiKVRUV2(), 0.0)
-		require.Equal(t, uint64(1), resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
+		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
 		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
 		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
 		drained := ruDetails.DrainRUV2()
 		require.NotNil(t, drained)
-		require.Equal(t, uint64(1), drained.GetReadRpcCount())
-		require.Equal(t, uint64(2), drained.GetStorageProcessedKeysGet())
-		require.Equal(t, uint64(3), drained.GetStorageProcessedKeysBatchGet())
+		require.Equal(t, uint64(4), drained.GetCoprocessorResponseBytes())
+		require.Zero(t, drained.GetKvEngineCacheMiss())
+		require.Zero(t, drained.GetStorageProcessedKeysGet())
+		require.Zero(t, drained.GetStorageProcessedKeysBatchGet())
 		require.Nil(t, ruDetails.DrainRUV2())
 	})
 
@@ -323,11 +313,9 @@ func TestCopStreamResponseRecvBypass(t *testing.T) {
 			Tikv_CoprocessorStreamClient: &mockCoprocessorStreamClient{resp: makeResponse()},
 			Ctx:                          ctx,
 			Bypass:                       true,
-			CountRPC:                     true,
 		}
 		_, err := resp.Recv()
 		require.NoError(t, err)
-		require.Zero(t, ruDetails.TiKVRUV2())
 		require.Zero(t, resp.Response.GetExecDetailsV2().GetRuV2().GetReadRpcCount())
 		require.Equal(t, uint64(2), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysGet())
 		require.Equal(t, uint64(3), resp.Response.GetExecDetailsV2().GetRuV2().GetStorageProcessedKeysBatchGet())
