@@ -392,6 +392,10 @@ func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspace
 	return nil, nil
 }
 
+func (c *mockPDClient) LoadKeyspaceByID(ctx context.Context, id uint32) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }
