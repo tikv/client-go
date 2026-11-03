@@ -649,22 +649,12 @@ const leaderBusyProbeThreshold = 2
 // Backs off and returns to the leader: a follower read comes back to this same
 // leader as a ReadIndex, and the store is not slow, one tenant is over quota.
 func (s *replicaSelector) onNoisyTenantServerIsBusy(
-	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
+	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request,
 ) (shouldRetry bool, err error) {
 	metrics.TiKVNoisyTenantServerBusyCounter.Inc()
 	// EstimatedWaitMs is not recorded: it is the whole pool's wait, kept per
 	// store with no group dimension.
 	s.pinRetryToLeader(req)
-	// A zero-wait rejection still counts toward the stale-leader probe: a store
-	// that lost leadership keeps rejecting at admission, with its blame intact
-	// and no NotLeader hint, so the pinned retries would otherwise stay on it
-	// until the replicas are exhausted. Counted after the pin, so a pinned
-	// follower read is the leader read the probe looks for. The probe costs one
-	// request to a follower; the store's read-load and health updates are still
-	// skipped, since this is the group's queue and not the store's.
-	if serverIsBusy.EstimatedWaitMs == 0 {
-		s.countLeaderBusy()
-	}
 	backoffErr := errors.Errorf("server is busy (noisy tenant), ctx: %v", ctx)
 	if err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr); err != nil {
 		return false, err
@@ -740,38 +730,6 @@ func (s *replicaSelector) onNoisyTenantTimeout(
 	return true, nil
 }
 
-// countLeaderBusy is the workaround for tikv/client-go#2028: if the store's read
-// pool is wedged, leader reads are rejected with ServerIsBusy(0) at the pool
-// entrance, so the request never reaches the raft layer and no NotLeader error
-// is returned even if PD has already moved the leader away. Retrying the cached
-// leader then hammers the half-dead store indefinitely. After 2 such rejections
-// from the same cached leader within this selector (the count restarts only when
-// the cached leader changes), mark it suspect-not-leader so that the next attempt
-// probes a follower with the leader read (req.ReplicaRead is kept unchanged). The
-// follower replies NotLeader with the real leader hint, which heals the shared
-// region cache via onNotLeader/updateLeader. Probe at most once per selector; if
-// the store is still the leader, the hint points back to it, onUpdateLeader
-// clears the flag, and the only cost is one rejected RPC.
-func (s *replicaSelector) countLeaderBusy() {
-	leaderPeerID := s.region.GetLeaderPeerID()
-	if s.replicaReadType != kv.ReplicaReadLeader || s.isStaleRead || s.option.leaderOnly ||
-		s.target == nil || s.target.peer == nil || s.target.peer.Id != leaderPeerID || s.leaderBusyProbed {
-		return
-	}
-	// The count belongs to a specific cached leader: whenever the cached leader
-	// changes (e.g. switched by a NotLeader hint), restart the count for the new
-	// leader so that it won't be marked after inheriting the old leader's count.
-	if s.leaderBusyPeerID != leaderPeerID {
-		s.leaderBusyPeerID = leaderPeerID
-		s.leaderBusyCount = 0
-	}
-	s.leaderBusyCount++
-	if s.leaderBusyCount >= leaderBusyProbeThreshold {
-		s.target.addFlag(suspectNotLeaderFlag)
-		s.leaderBusyProbed = true
-	}
-}
-
 // onServerIsBusy handles a ServerIsBusy region error. A reply from a store
 // whose health feedback blames the request's own resource group goes to
 // onNoisyTenantServerIsBusy, which pins the retry to the leader. Any other
@@ -793,7 +751,7 @@ func (s *replicaSelector) onServerIsBusy(
 	batchedCopNoRetry := serverIsBusy.EstimatedWaitMs != 0 && s.busyThreshold != 0 &&
 		req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0
 	if !batchedCopNoRetry && storeBlamesRequestGroup(store, req) {
-		return s.onNoisyTenantServerIsBusy(bo, ctx, req, serverIsBusy)
+		return s.onNoisyTenantServerIsBusy(bo, ctx, req)
 	}
 	if store != nil {
 		// A ServerIsBusy can be produced by either the read path (read pool,
@@ -823,7 +781,34 @@ func (s *replicaSelector) onServerIsBusy(
 				// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
 				ctx.Store.healthStatus.markAlreadySlow()
 			}
-			s.countLeaderBusy()
+			// Workaround for tikv/client-go#2028: if the store's read pool is wedged, leader
+			// reads are rejected with ServerIsBusy(0) at the pool entrance, so the request
+			// never reaches the raft layer and no NotLeader error is returned even if PD has
+			// already moved the leader away. Retrying the cached leader then hammers the
+			// half-dead store indefinitely. After 2 such rejections from the same cached
+			// leader within this selector (the count restarts only when the cached leader
+			// changes), mark it suspect-not-leader so that the next attempt probes a follower
+			// with the leader read (req.ReplicaRead is kept unchanged). The follower replies
+			// NotLeader with the real leader hint, which heals the shared region cache via
+			// onNotLeader/updateLeader. Probe at most once per selector; if the store is
+			// still the leader, the hint points back to it, onUpdateLeader clears the flag,
+			// and the only cost is one rejected RPC.
+			leaderPeerID := s.region.GetLeaderPeerID()
+			if s.replicaReadType == kv.ReplicaReadLeader && !s.isStaleRead && !s.option.leaderOnly &&
+				s.target != nil && s.target.peer != nil && s.target.peer.Id == leaderPeerID && !s.leaderBusyProbed {
+				// The count belongs to a specific cached leader: whenever the cached leader
+				// changes (e.g. switched by a NotLeader hint), restart the count for the new
+				// leader so that it won't be marked after inheriting the old leader's count.
+				if s.leaderBusyPeerID != leaderPeerID {
+					s.leaderBusyPeerID = leaderPeerID
+					s.leaderBusyCount = 0
+				}
+				s.leaderBusyCount++
+				if s.leaderBusyCount >= leaderBusyProbeThreshold {
+					s.target.addFlag(suspectNotLeaderFlag)
+					s.leaderBusyProbed = true
+				}
+			}
 		}
 	}
 	backoffErr := newBackoffErrWithRPCContext("server is busy", ctx)

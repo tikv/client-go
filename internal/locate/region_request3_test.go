@@ -2480,7 +2480,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantStaleRetryBacksOff(
 	bo = retry.NewBackoffer(context.Background(), -1)
 	rpcCtx, err = pinnedSel.next(bo, pinned)
 	s.Nil(err)
-	retryable, err := pinnedSel.onNoisyTenantServerIsBusy(bo, rpcCtx, pinned, &errorpb.ServerIsBusy{})
+	retryable, err := pinnedSel.onNoisyTenantServerIsBusy(bo, rpcCtx, pinned)
 	s.Nil(err)
 	s.True(retryable)
 	slept := bo.GetTotalSleep()
