@@ -268,6 +268,13 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 			opt(&client)
 		}
 
+		// NullspaceID (0xffffffff) is the sentinel for "no keyspace configured":
+		// clients without a codec and API V1 codecs both report NullspaceID. It
+		// was also the NULL keyspace reserved by the previous serverless
+		// clusters, so the tikv-keyspace-id header is never sent for this value
+		// (see sendRequest and batchCommandsStream.recreate). Next gen clusters
+		// forbid TiDB nodes without a configured keyspace, so only API V1 and
+		// no-codec clients map to it in practice.
 		keyspaceID := apicodec.NullspaceID
 		if c.option.codec != nil {
 			keyspaceID = c.option.codec.GetKeyspaceID()
@@ -407,7 +414,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, req.ForwardedHost)
 	}
 
-	// Set metadata for keyspace id. Needn't forward DebugReq.
+	// Set metadata for keyspace id so TiKV can identify the tenant before
+	// decoding the message. Skip NullspaceID: it means no keyspace is
+	// configured (API V1 / no codec) and doubles as the NULL keyspace reserved
+	// by the previous serverless architecture, which no longer occurs on next
+	// gen clusters. Needn't forward DebugReq.
 	if codec := c.option.codec; codec != nil && codec.GetKeyspaceID() != apicodec.NullspaceID {
 		ctx = metadata.AppendToOutgoingContext(
 			ctx, keyspaceIdMetadataKey,

@@ -919,6 +919,8 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 	if s.connIdx != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, batchConnIdxMetadataKey, s.connIdx)
 	}
+	// NullspaceID means no keyspace is configured, so the header is omitted
+	// here just like in sendRequest.
 	if s.keyspaceID != apicodec.NullspaceID {
 		ctx = metadata.AppendToOutgoingContext(ctx, keyspaceIdMetadataKey, strconv.FormatUint(uint64(s.keyspaceID), 10))
 	}
