@@ -103,7 +103,7 @@ func (scheduler *LatchesScheduler) wakeup(wakeupList []*Lock) {
 // Close closes LatchesScheduler.
 func (scheduler *LatchesScheduler) Close() {
 	scheduler.RWMutex.Lock()
-	defer scheduler.RWMutex.Unlock()
+	defer scheduler.Unlock()
 	if !scheduler.closed {
 		close(scheduler.unlockCh)
 		scheduler.closed = true

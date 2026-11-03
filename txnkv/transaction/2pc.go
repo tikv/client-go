@@ -947,8 +947,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 		sizeFunc = c.keyValueSize
 		atomic.AddInt32(&c.getDetail().PrewriteRegionNum, int32(len(groups)))
 	case actionPessimisticLock:
-		if act.LockCtx.Stats != nil {
-			act.LockCtx.Stats.RegionNum = int32(len(groups))
+		if act.Stats != nil {
+			act.Stats.RegionNum = int32(len(groups))
 		}
 	}
 
@@ -1411,12 +1411,12 @@ func broadcastToAllStores(
 						TxnStatus: []*kvrpcpb.TxnStatus{status},
 					},
 				)
-				req.Context.ClusterId = store.GetClusterID()
-				req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
+				req.ClusterId = store.GetClusterID()
+				req.ResourceControlContext = &kvrpcpb.ResourceControlContext{
 					ResourceGroupName: resourceGroupName,
 				}
-				req.Context.ResourceGroupTag = resourceGroupTag
-				req.Context.RequestSource = txn.GetRequestSource()
+				req.ResourceGroupTag = resourceGroupTag
+				req.RequestSource = txn.GetRequestSource()
 
 				_, err := store.GetTiKVClient().SendRequest(
 					bo.GetCtx(),

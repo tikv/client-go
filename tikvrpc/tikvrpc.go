@@ -866,10 +866,10 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 // Deprecated: use SetContextNoAttach instead, RPCClient will call AttachContext(req, req.Context).
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	if region != nil {
-		req.Context.RegionId = region.Id
-		req.Context.RegionEpoch = region.RegionEpoch
+		req.RegionId = region.Id
+		req.RegionEpoch = region.RegionEpoch
 	}
-	req.Context.Peer = peer
+	req.Peer = peer
 
 	// Shallow copy the context to avoid concurrent modification.
 	if !AttachContext(req, req.Context) {
@@ -884,10 +884,10 @@ func SetContextNoAttach(req *Request, region *metapb.Region, peer *metapb.Peer) 
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	if region != nil {
-		req.Context.RegionId = region.Id
-		req.Context.RegionEpoch = region.RegionEpoch
+		req.RegionId = region.Id
+		req.RegionEpoch = region.RegionEpoch
 	}
-	req.Context.Peer = peer
+	req.Peer = peer
 	return nil
 }
 
@@ -1318,63 +1318,63 @@ func (l *Lease) SetHardTimeout(timeout time.Duration) {
 // Recv overrides the stream client Recv() function.
 func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	deadline := time.Now().Add(resp.Timeout).UnixNano()
-	atomic.StoreInt64(&resp.Lease.deadline, deadline)
+	atomic.StoreInt64(&resp.deadline, deadline)
 
 	ret, err := resp.Tikv_CoprocessorStreamClient.Recv()
 
-	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
+	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	return ret, errors.WithStack(err)
 }
 
 // Close closes the CopStreamResponse object.
 func (resp *CopStreamResponse) Close() {
-	atomic.StoreInt64(&resp.Lease.deadline, 1)
+	atomic.StoreInt64(&resp.deadline, 1)
 	// We also call cancel here because CheckStreamTimeoutLoop
 	// is not guaranteed to cancel all items when it exits.
-	if resp.Lease.Cancel != nil {
-		resp.Lease.Cancel()
+	if resp.Cancel != nil {
+		resp.Cancel()
 	}
 }
 
 // Recv overrides the stream client Recv() function.
 func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	deadline := time.Now().Add(resp.Timeout).UnixNano()
-	atomic.StoreInt64(&resp.Lease.deadline, deadline)
+	atomic.StoreInt64(&resp.deadline, deadline)
 
 	ret, err := resp.Tikv_BatchCoprocessorClient.Recv()
 
-	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
+	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	return ret, errors.WithStack(err)
 }
 
 // Close closes the BatchCopStreamResponse object.
 func (resp *BatchCopStreamResponse) Close() {
-	atomic.StoreInt64(&resp.Lease.deadline, 1)
+	atomic.StoreInt64(&resp.deadline, 1)
 	// We also call cancel here because CheckStreamTimeoutLoop
 	// is not guaranteed to cancel all items when it exits.
-	if resp.Lease.Cancel != nil {
-		resp.Lease.Cancel()
+	if resp.Cancel != nil {
+		resp.Cancel()
 	}
 }
 
 // Recv overrides the stream client Recv() function.
 func (resp *MPPStreamResponse) Recv() (*mpp.MPPDataPacket, error) {
 	deadline := time.Now().Add(resp.Timeout).UnixNano()
-	atomic.StoreInt64(&resp.Lease.deadline, deadline)
+	atomic.StoreInt64(&resp.deadline, deadline)
 
 	ret, err := resp.Tikv_EstablishMPPConnectionClient.Recv()
 
-	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
+	atomic.StoreInt64(&resp.deadline, 0) // Stop the lease check.
 	return ret, errors.WithStack(err)
 }
 
 // Close closes the MPPStreamResponse object.
 func (resp *MPPStreamResponse) Close() {
-	atomic.StoreInt64(&resp.Lease.deadline, 1)
+	atomic.StoreInt64(&resp.deadline, 1)
 	// We also call cancel here because CheckStreamTimeoutLoop
 	// is not guaranteed to cancel all items when it exits.
-	if resp.Lease.Cancel != nil {
-		resp.Lease.Cancel()
+	if resp.Cancel != nil {
+		resp.Cancel()
 	}
 }
 

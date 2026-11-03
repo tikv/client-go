@@ -96,6 +96,6 @@ func (a *nodeAllocator) freeNode(addr arena.MemdbArenaAddr) {
 }
 
 func (a *nodeAllocator) reset() {
-	a.MemdbArena.Reset()
+	a.Reset()
 	a.init()
 }
