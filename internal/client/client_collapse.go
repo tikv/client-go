@@ -89,7 +89,7 @@ func (r *reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *ti
 	if r.Client == nil {
 		panic("client should not be nil")
 	}
-	if req.Type == tikvrpc.CmdResolveLock && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
+	if req.Type == tikvrpc.CmdResolveLock && req.Peer.GetStoreId() != 0 && len(req.ResolveLock().Keys) == 0 && len(req.ResolveLock().TxnInfos) == 0 {
 		// try collapse resolve lock request.
 		key := resolveLockCollapseKey(ctx, req)
 		copyReq := *req
@@ -120,6 +120,10 @@ func (r *reqCollapse) SendRequestAsync(ctx context.Context, addr string, req *ti
 func (r *reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (canCollapse bool, resp *tikvrpc.Response, err error) {
 	switch req.Type {
 	case tikvrpc.CmdResolveLock:
+		if req.Peer.GetStoreId() == 0 {
+			// Without an execution Store identity, a rejection cannot be safely shared.
+			return
+		}
 		resolveLock := req.ResolveLock()
 		if len(resolveLock.Keys) > 0 {
 			// can not collapse resolve lock lite
@@ -147,10 +151,11 @@ func resolveLockCollapseKey(ctx context.Context, req *tikvrpc.Request) string {
 	if ok {
 		declaration = selectedDeclaration.Version
 	}
-	// Routing may differ while the desired transaction state remains identical.
-	// The declaration is part of response attribution: callers that selected
-	// different declarations must not share an incompatible response.
+	// Both the execution Store and declaration are part of response attribution:
+	// an incompatible response is specific to that Store and version. The peer
+	// identifies the execution Store even when addr points to a forwarding proxy.
 	return strconv.FormatUint(req.RegionId, 10) + "-" +
+		strconv.FormatUint(req.Peer.GetStoreId(), 10) + "-" +
 		strconv.FormatUint(resolveLock.StartVersion, 10) + "-" +
 		strconv.FormatUint(resolveLock.CommitVersion, 10) + "-" +
 		strconv.FormatBool(resolveLock.GetIsAsync()) + "-" +

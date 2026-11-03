@@ -22,6 +22,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
@@ -32,8 +33,9 @@ import (
 
 type collapseTestTransport struct {
 	Client
-	calls   atomic.Int32
-	release <-chan struct{}
+	calls       atomic.Int32
+	release     <-chan struct{}
+	rejectStore uint64
 }
 
 func (c *collapseTestTransport) SendRequest(ctx context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
@@ -44,7 +46,24 @@ func (c *collapseTestTransport) SendRequest(ctx context.Context, _ string, req *
 		return nil, err
 	}
 	tikvrpc.AttachContext(req, rpcCtx)
+	if c.rejectStore != 0 && req.Peer.GetStoreId() == c.rejectStore {
+		return &tikvrpc.Response{Resp: &kvrpcpb.ResolveLockResponse{RegionError: &errorpb.Error{
+			IncompatibleRequest: &errorpb.IncompatibleRequest{
+				Reason:                          errorpb.IncompatibleRequestReason_IncompatibleRequestReasonTxnProtocolVersionOutOfRange,
+				ProvidedTxnProtocolVersion:      rpcCtx.GetTxnProtocolVersion(),
+				MinCompatibleTxnProtocolVersion: 2,
+				MaxCompatibleTxnProtocolVersion: 2,
+			},
+		}}}, nil
+	}
 	return &tikvrpc.Response{Resp: &kvrpcpb.ResolveLockResponse{}}, nil
+}
+
+func (c *collapseTestTransport) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		resp, err := c.SendRequest(ctx, addr, req, time.Second)
+		cb.Schedule(resp, err)
+	}()
 }
 
 func TestDetachedTxnProtocolContext(t *testing.T) {
@@ -68,11 +87,16 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 		for _, variant := range []string{
 			"same", "version", "presence", "region", "start", "commit", "resolve_async",
 			"address", "forwarding", "peer", "epoch", "client",
+			"store", "store_rejection", "different_store_same_proxy", "same_store_different_proxy",
+			"missing_peer", "zero_store",
 		} {
 			t.Run(fmt.Sprintf("async=%t/%s", useAsync, variant), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					release := make(chan struct{})
 					transport := &collapseTestTransport{release: release}
+					if variant == "store_rejection" {
+						transport.rejectStore = 3
+					}
 					first := NewReqCollapse(transport)
 					second := first
 					if variant == "client" {
@@ -80,7 +104,12 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 					}
 					loop := async.NewRunLoop()
 					completed := 0
-					errs := make(chan error, 2)
+					type result struct {
+						resp    *tikvrpc.Response
+						err     error
+						storeID uint64
+					}
+					results := make(chan result, 2)
 					for i, c := range []Client{first, second} {
 						req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{StartVersion: 10, CommitVersion: 20})
 						req.RegionId = 1
@@ -89,6 +118,15 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 						declaration := txnprotocol.Declaration{Version: 1}
 						hasDeclaration := true
 						addr := "store"
+						switch variant {
+						case "missing_peer":
+							req.Peer = nil
+						case "zero_store":
+							req.Peer.StoreId = 0
+						case "different_store_same_proxy", "same_store_different_proxy":
+							addr = "proxy"
+							req.ForwardedHost = "store"
+						}
 						if i == 1 {
 							switch variant {
 							case "version":
@@ -105,6 +143,14 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 								req.ForwardedHost = "execution-store"
 							case "peer":
 								req.Peer.Id++
+							case "store", "store_rejection":
+								req.Peer.StoreId++
+								addr = "other-store"
+							case "different_store_same_proxy":
+								req.Peer.StoreId++
+								req.ForwardedHost = "other-store"
+							case "same_store_different_proxy":
+								addr = "other-proxy"
 							case "epoch":
 								req.RegionEpoch.Version++
 							case "commit":
@@ -118,18 +164,21 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 							ctx = txnprotocol.WithDeclaration(ctx, declaration)
 						}
 						if useAsync {
-							c.SendRequestAsync(ctx, addr, req, async.NewCallback(loop, func(_ *tikvrpc.Response, err error) {
-								require.NoError(t, err)
+							c.SendRequestAsync(ctx, addr, req, async.NewCallback(loop, func(resp *tikvrpc.Response, err error) {
+								results <- result{resp, err, req.Peer.GetStoreId()}
 								completed++
 							}))
 						} else {
-							go func() { _, err := c.SendRequest(ctx, addr, req, time.Second); errs <- err }()
+							go func() {
+								resp, err := c.SendRequest(ctx, addr, req, time.Second)
+								results <- result{resp, err, req.Peer.GetStoreId()}
+							}()
 						}
 					}
 					synctest.Wait()
 					wantCalls := int32(2)
 					switch variant {
-					case "same", "address", "forwarding", "peer", "epoch":
+					case "same", "address", "forwarding", "peer", "epoch", "same_store_different_proxy":
 						wantCalls = 1
 					}
 					require.Equal(t, wantCalls, transport.calls.Load())
@@ -139,9 +188,19 @@ func TestCollapseSeparatesPhysicalAttempts(t *testing.T) {
 							_, err := loop.Exec(context.Background())
 							require.NoError(t, err)
 						}
-					} else {
-						require.NoError(t, <-errs)
-						require.NoError(t, <-errs)
+					}
+					for i := 0; i < 2; i++ {
+						rs := <-results
+						require.NoError(t, rs.err)
+						require.NotNil(t, rs.resp)
+						regionErr, err := rs.resp.GetRegionError()
+						require.NoError(t, err)
+						if variant == "store_rejection" && rs.storeID == transport.rejectStore {
+							require.NotNil(t, regionErr.GetIncompatibleRequest())
+							require.Equal(t, uint32(1), regionErr.GetIncompatibleRequest().GetProvidedTxnProtocolVersion())
+						} else {
+							require.Nil(t, regionErr)
+						}
 					}
 				})
 			})
