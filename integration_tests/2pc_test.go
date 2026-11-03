@@ -763,6 +763,42 @@ func (s *testCommitterSuite) TestCommitDoesNotRestoreResolvedRPCError() {
 	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }
 
+func (s *testCommitterSuite) TestCommitTSUpperBoundCheckOnCommitTSExpired() {
+	txn := s.begin()
+	key := s.key("commit_ts_upper_bound")
+	s.Require().NoError(txn.Set(key, []byte("value")))
+	var checked []uint64
+	txn.SetCommitTSUpperBoundCheck(func(commitTS uint64) bool {
+		checked = append(checked, commitTS)
+		return len(checked) == 1
+	})
+	requests := 0
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("commit-ts-expired", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdCommit {
+				return next(target, req)
+			}
+			requests++
+			if requests > 1 {
+				return next(target, req)
+			}
+			commit := req.Commit()
+			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				StartTs: commit.StartVersion, AttemptedCommitTs: commit.CommitVersion, MinCommitTs: commit.CommitVersion + 1, Key: key,
+			}}}}, nil
+		}
+	}))
+
+	err := txn.Commit(context.Background())
+	txn.GetCommitter().WaitCleanup()
+	s.ErrorContains(err, "check commit ts upper bound fail")
+	s.Equal(1, requests)
+	s.Len(checked, 2)
+
+	_, err = s.begin().Get(context.Background(), key)
+	s.True(tikverr.IsErrNotFound(err), errors.WithStack(err))
+}
+
 func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
 	// This test checks that the isPessimisticLock field is set in the request even when no keys are pessimistic lock.
 	txn := s.begin()
