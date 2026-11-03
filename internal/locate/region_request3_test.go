@@ -1098,7 +1098,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	s.False(req.StaleRead)
 	s.Zero(req.BusyThresholdMs)
 	s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType, "a pinned retry is a leader read, which the prefer-leader slow score skips")
-	s.True(replicaSelector.pinnedToOverloadedLeader, "a pinned retry is marked like the first steered attempt, so its latency stays out of the slow score")
 
 	// The store is not marked slow: overload is a signal of its own, and nothing
 	// here has touched the latency-driven one.
@@ -1208,7 +1207,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.True(selector.pinnedToOverloadedLeader)
 	s.Zero(req.BusyThresholdMs)
 
 	// The leader then times out. Upstream a configurable-timeout deadline
@@ -1237,7 +1235,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err = otherSel.next(bo, other)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(otherSel.pinnedToOverloadedLeader, "nobody blamed, nothing steered")
 	handled, err = otherSel.onNoisyTenantTimeout(bo, rpcCtx, other)
 	s.Nil(err)
 	s.False(handled)
@@ -1247,7 +1244,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	s.NotNil(rpcCtx)
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "without the blame the deadline flag is left to upstream")
 	s.True(other.ReplicaRead)
-	s.False(otherSel.pinnedToOverloadedLeader)
 
 	// Blame the store stopped reporting has expired with the mark. A timeout now
 	// is a disk or network stall, not the group's own queue, and must not renew
@@ -1265,7 +1261,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err = staleSel.next(bo, stale)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(staleSel.pinnedToOverloadedLeader, "expired blame steers nobody")
 	handled, err = staleSel.onNoisyTenantTimeout(bo, rpcCtx, stale)
 	s.Nil(err)
 	s.False(handled, "a timeout does not renew expired blame")
@@ -1346,7 +1341,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	s.Nil(err)
 	s.NotNil(rpcCtx)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(writeSel.pinnedToOverloadedLeader, "a write is not steered")
 	s.Equal(pinnedBefore, readCounter(metrics.TiKVNoisyTenantLeaderPinnedCounter), "a write is not counted as pinned")
 
 	// Nobody else is steered. A bystander, and a request with no group at all,
@@ -1447,10 +1441,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
 		})
 
-		// The blamed group is pinned here now. Its latency is this group's own
+		// The store blames this group. Its latency is the group's own
 		// throttling, and the slow score is store-wide with no group dimension
-		// to keep it out of, so the attempt is not measured.
-		s.False(send(group), "a pinned attempt is not measured, async=%v", async)
+		// to keep it out of, so the attempt is not measured, however it was
+		// routed.
+		s.False(send(group), "a blamed group's attempt is not measured, async=%v", async)
 		// A bystander reaching the same store was routed normally, and is.
 		s.True(send("uds_007"), "a bystander is still measured, async=%v", async)
 

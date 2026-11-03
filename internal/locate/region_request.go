@@ -121,13 +121,6 @@ type RegionRequestSender struct {
 	AccessStats       *ReplicaAccessStats
 }
 
-// Whether the attempt just sent was forced onto the leader by the noisy-tenant
-// logic. Such latency is one group's throttling, not the store's health, and the
-// prefer-leader slow score has no group dimension to keep it out of.
-func (s *RegionRequestSender) attemptPinnedToOverloadedLeader() bool {
-	return s.replicaSelector != nil && s.replicaSelector.pinnedToOverloadedLeader
-}
-
 func (s *RegionRequestSender) String() string {
 	if s.replicaSelector == nil {
 		return fmt.Sprintf("{rpcError:%v, replicaSelector: <nil>}", s.rpcError)
@@ -1297,8 +1290,11 @@ func (s *sendReqState) send() (canceled bool) {
 		collector.onResp(req, s.vars.resp, execDetails)
 
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
+		// A group the store blames is left out: its latency is that group's own
+		// throttling, not the store's health, and the slow score has no group
+		// dimension to keep it out of.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-			!s.attemptPinnedToOverloadedLeader() {
+			!storeBlamesRequestGroup(rpcCtx.Store, req) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
@@ -1477,8 +1473,9 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	collector.onReq(req, execDetails)
 	collector.onResp(req, resp, execDetails)
 
+	// Same exclusion as the sync path: a blamed group's latency is not the store's.
 	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-		!s.attemptPinnedToOverloadedLeader() {
+		!storeBlamesRequestGroup(s.vars.rpcCtx.Store, req) {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
 	if s.vars.rpcCtx.ProxyStore != nil {

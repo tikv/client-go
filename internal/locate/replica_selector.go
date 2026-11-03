@@ -48,15 +48,9 @@ type replicaSelector struct {
 	leaderBusyCount  int
 	leaderBusyPeerID uint64
 	leaderBusyProbed bool
-	// Whether the noisy-tenant logic put this attempt on the leader: either
-	// tryOverloadedLeader chose it, or a busy or timeout reply that blamed the
-	// request's group pinned the selector there. Re-decided per attempt, since
-	// the probe or exhaustion may move a pinned retry off the leader.
-	pinnedToOverloadedLeader bool
 	// Set by pinRetryToLeader once a busy or timed-out attempt landed on a
-	// store whose health feedback blames the request's own group. It is what
-	// marks the pinned retries, so their latency stays out of the store's slow
-	// score the same way the first steered attempt's does.
+	// store whose health feedback blames the request's own group. Keeps the
+	// remaining attempts on the leader.
 	pinnedByNoisyReply bool
 }
 
@@ -145,7 +139,6 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	s.attempts++
 	s.target = nil
 	s.proxy = nil
-	s.pinnedToOverloadedLeader = false
 	// Only a fresh request is steered by the store's report. A retry goes where
 	// the reply that failed it said: a busy or timeout that blamed the group
 	// pinned the selector to the leader, and anything else is upstream's to
@@ -165,13 +158,6 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 	}
 	if s.target == nil {
 		return nil, nil
-	}
-	// A retry pinned by a blamed reply is on the leader for the same reason the
-	// first steered attempt was, and is marked the same way, so its latency
-	// stays out of the store's slow score. The probe or exhaustion may have
-	// moved it elsewhere, in which case it is an ordinary attempt.
-	if s.pinnedByNoisyReply && s.target.peer != nil && s.target.peer.Id == s.region.GetLeaderPeerID() {
-		s.pinnedToOverloadedLeader = true
 	}
 	if err := s.backoffStaleRetryOnBlamingStore(bo, req); err != nil {
 		return nil, err
@@ -209,7 +195,6 @@ func (s *replicaSelector) tryOverloadedLeader(req *tikvrpc.Request) {
 		return
 	}
 	s.target = leader
-	s.pinnedToOverloadedLeader = true
 	metrics.TiKVNoisyTenantLeaderPinnedCounter.Inc()
 	// A plain leader read: no ReplicaRead, and no busy threshold, because the
 	// threshold's own fallback is to an idle follower and that is a ReadIndex.
