@@ -1,0 +1,242 @@
+x-no-proxy-env: &no-proxy-env
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  ALL_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  all_proxy: ""
+  NO_PROXY: "localhost,127.0.0.1,::1,minio,minio-init,pd,create-keyspace,tikv-1,tikv-2,tikv-3,tikv-worker,test"
+  no_proxy: "localhost,127.0.0.1,::1,minio,minio-init,pd,create-keyspace,tikv-1,tikv-2,tikv-3,tikv-worker,test"
+
+x-common-env: &common-env
+  <<: *no-proxy-env
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_REGION: us-west-2
+  AWS_DEFAULT_REGION: us-west-2
+  AWS_ENDPOINT_URL: http://minio:9000
+  AWS_EC2_METADATA_DISABLED: "true"
+  DFS_BACKEND: s3
+  DFS_PREFIX: cse
+  DFS_S3_BUCKET: tidbcloud-local-dfs
+  DFS_S3_ENDPOINT: http://minio:9000
+  DFS_S3_KEY_ID: minioadmin
+  DFS_S3_SECRET_KEY: minioadmin
+  DFS_S3_REGION: us-west-2
+  DFS_REMOTE_COMPACTOR_ADDR: http://tikv-worker:19000/compact
+  DFS_ALLOW_FALLBACK_LOCAL: "false"
+
+x-service-limits: &service-limits
+  cpus: "4.0"
+  mem_limit: 8g
+  deploy:
+    resources:
+      limits:
+        cpus: "4.0"
+        memory: 8G
+
+services:
+  minio:
+    image: hub.pingcap.net/test-infra/minio:latest@sha256:d5c7b30d2e49f3886d7da679ffddd8fc327508b4ee564053da619c86b71ac0ba
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      <<: *no-proxy-env
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_REGION: us-west-2
+      MINIO_REGION_NAME: us-west-2
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || wget -q -O - http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  minio-init:
+    image: quay.io/minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    entrypoint: ["/bin/sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      <<: *no-proxy-env
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ENDPOINT: http://minio:9000
+    volumes:
+      - ./bootstrap/init-minio.sh:/bootstrap/init-minio.sh:ro
+    command: ["/bootstrap/init-minio.sh"]
+    restart: "no"
+
+  pd:
+    <<: *service-limits
+    image: hub-zot.pingcap.net/mirrors/tidbx/tikv/pd/image:release-nextgen-202603@sha256:2af376596238fb9c6350ba962780cb45cf4284e4d8c90574a697b45222b6049a
+    entrypoint: ["/bin/sh"]
+    command: ["-ec", "mkdir -p /var/log/pd && exec /pd-server --config /etc/pd/pd.toml"]
+    environment: *no-proxy-env
+    volumes:
+      - pd-data:/var/lib/pd
+      - pd-logs:/var/log/pd
+      - ./configs/pd.toml:/etc/pd/pd.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/pd-ctl -u http://127.0.0.1:2379 member >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  create-keyspace:
+    image: hub-zot.pingcap.net/mirrors/tidbx/tikv/pd/image:release-nextgen-202603@sha256:2af376596238fb9c6350ba962780cb45cf4284e4d8c90574a697b45222b6049a
+    entrypoint: ["/bin/sh"]
+    depends_on:
+      pd:
+        condition: service_healthy
+    environment:
+      <<: *no-proxy-env
+      PD_ENDPOINT: http://pd:2379
+    volumes:
+      - ./bootstrap/create-keyspace.sh:/bootstrap/create-keyspace.sh:ro
+    command: ["/bootstrap/create-keyspace.sh"]
+    restart: "no"
+
+  tikv-1:
+    <<: *service-limits
+    image: ${TIKV_COMPOSE_IMAGE:-hub-zot.pingcap.net/mirrors/tidbx/tikv/tikv/image:release-nextgen-202603@sha256:be56383f85979aaf45e15a59201b5f41d1345dd96a19b9fd8c41d2226556408f}
+    entrypoint: ["/bin/sh"]
+    command: ["-ec", "mkdir -p /var/lib/tikv /var/lib/raft/data /var/log/tikv && exec /tikv-server --config /etc/tikv/tikv.toml"]
+    environment: *common-env
+    depends_on:
+      pd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - tikv-1-data:/var/lib/tikv
+      - tikv-1-raft:/var/lib/raft
+      - tikv-1-logs:/var/log/tikv
+      - ./configs/tikv-1.toml:/etc/tikv/tikv.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:20180/status >/dev/null || wget -q -O - http://127.0.0.1:20180/status >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  tikv-2:
+    <<: *service-limits
+    image: ${TIKV_COMPOSE_IMAGE:-hub-zot.pingcap.net/mirrors/tidbx/tikv/tikv/image:release-nextgen-202603@sha256:be56383f85979aaf45e15a59201b5f41d1345dd96a19b9fd8c41d2226556408f}
+    entrypoint: ["/bin/sh"]
+    command: ["-ec", "mkdir -p /var/lib/tikv /var/lib/raft/data /var/log/tikv && exec /tikv-server --config /etc/tikv/tikv.toml"]
+    environment: *common-env
+    depends_on:
+      pd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - tikv-2-data:/var/lib/tikv
+      - tikv-2-raft:/var/lib/raft
+      - tikv-2-logs:/var/log/tikv
+      - ./configs/tikv-2.toml:/etc/tikv/tikv.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:20180/status >/dev/null || wget -q -O - http://127.0.0.1:20180/status >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  tikv-3:
+    <<: *service-limits
+    image: ${TIKV_COMPOSE_IMAGE:-hub-zot.pingcap.net/mirrors/tidbx/tikv/tikv/image:release-nextgen-202603@sha256:be56383f85979aaf45e15a59201b5f41d1345dd96a19b9fd8c41d2226556408f}
+    entrypoint: ["/bin/sh"]
+    command: ["-ec", "mkdir -p /var/lib/tikv /var/lib/raft/data /var/log/tikv && exec /tikv-server --config /etc/tikv/tikv.toml"]
+    environment: *common-env
+    depends_on:
+      pd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - tikv-3-data:/var/lib/tikv
+      - tikv-3-raft:/var/lib/raft
+      - tikv-3-logs:/var/log/tikv
+      - ./configs/tikv-3.toml:/etc/tikv/tikv.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:20180/status >/dev/null || wget -q -O - http://127.0.0.1:20180/status >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  tikv-worker:
+    <<: *service-limits
+    image: ${TIKV_COMPOSE_IMAGE:-hub-zot.pingcap.net/mirrors/tidbx/tikv/tikv/image:release-nextgen-202603@sha256:be56383f85979aaf45e15a59201b5f41d1345dd96a19b9fd8c41d2226556408f}
+    entrypoint: ["/bin/sh"]
+    command: ["-ec", "mkdir -p /var/lib/tikv-worker /var/log/tikv-worker && exec /tikv-worker --config /etc/tikv-worker/config.toml --log-file /var/log/tikv-worker/tikv-worker.log"]
+    environment: *common-env
+    depends_on:
+      pd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      create-keyspace:
+        condition: service_completed_successfully
+    volumes:
+      - tikv-worker-data:/var/lib/tikv-worker
+      - tikv-worker-logs:/var/log/tikv-worker
+      - ./configs/tikv-worker.toml:/etc/tikv-worker/config.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:19000/healthz >/dev/null || wget -q -O - http://127.0.0.1:19000/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  test:
+    build:
+      context: ../..
+      dockerfile: integration_tests_in_docker/docker-compose/Dockerfile.test
+    environment:
+      <<: *no-proxy-env
+      PD_ADDR: pd:2379
+      KEYSPACE_NAME: local_normal
+      TXN_CHUNK_WRITER_ADDR: tikv-worker:19000
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      create-keyspace:
+        condition: service_completed_successfully
+      tikv-1:
+        condition: service_healthy
+      tikv-2:
+        condition: service_healthy
+      tikv-3:
+        condition: service_healthy
+      tikv-worker:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  minio-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1g"
+  pd-data:
+  pd-logs:
+  tikv-1-data:
+  tikv-1-raft:
+  tikv-1-logs:
+  tikv-2-data:
+  tikv-2-raft:
+  tikv-2-logs:
+  tikv-3-data:
+  tikv-3-raft:
+  tikv-3-logs:
+  tikv-worker-data:
+  tikv-worker-logs:
