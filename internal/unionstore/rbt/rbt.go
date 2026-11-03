@@ -104,7 +104,7 @@ func (db *RBT) checkKeyInCache(key []byte) (MemdbNodeAddr, bool) {
 	addr := arena.U64ToAddr(addrU64)
 	node := db.getNode(addr)
 
-	if bytes.Equal(key, node.memdbNode.getKey()) {
+	if bytes.Equal(key, node.getKey()) {
 		return node, true
 	}
 
