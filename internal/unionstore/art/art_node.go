@@ -391,9 +391,15 @@ func longestCommonPrefixByChunk(l1Key, l2Key artKey, depth uint32) uint32 {
 			return limit - remaining + uint32(bits.TrailingZeros64(xor)>>3) - depth
 		}
 
+		remaining -= 8
+		if remaining == 0 {
+			// Return before the final pointer advance, which may leave the allocation
+			// and trigger checkptr even without a subsequent dereference.
+			// See https://github.com/tikv/client-go/issues/2116.
+			return limit - depth
+		}
 		p1 = unsafe.Add(p1, 8)
 		p2 = unsafe.Add(p2, 8)
-		remaining -= 8
 	}
 
 	// Compare rest bytes

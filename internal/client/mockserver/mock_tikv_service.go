@@ -76,6 +76,14 @@ func (s *MockServer) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_
 	return ss.Send(&coprocessor.Response{})
 }
 
+// BatchCoprocessor implements the streaming batch coprocessor RPC.
+func (s *MockServer) BatchCoprocessor(req *coprocessor.BatchRequest, ss tikvpb.Tikv_BatchCoprocessorServer) error {
+	if err := s.checkMetadata(ss.Context()); err != nil {
+		return err
+	}
+	return ss.Send(&coprocessor.BatchResponse{})
+}
+
 // KvBatchGet implements the TikvServer interface.
 func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
