@@ -350,7 +350,7 @@ func TestCollapseResolveLock(t *testing.T) {
 			Keys:          keys,
 			IsAsync:       isAsync,
 		})
-		tikvrpc.SetContextNoAttach(req, region, nil)
+		tikvrpc.SetContextNoAttach(req, region, &metapb.Peer{Id: 1, StoreId: 1})
 		return req
 	}
 	buildBatchResolveLockReq := func(regionID uint64, txnInfos []*kvrpcpb.TxnInfo) *tikvrpc.Request {
@@ -358,13 +358,13 @@ func TestCollapseResolveLock(t *testing.T) {
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{
 			TxnInfos: txnInfos,
 		})
-		tikvrpc.SetContextNoAttach(req, region, nil)
+		tikvrpc.SetContextNoAttach(req, region, &metapb.Peer{Id: 1, StoreId: 1})
 		return req
 	}
 
 	var wg sync.WaitGroup
 	reqCh := make(chan *tikvrpc.Request)
-	client := reqCollapse{&chanClient{wg: &wg, ch: reqCh}}
+	client := reqCollapse{Client: &chanClient{wg: &wg, ch: reqCh}}
 	ctx := context.Background()
 
 	// Collapse ResolveLock.

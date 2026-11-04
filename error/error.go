@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
@@ -151,6 +152,26 @@ type ErrSharedLockLost struct {
 
 func (e *ErrSharedLockLost) Error() string {
 	return fmt.Sprintf("shared lock lost { %s }", e.String())
+}
+
+// ErrIncompatibleRequest wraps *errorpb.IncompatibleRequest to report that the
+// request was rejected locally or by the server because its transaction protocol
+// declaration is incompatible with the request or execution Store.
+//
+// Once returned to the caller it is terminal. The sender may first recover a
+// strict upper-bound admission rejection by refreshing Store metadata and
+// resending once. A local transport rejection never indicates an uncertain RPC.
+//
+// Error returns the proto text form of the payload, which is meant for
+// diagnosis only: proto omits fields that hold their zero value, so the reported
+// compatible range may be incomplete. Callers should use errors.As to inspect
+// the reason and the versions instead of parsing the error text.
+type ErrIncompatibleRequest struct {
+	*errorpb.IncompatibleRequest
+}
+
+func (e *ErrIncompatibleRequest) Error() string {
+	return fmt.Sprintf("incompatible request { %s }", e.String())
 }
 
 // PDError wraps *pdpb.Error to implement the error interface.
@@ -344,6 +365,12 @@ func (e *ErrLockOnlyIfExistsNoPrimaryKey) Error() string {
 	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set, "+
 		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%s}",
 		e.StartTS, e.ForUpdateTs, redact.Key(e.LockKey))
+}
+
+// NewErrIncompatibleRequest wraps a local or server compatibility rejection.
+// Callers receiving this error should treat it as a terminal failure.
+func NewErrIncompatibleRequest(incompatibleRequest *errorpb.IncompatibleRequest) error {
+	return errors.WithStack(&ErrIncompatibleRequest{IncompatibleRequest: incompatibleRequest})
 }
 
 // ExtractKeyErr extracts a KeyError.
