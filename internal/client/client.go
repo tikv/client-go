@@ -91,6 +91,8 @@ const forwardMetadataKey = "tikv-forwarded-host"
 // batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
 const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 
+const keyspaceIdMetadataKey = "tikv-keyspace-id"
+
 const (
 	// Matches TiDB's kv.InternalTxnMViewMaintenance ("mview_maintain").
 	mvMaintenanceRequestSource = "internal_mview_maintain"
@@ -265,11 +267,25 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 		for _, opt := range opts {
 			opt(&client)
 		}
+
+		// NullspaceID (0xffffffff) is the sentinel for "no keyspace configured":
+		// clients without a codec and API V1 codecs both report NullspaceID. It
+		// was also the NULL keyspace reserved by the previous serverless
+		// clusters, so the tikv-keyspace-id header is never sent for this value
+		// (see sendRequest and batchCommandsStream.recreate). Next gen clusters
+		// forbid TiDB nodes without a configured keyspace, so only API V1 and
+		// no-codec clients map to it in practice.
+		keyspaceID := apicodec.NullspaceID
+		if c.option.codec != nil {
+			keyspaceID = c.option.codec.GetKeyspaceID()
+		}
+
 		ver := c.vers[addr] + 1
 		pool, err = newConnPool(
 			client.GrpcConnectionCount,
 			addr,
 			ver,
+			keyspaceID,
 			c.option.security,
 			&c.idleNotify,
 			enableBatch,
@@ -397,6 +413,19 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if req.ForwardedHost != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, forwardMetadataKey, req.ForwardedHost)
 	}
+
+	// Set metadata for keyspace id so TiKV can identify the tenant before
+	// decoding the message. Skip NullspaceID: it means no keyspace is
+	// configured (API V1 / no codec) and doubles as the NULL keyspace reserved
+	// by the previous serverless architecture, which no longer occurs on next
+	// gen clusters. Needn't forward DebugReq.
+	if codec := c.option.codec; codec != nil && codec.GetKeyspaceID() != apicodec.NullspaceID {
+		ctx = metadata.AppendToOutgoingContext(
+			ctx, keyspaceIdMetadataKey,
+			strconv.FormatUint(uint64(codec.GetKeyspaceID()), 10),
+		)
+	}
+
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
 		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connPool))
