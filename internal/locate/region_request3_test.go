@@ -1408,9 +1408,15 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 		leaderStore.noisyGroups.replace(nil, time.Now())
 	}()
 
+	// Runs while the request is in flight, standing in for a HealthFeedback
+	// the batch receiver applies before it delivers this reply.
+	var inFlight func()
 	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(
 		ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration,
 	) (*tikvrpc.Response, error) {
+		if inFlight != nil {
+			inFlight()
+		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 	}}, oracle.NoopReadTSValidator{})
 	// Sends one request to the leader and reports whether that attempt's latency
@@ -1448,6 +1454,21 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 		s.False(send(group), "a blamed group's attempt is not measured, async=%v", async)
 		// A bystander reaching the same store was routed normally, and is.
 		s.True(send("uds_007"), "a bystander is still measured, async=%v", async)
+
+		// The blame was in force when the attempt was sent, so its latency is
+		// the group's throttling even if the blame is gone by the reply.
+		inFlight = func() { leaderStore.noisyGroups.replace(nil, time.Now()) }
+		s.False(send(group), "a blame withdrawn in flight still excludes the attempt, async=%v", async)
+		s.True(send("uds_007"), "a bystander is measured through the withdrawal, async=%v", async)
+		leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+			StoreId:     leaderStore.storeID,
+			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+		})
+		inFlight = func() {
+			leaderStore.noisyGroups.replace([]string{group}, time.Now().Add(-noisyGroupsFreshDuration))
+		}
+		s.False(send(group), "a blame expired in flight still excludes the attempt, async=%v", async)
+		inFlight = nil
 
 		if async {
 			s.Nil(failpoint.Disable("tikvclient/useSendReqAsync"))

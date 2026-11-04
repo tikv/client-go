@@ -608,6 +608,7 @@ func (s *RegionRequestSender) SendReqAsync(
 			sendToAddr = state.vars.rpcCtx.ProxyAddr
 		}
 
+		state.vars.blamedAtSend = storeBlamesRequestGroup(state.vars.rpcCtx.Store, req)
 		s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 			state.vars.sendTimes++
 			canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
@@ -941,6 +942,10 @@ type sendReqState struct {
 		err       error
 		msg       string
 		sendTimes int
+		// Whether rpcCtx.Store blamed the request's group when the attempt was
+		// sent. Kept so a blame withdrawn or expired while the RPC was in
+		// flight still keeps that attempt's latency out of the slow score.
+		blamedAtSend bool
 	}
 
 	invariants reqInvariants
@@ -1232,6 +1237,7 @@ func (s *sendReqState) send() (canceled bool) {
 			trace.TraceEvent(ctx, trace.CategoryKVRequest, "kv.request.send", fields...)
 		}
 
+		s.vars.blamedAtSend = storeBlamesRequestGroup(rpcCtx.Store, req)
 		start := time.Now()
 		s.vars.resp, s.vars.err = s.client.SendRequest(ctx, sendToAddr, req, s.args.timeout)
 		rpcDuration := time.Since(start)
@@ -1292,9 +1298,11 @@ func (s *sendReqState) send() (canceled bool) {
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		// A group the store blames is left out: its latency is that group's own
 		// throttling, not the store's health, and the slow score has no group
-		// dimension to keep it out of.
+		// dimension to keep it out of. Judged at send as well as now, since the
+		// batch receiver applies a batch's HealthFeedback before delivering its
+		// responses, so a blame can be gone by the time its reply is read.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-			!storeBlamesRequestGroup(rpcCtx.Store, req) {
+			!s.vars.blamedAtSend && !storeBlamesRequestGroup(rpcCtx.Store, req) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
@@ -1475,7 +1483,7 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 
 	// Same exclusion as the sync path: a blamed group's latency is not the store's.
 	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-		!storeBlamesRequestGroup(s.vars.rpcCtx.Store, req) {
+		!s.vars.blamedAtSend && !storeBlamesRequestGroup(s.vars.rpcCtx.Store, req) {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
 	if s.vars.rpcCtx.ProxyStore != nil {
