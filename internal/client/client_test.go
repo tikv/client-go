@@ -35,10 +35,12 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -64,7 +66,9 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 type firstRecvErrTikvClient struct {
@@ -168,6 +172,74 @@ func TestStreamFirstRecvErrorClosesLease(t *testing.T) {
 			require.Nil(t, resp)
 			require.ErrorContains(t, err, recvErr.Error())
 			require.Equal(t, context.Canceled, client.streamCtx.Err())
+		})
+	}
+}
+
+type clearingBufferPool struct {
+	puts atomic.Int64
+}
+
+func (*clearingBufferPool) Get(size int) *[]byte {
+	b := make([]byte, size)
+	return &b
+}
+
+func (p *clearingBufferPool) Put(b *[]byte) {
+	// Make retaining a released receive buffer fail deterministically.
+	clear(*b)
+	p.puts.Add(1)
+}
+
+type sharedBytesServer struct {
+	tikvpb.TikvServer
+	data []byte
+}
+
+func (s *sharedBytesServer) Coprocessor(context.Context, *coprocessor.Request) (*coprocessor.Response, error) {
+	return &coprocessor.Response{Data: s.data}, nil
+}
+
+func TestRPCClientPreservesSharedBytes(t *testing.T) {
+	for _, sharedPool := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared-pool=%t", sharedPool), func(t *testing.T) {
+			defer config.UpdateGlobal(func(conf *config.Config) {
+				conf.TiKVClient.GrpcConnectionCount = 1
+				conf.TiKVClient.GrpcSharedBufferPool = sharedPool
+				conf.TiKVClient.MaxBatchSize = 0
+			})()
+
+			data := []byte(strings.Repeat("shared-response", 512))
+			listener := bufconn.Listen(1 << 20)
+			server := grpc.NewServer()
+			tikvpb.RegisterTikvServer(server, &sharedBytesServer{data: data})
+			serveErr := make(chan error, 1)
+			go func() { serveErr <- server.Serve(listener) }()
+			defer func() {
+				server.Stop()
+				require.NoError(t, <-serveErr)
+			}()
+
+			pool := &clearingBufferPool{}
+			client := NewRPCClient(WithGRPCDialOptions(
+				grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+					return listener.DialContext(ctx)
+				}),
+				experimental.WithBufferPool(pool),
+			))
+			defer client.Close()
+
+			request := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{})
+			response, err := client.SendRequest(context.Background(), "bufnet", request, time.Second*5)
+			require.NoError(t, err)
+			// kvproto retains the bytes passed to Unmarshal; the codec must give
+			// it owned data that survives gRPC returning receive buffers to its pool.
+			require.True(t, bytes.Equal(data, response.Resp.(*coprocessor.Response).Data), "response retained a released receive buffer")
+			if sharedPool {
+				require.Positive(t, pool.puts.Load())
+			} else {
+				require.Zero(t, pool.puts.Load())
+			}
 		})
 	}
 }
