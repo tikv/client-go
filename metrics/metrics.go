@@ -105,8 +105,8 @@ var (
 	TiKVSafeTSUpdateCounter                 *prometheus.CounterVec
 	TiKVMinSafeTSGapSeconds                 *prometheus.GaugeVec
 	TiKVReplicaSelectorFailureCounter       *prometheus.CounterVec
-	// TiKVNoisyTenantServerBusyCounter counts ServerIsBusy responses that TiKV
-	// attributed to the request's own resource group.
+	// TiKVNoisyTenantServerBusyCounter counts ServerIsBusy responses from a
+	// store whose health feedback blames the request's own resource group.
 	TiKVNoisyTenantServerBusyCounter prometheus.Counter
 	// TiKVNoisyTenantReadTimeoutCounter counts read requests that hit their
 	// configurable timeout on a store that blames the request's own resource
@@ -784,7 +784,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "noisy_tenant_server_busy_total",
-			Help:        "Counter of ServerIsBusy responses TiKV attributed to the request's own resource group, which are retried on the leader rather than redirected to a follower.",
+			Help:        "Counter of ServerIsBusy responses from a store whose health feedback blames the request's own resource group, which are retried on the leader rather than redirected to a follower.",
 			ConstLabels: constLabels,
 		})
 

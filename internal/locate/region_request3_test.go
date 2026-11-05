@@ -45,6 +45,7 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -1052,31 +1053,41 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOnLeader() {
-	s.False(isNoisyTenantBusy(nil))
-	s.False(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy"}))
-	s.True(isNoisyTenantBusy(&errorpb.ServerIsBusy{Reason: "scheduler is busy|noisy_tenant"}))
-
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
-		BusyThresholdMs: 50,
-	})
+	const group = "uds_006"
+	newReq := func(g string) *tikvrpc.Request {
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+			BusyThresholdMs: 50,
+		})
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: g}
+		return req
+	}
+	req := newReq(group)
 
 	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
+	leaderStore := replicaSelector.replicas[replicaSelector.region.getStore().workTiKVIdx].store
+	defer func() {
+		leaderStore.noisyGroups.replace(nil, time.Now())
+	}()
 
 	bo := retry.NewBackoffer(context.Background(), -1)
 	rpcCtx, err := replicaSelector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
 
+	// The reply carries no group. Whether the busy store blames this request's
+	// group comes from its health feedback alone.
+	leaderStore.noisyGroups.replace([]string{group}, time.Now())
 	shouldRetry, err := replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
-		Reason: "scheduler is busy|noisy_tenant",
+		Reason: "scheduler is busy",
 	})
 	s.Nil(err)
 	s.True(shouldRetry)
+	s.True(replicaSelector.pinnedByNoisyReply)
 
 	// A wait over the threshold would normally divert the retry to an idle
 	// replica, which only reaches this same leader again as a ReadIndex.
@@ -1091,6 +1102,81 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantServerIsBusyStaysOn
 	// The store is not marked slow: overload is a signal of its own, and nothing
 	// here has touched the latency-driven one.
 	s.False(rpcCtx.Store.healthStatus.IsSlow())
+
+	// A bystander's busy reply from the same store takes upstream's path.
+	other := newReq("uds_007")
+	otherSel, err := newReplicaSelector(s.cache, regionLoc.Region, other)
+	s.Nil(err)
+	bo = retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err = otherSel.next(bo, other)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	shouldRetry, err = otherSel.onServerIsBusy(bo, rpcCtx, other, &errorpb.ServerIsBusy{
+		Reason: "scheduler is busy",
+	})
+	s.Nil(err)
+	s.True(shouldRetry)
+	s.False(otherSel.pinnedByNoisyReply)
+	s.EqualValues(50, other.BusyThresholdMs)
+
+	// The reply is judged by the store that sent it, not by the selector's
+	// target: a follower's blame does not pin a reply the leader sent, and a
+	// follower's own blame pins the reply it sent even though the target is the
+	// leader.
+	var followerStore *Store
+	for _, r := range replicaSelector.replicas {
+		if r.store != leaderStore {
+			followerStore = r.store
+			break
+		}
+	}
+	s.NotNil(followerStore)
+	defer followerStore.noisyGroups.replace(nil, time.Now())
+	judge := func(replying *Store, blaming *Store) bool {
+		leaderStore.noisyGroups.replace(nil, time.Now())
+		followerStore.noisyGroups.replace(nil, time.Now())
+		blaming.noisyGroups.replace([]string{group}, time.Now())
+		r := newReq(group)
+		sel, err := newReplicaSelector(s.cache, regionLoc.Region, r)
+		s.Nil(err)
+		bo := retry.NewBackoffer(context.Background(), -1)
+		ctx, err := sel.next(bo, r)
+		s.Nil(err)
+		s.Equal(ctx.Peer.Id, s.leaderPeer)
+		replyCtx := *ctx
+		replyCtx.Store = replying
+		shouldRetry, err := sel.onServerIsBusy(bo, &replyCtx, r, &errorpb.ServerIsBusy{Reason: "scheduler is busy"})
+		s.Nil(err)
+		s.True(shouldRetry)
+		return sel.pinnedByNoisyReply
+	}
+	s.False(judge(leaderStore, followerStore))
+	s.True(judge(followerStore, followerStore))
+
+	// Batched coprocessor tasks under a busy threshold are never retried here,
+	// blamed or not: upstream hands them back to the caller, which re-plans
+	// them. The blame arrives after the first attempt, so the threshold is
+	// still set; a steered first attempt has already dropped it.
+	leaderStore.noisyGroups.replace(nil, time.Now())
+	followerStore.noisyGroups.replace(nil, time.Now())
+	cop := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{
+		Tasks: []*coprocessor.StoreBatchTask{{RegionId: s.regionID}},
+	}, kvrpcpb.Context{BusyThresholdMs: 50})
+	cop.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: group}
+	copSel, err := newReplicaSelector(s.cache, regionLoc.Region, cop)
+	s.Nil(err)
+	bo = retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err = copSel.next(bo, cop)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	leaderStore.noisyGroups.replace([]string{group}, time.Now())
+	shouldRetry, err = copSel.onServerIsBusy(bo, rpcCtx, cop, &errorpb.ServerIsBusy{
+		Reason:          "scheduler is busy",
+		EstimatedWaitMs: 100,
+	})
+	s.Nil(err)
+	s.False(shouldRetry, "batched cop tasks go back to the caller")
+	s.False(copSel.pinnedByNoisyReply)
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader() {
@@ -1121,7 +1207,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err := selector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.True(selector.pinnedToOverloadedLeader)
 	s.Zero(req.BusyThresholdMs)
 
 	// The leader then times out. Upstream a configurable-timeout deadline
@@ -1150,7 +1235,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err = otherSel.next(bo, other)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(otherSel.pinnedToOverloadedLeader, "nobody blamed, nothing steered")
 	handled, err = otherSel.onNoisyTenantTimeout(bo, rpcCtx, other)
 	s.Nil(err)
 	s.False(handled)
@@ -1160,7 +1244,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	s.NotNil(rpcCtx)
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer, "without the blame the deadline flag is left to upstream")
 	s.True(other.ReplicaRead)
-	s.False(otherSel.pinnedToOverloadedLeader)
 
 	// Blame the store stopped reporting has expired with the mark. A timeout now
 	// is a disk or network stall, not the group's own queue, and must not renew
@@ -1178,7 +1261,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantTimeoutKeepsLeader(
 	rpcCtx, err = staleSel.next(bo, stale)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(staleSel.pinnedToOverloadedLeader, "expired blame steers nobody")
 	handled, err = staleSel.onNoisyTenantTimeout(bo, rpcCtx, stale)
 	s.Nil(err)
 	s.False(handled, "a timeout does not renew expired blame")
@@ -1259,7 +1341,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyGroupFeedbackPinsToLeader
 	s.Nil(err)
 	s.NotNil(rpcCtx)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	s.False(writeSel.pinnedToOverloadedLeader, "a write is not steered")
 	s.Equal(pinnedBefore, readCounter(metrics.TiKVNoisyTenantLeaderPinnedCounter), "a write is not counted as pinned")
 
 	// Nobody else is steered. A bystander, and a request with no group at all,
@@ -1327,9 +1408,15 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 		leaderStore.noisyGroups.replace(nil, time.Now())
 	}()
 
+	// Runs while the request is in flight, standing in for a HealthFeedback
+	// the batch receiver applies before it delivers this reply.
+	var inFlight func()
 	sender := NewRegionRequestSender(s.cache, &fnClient{fn: func(
 		ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration,
 	) (*tikvrpc.Response, error) {
+		if inFlight != nil {
+			inFlight()
+		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 	}}, oracle.NoopReadTSValidator{})
 	// Sends one request to the leader and reports whether that attempt's latency
@@ -1360,12 +1447,28 @@ func (s *testRegionRequestToThreeStoresSuite) TestPinnedLeaderIsKeptOutOfSlowSco
 			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
 		})
 
-		// The blamed group is pinned here now. Its latency is this group's own
+		// The store blames this group. Its latency is the group's own
 		// throttling, and the slow score is store-wide with no group dimension
-		// to keep it out of, so the attempt is not measured.
-		s.False(send(group), "a pinned attempt is not measured, async=%v", async)
+		// to keep it out of, so the attempt is not measured, however it was
+		// routed.
+		s.False(send(group), "a blamed group's attempt is not measured, async=%v", async)
 		// A bystander reaching the same store was routed normally, and is.
 		s.True(send("uds_007"), "a bystander is still measured, async=%v", async)
+
+		// The blame was in force when the attempt was sent, so its latency is
+		// the group's throttling even if the blame is gone by the reply.
+		inFlight = func() { leaderStore.noisyGroups.replace(nil, time.Now()) }
+		s.False(send(group), "a blame withdrawn in flight still excludes the attempt, async=%v", async)
+		s.True(send("uds_007"), "a bystander is measured through the withdrawal, async=%v", async)
+		leaderStore.recordHealthFeedback(&kvrpcpb.HealthFeedback{
+			StoreId:     leaderStore.storeID,
+			NoisyGroups: &kvrpcpb.NoisyGroups{Names: []string{group}},
+		})
+		inFlight = func() {
+			leaderStore.noisyGroups.replace([]string{group}, time.Now().Add(-noisyGroupsFreshDuration))
+		}
+		s.False(send(group), "a blame expired in flight still excludes the attempt, async=%v", async)
+		inFlight = nil
 
 		if async {
 			s.Nil(failpoint.Disable("tikvclient/useSendReqAsync"))
@@ -2390,8 +2493,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestNoisyTenantStaleRetryBacksOff(
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
 	s.Zero(bo.GetTotalSleep())
 
-	// A retry that a noisy reply already pinned has paid its backoff in that
-	// handler and is not charged twice.
+	// A retry that a busy reply from the blaming store already pinned has paid
+	// its backoff in that handler and is not charged twice.
 	pinned := newStale(group)
 	pinnedSel, err := newReplicaSelector(s.cache, regionLoc.Region, pinned)
 	s.Nil(err)
