@@ -119,13 +119,6 @@ type RegionRequestSender struct {
 	AccessStats       *ReplicaAccessStats
 }
 
-// Whether the attempt just sent was forced onto the leader by the noisy-tenant
-// logic. Such latency is one group's throttling, not the store's health, and the
-// prefer-leader slow score has no group dimension to keep it out of.
-func (s *RegionRequestSender) attemptPinnedToOverloadedLeader() bool {
-	return s.replicaSelector != nil && s.replicaSelector.pinnedToOverloadedLeader
-}
-
 func (s *RegionRequestSender) String() string {
 	if s.replicaSelector == nil {
 		return fmt.Sprintf("{rpcError:%v, replicaSelector: <nil>}", s.rpcError)
@@ -579,6 +572,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		sendToAddr = state.vars.rpcCtx.ProxyAddr
 	}
 
+	state.vars.blamedAtSend = storeBlamesRequestGroup(state.vars.rpcCtx.Store, req)
 	s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
@@ -903,6 +897,10 @@ type sendReqState struct {
 		err       error
 		msg       string
 		sendTimes int
+		// Whether rpcCtx.Store blamed the request's group when the attempt was
+		// sent. Kept so a blame withdrawn or expired while the RPC was in
+		// flight still keeps that attempt's latency out of the slow score.
+		blamedAtSend bool
 	}
 }
 
@@ -1127,6 +1125,7 @@ func (s *sendReqState) send() (canceled bool) {
 	}
 
 	if !injectFailOnSend {
+		s.vars.blamedAtSend = storeBlamesRequestGroup(rpcCtx.Store, req)
 		start := time.Now()
 		s.vars.resp, s.vars.err = s.client.SendRequest(ctx, sendToAddr, req, s.args.timeout)
 		rpcDuration := time.Since(start)
@@ -1134,8 +1133,13 @@ func (s *sendReqState) send() (canceled bool) {
 			recordAttemptedTime(s.replicaSelector, rpcDuration)
 		}
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
+		// A group the store blames is left out: its latency is that group's own
+		// throttling, not the store's health, and the slow score has no group
+		// dimension to keep it out of. Judged at send as well as now, since the
+		// batch receiver applies a batch's HealthFeedback before delivering its
+		// responses, so a blame can be gone by the time its reply is read.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-			!s.attemptPinnedToOverloadedLeader() {
+			!s.vars.blamedAtSend && !storeBlamesRequestGroup(rpcCtx.Store, req) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
@@ -1288,8 +1292,9 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if s.Stats != nil {
 		s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 	}
+	// Same exclusion as the sync path: a blamed group's latency is not the store's.
 	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) &&
-		!s.attemptPinnedToOverloadedLeader() {
+		!s.vars.blamedAtSend && !storeBlamesRequestGroup(s.vars.rpcCtx.Store, req) {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
 	if s.vars.rpcCtx.ProxyStore != nil {
@@ -1968,9 +1973,8 @@ func (s *RegionRequestSender) onRegionError(
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		// A blamed tenant is excluded: its deadline went on a queue of its own
 		// making, so it takes the backoff path below rather than retrying the
-		// same overloaded leader straight away. The reason carries both
-		// markers, and Contains would otherwise match the deadline one first.
-		if s.replicaSelector != nil && !isNoisyTenantBusy(serverIsBusy) &&
+		// same overloaded leader straight away.
+		if s.replicaSelector != nil && (ctx == nil || !storeBlamesRequestGroup(ctx.Store, req)) &&
 			strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
