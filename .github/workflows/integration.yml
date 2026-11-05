@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master, tidb-8.5, feature/release-8.5-materialized-view ]
+    branches: [ master, tidb-8.5 ]
   pull_request:
-    branches: [ master, tidb-8.5, feature/release-8.5-materialized-view ]
+    branches: [ master, tidb-8.5 ]
 
 jobs:
 
