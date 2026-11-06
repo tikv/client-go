@@ -38,6 +38,7 @@ type RequestInfo struct {
 	replicaNumber int64
 	requestSize   uint64
 	accessType    controller.AccessLocationType
+	requestSource string
 	// predictedReadBytes is an optional caller-supplied read-bytes
 	// estimate. The PD controller decides whether to use it for paging
 	// accounting based on request type; non-cop hints may be ignored.
@@ -110,6 +111,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			bypass:             bypass,
 			requestSize:        uint64(req.GetSize()),
 			accessType:         toPDAccessLocationType(req.AccessLocation),
+			requestSource:      req.GetRequestSource(),
 			predictedReadBytes: req.PredictedReadBytes,
 			isCop:              isCopRequest(req),
 		}
@@ -137,6 +139,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		bypass:        bypass,
 		requestSize:   uint64(req.GetSize()),
 		accessType:    toPDAccessLocationType(req.AccessLocation),
+		requestSource: req.GetRequestSource(),
 	}
 }
 
@@ -173,6 +176,11 @@ func (req *RequestInfo) RequestSize() uint64 {
 
 func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 	return req.accessType
+}
+
+// RequestSource returns the source of the underlying TiKV request.
+func (req *RequestInfo) RequestSource() string {
+	return req.requestSource
 }
 
 // PredictedReadBytes implements PD's controller.RequestInfo interface,
