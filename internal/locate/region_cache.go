@@ -3186,6 +3186,7 @@ func (c *RegionCache) onHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	store, ok := c.stores.get(feedback.GetStoreId())
 	if !ok {
 		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
+
 		return
 	}
 	store.recordHealthFeedback(feedback)
