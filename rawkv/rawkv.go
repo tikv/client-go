@@ -224,6 +224,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	case kvrpcpb.APIVersion_V2:
 		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, opt.keyspace)
 		if err != nil {
+			pdCli.Close()
 			return nil, err
 		}
 	default:

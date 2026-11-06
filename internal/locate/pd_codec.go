@@ -69,6 +69,9 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 	if err != nil {
 		return nil, err
 	}
+	if keyspaceMeta != nil && keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
+		return nil, errors.Errorf("keyspace %q is not enabled (state=%s)", keyspaceMeta.Name, keyspaceMeta.State)
+	}
 	codec, err := apicodec.NewCodecV2(mode, keyspaceMeta)
 	if err != nil {
 		return nil, err
