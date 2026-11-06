@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	atomicutil "go.uber.org/atomic"
 	zap "go.uber.org/zap"
 )
@@ -114,6 +115,7 @@ type kvstore interface {
 	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
 	// GetTiKVClient gets the client instance.
 	GetTiKVClient() (client client.Client)
+	GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor
 	GetLockResolver() *txnlock.LockResolver
 	Ctx() context.Context
 	WaitGroup() *sync.WaitGroup

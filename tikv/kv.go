@@ -154,6 +154,8 @@ var defaultOracleUpdateInterval = 2 * time.Second
 
 // KVStore contains methods to interact with a TiKV cluster.
 type KVStore struct {
+	resourceControlInterceptor atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
+
 	clusterID uint64
 	uuid      string
 	oracle    oracle.Oracle
@@ -407,7 +409,7 @@ func NewKVStore(
 		return nil, errors.WithStack(err)
 	}
 	store.UpdateTxnSafePointCache(txnSafePoint, time.Now())
-	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClientWithResourceControl(tikvclient, &store.resourceControlInterceptor))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
 	store.lockResolver = txnlock.NewLockResolver(store)
@@ -1001,6 +1003,30 @@ func EnableResourceControl() {
 // DisableResourceControl disables the resource control.
 func DisableResourceControl() {
 	client.ResourceControlSwitch.Store(false)
+}
+
+// SetResourceControlInterceptor overrides the process-global resource controller
+// for this store. Passing nil restores the global fallback. The caller owns the
+// controller lifecycle and must keep it alive until store work has drained.
+func (s *KVStore) SetResourceControlInterceptor(control resourceControlClient.ResourceGroupKVInterceptor) {
+	if control == nil {
+		s.resourceControlInterceptor.Store(nil)
+		return
+	}
+	s.resourceControlInterceptor.Store(&control)
+}
+
+// GetResourceControlInterceptor returns this store's controller, or the global
+// controller when no store-specific override has been configured.
+func (s *KVStore) GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	control := s.resourceControlInterceptor.Load()
+	if control == nil {
+		control = client.ResourceControlInterceptor.Load()
+	}
+	if control == nil {
+		return nil
+	}
+	return *control
 }
 
 // SetResourceControlInterceptor sets the interceptor for resource control.

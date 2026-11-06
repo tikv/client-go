@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,6 +117,7 @@ type recordingInterceptor struct {
 	waitCalls  int
 	respCalls  int
 	background bool
+	priority   uint32
 }
 
 var recordingRequestConsumption = &rmpb.Consumption{RRU: 11, WRU: 3}
@@ -123,7 +126,7 @@ func (r *recordingInterceptor) OnRequestWait(
 	context.Context, string, resourceControlClient.RequestInfo,
 ) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
 	r.waitCalls++
-	return recordingRequestConsumption, &rmpb.Consumption{}, 0, 0, nil
+	return recordingRequestConsumption, &rmpb.Consumption{}, 0, r.priority, nil
 }
 
 func (r *recordingInterceptor) OnResponse(
@@ -303,4 +306,84 @@ func TestBypassRUV2FollowsRequestInfoBypass(t *testing.T) {
 	backgroundReq.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: "rg"}
 	backgroundReq.RequestSource = "background-task"
 	assert.False(t, resourcecontrol.MakeRequestInfo(backgroundReq).Bypass())
+}
+
+func TestStoreResourceControlIsolation(t *testing.T) {
+	global := withRecordingInterceptor(t)
+	var overrides [2]atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
+	locals := []*recordingInterceptor{{priority: 3}, {priority: 16}}
+	clients := make([]Client, 2)
+	for i, local := range locals {
+		var control resourceControlClient.ResourceGroupKVInterceptor = local
+		overrides[i].Store(&control)
+		clients[i] = NewInterceptedClientWithResourceControl(respondingClient{}, &overrides[i])
+	}
+	for i, c := range clients {
+		req := newRGRequest()
+		_, err := c.SendRequest(context.Background(), "", req, 0)
+		assert.NoError(t, err)
+		assert.EqualValues(t, locals[i].priority, req.ResourceControlContext.OverridePriority)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		c.SendRequestAsync(context.Background(), "", newRGRequest(), async.NewCallback(nil, func(resp *tikvrpc.Response, err error) {
+			assert.NoError(t, err)
+			assert.NotNil(t, resp)
+			wg.Done()
+		}))
+		wg.Wait()
+		assert.Equal(t, 2, locals[i].waitCalls)
+		assert.Equal(t, 2, locals[i].respCalls)
+	}
+	assert.Zero(t, global.waitCalls)
+	assert.Zero(t, global.respCalls)
+
+	// Background classification is also local to the store, before admission.
+	locals[0].background = true
+	_, err := clients[0].SendRequest(context.Background(), "", newRGRequest(), 0)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, locals[0].waitCalls)
+
+	// Clearing one store's override retains the old global fallback contract.
+	overrides[0].Store(nil)
+	_, err = clients[0].SendRequest(context.Background(), "", newRGRequest(), 0)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, global.waitCalls)
+	assert.Equal(t, 1, global.respCalls)
+	assert.Equal(t, 2, locals[1].waitCalls)
+}
+
+func (c respondingClient) SendRequestAsync(_ context.Context, _ string, _ *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	cb.Invoke(&tikvrpc.Response{}, nil)
+}
+
+func TestStoreResourceControlConcurrentUpdate(t *testing.T) {
+	global := withRecordingInterceptor(t)
+	var override atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
+	first, second := &recordingInterceptor{}, &recordingInterceptor{}
+	var a, b resourceControlClient.ResourceGroupKVInterceptor = first, second
+	override.Store(&a)
+	c := NewInterceptedClientWithResourceControl(respondingClient{}, &override)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				override.Store(&b)
+				override.Store(&a)
+			}
+		}
+	})
+	for range 1000 {
+		_, err := c.SendRequest(context.Background(), "", newRGRequest(), 0)
+		assert.NoError(t, err)
+	}
+	close(done)
+	wg.Wait()
+	assert.Equal(t, 1000, first.waitCalls+second.waitCalls)
+	assert.Equal(t, first.waitCalls, first.respCalls)
+	assert.Equal(t, second.waitCalls, second.respCalls)
+	assert.Zero(t, global.waitCalls)
 }

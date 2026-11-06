@@ -201,14 +201,22 @@ func (o *txnFileCommitTSOracle) IsExpired(startTS uint64, ttl uint64, option *or
 type txnFileCommitTSStore struct {
 	unimplementedKVStore
 
-	timestamps     []uint64
-	timestampCalls int
-	timestampErr   error
-	backoffer      *retry.Backoffer
-	oracle         *txnFileCommitTSOracle
-	regionCache    *locate.RegionCache
-	client         client.Client
-	lockResolver   *txnlock.LockResolver
+	timestamps      []uint64
+	timestampCalls  int
+	timestampErr    error
+	backoffer       *retry.Backoffer
+	oracle          *txnFileCommitTSOracle
+	regionCache     *locate.RegionCache
+	client          client.Client
+	lockResolver    *txnlock.LockResolver
+	resourceControl resourceControlClient.ResourceGroupKVInterceptor
+}
+
+func (s *txnFileCommitTSStore) GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	if s.resourceControl != nil {
+		return s.resourceControl
+	}
+	return s.unimplementedKVStore.GetResourceControlInterceptor()
 }
 
 func (s *txnFileCommitTSStore) GetTimestampWithRetry(bo *retry.Backoffer, _ string) (uint64, error) {
@@ -1075,7 +1083,7 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 	interceptor := &txnFileResponseErrorInterceptor{}
 	var rcInterceptor resourceControlClient.ResourceGroupKVInterceptor = interceptor
 	client.ResourceControlSwitch.Store(true)
-	client.ResourceControlInterceptor.Store(&rcInterceptor)
+	client.ResourceControlInterceptor.Store(nil)
 	t.Cleanup(func() {
 		client.ResourceControlSwitch.Store(false)
 		client.ResourceControlInterceptor.Store(nil)
@@ -1102,6 +1110,7 @@ func TestTxnFileCommitPreservesCommitOnResourceControlResponseError(t *testing.T
 			}
 		}},
 	}
+	store.resourceControl = rcInterceptor
 	txn := &KVTxn{
 		store:              store,
 		startTS:            1,
@@ -1339,10 +1348,18 @@ func TestUseTxnFileExcludesMutationAssertions(t *testing.T) {
 // stubKVStore implements kvstore with only GetRegionCache and split-call
 // recording backed by the mock PD client. All other methods panic because
 // buildTxnFiles does not call them.
+
 type stubKVStore struct {
 	regionCache              *locate.RegionCache
 	splitRegionsCalls        atomic.Uint32
 	splitTxnFileRegionsCalls atomic.Uint32
+}
+
+func (s *stubKVStore) GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	if control := client.ResourceControlInterceptor.Load(); control != nil {
+		return *control
+	}
+	return nil
 }
 
 func (s *stubKVStore) GetRegionCache() *locate.RegionCache { return s.regionCache }

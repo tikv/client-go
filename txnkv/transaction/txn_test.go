@@ -39,6 +39,7 @@ import (
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/client/pkg/caller"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 type mockPDClient struct {
@@ -88,6 +89,13 @@ type mockStore struct {
 
 func (m *mockStore) GetRegionCache() *locate.RegionCache {
 	return m.cache
+}
+
+func (m *mockStore) GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	if control := client.ResourceControlInterceptor.Load(); control != nil {
+		return *control
+	}
+	return nil
 }
 
 func (m *mockStore) GetTiKVClient() client.Client {

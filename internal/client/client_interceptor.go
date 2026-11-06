@@ -35,17 +35,33 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
+	resourceControlInterceptor *atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
 func NewInterceptedClient(client Client) Client {
-	return interceptedClient{client}
+	return interceptedClient{Client: client}
+}
+
+// NewInterceptedClientWithResourceControl binds resource control to this client.
+// A nil override falls back to the process-global interceptor for compatibility.
+func NewInterceptedClientWithResourceControl(client Client, control *atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]) Client {
+	return interceptedClient{Client: client, resourceControlInterceptor: control}
+}
+
+func (r interceptedClient) getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (string, resourceControlClient.ResourceGroupKVInterceptor, *resourcecontrol.RequestInfo) {
+	if r.resourceControlInterceptor != nil {
+		if control := r.resourceControlInterceptor.Load(); control != nil {
+			return GetResourceControlInfoWithInterceptor(ctx, req, *control)
+		}
+	}
+	return getResourceControlInfo(ctx, req)
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	var ruDetails *util.RUDetails
 
-	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	resourceGroupName, resourceControlInterceptor, reqInfo := r.getResourceControlInfo(ctx, req)
 	if resourceControlInterceptor != nil {
 		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 		if err != nil {
@@ -90,7 +106,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	// since all async requests processed by one runloop share the same resource group, if the quota is exceeded, all
 	// requests/responses shall wait for the tokens, thus it's ok to call OnRequestWait/OnResponseWait synchronously.
-	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	resourceGroupName, resourceControlInterceptor, reqInfo := r.getResourceControlInfo(ctx, req)
 	if resourceControlInterceptor != nil {
 		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 		if err != nil {
@@ -150,20 +166,23 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 	resourceControlClient.ResourceGroupKVInterceptor,
 	*resourcecontrol.RequestInfo,
 ) {
+	var control resourceControlClient.ResourceGroupKVInterceptor
+	if ptr := ResourceControlInterceptor.Load(); ptr != nil {
+		control = *ptr
+	}
+	return GetResourceControlInfoWithInterceptor(ctx, req, control)
+}
+
+// GetResourceControlInfoWithInterceptor applies the normal selection policy using
+// the supplied store controller. Nil disables resource control for this request.
+func GetResourceControlInfoWithInterceptor(ctx context.Context, req *tikvrpc.Request, control resourceControlClient.ResourceGroupKVInterceptor) (string, resourceControlClient.ResourceGroupKVInterceptor, *resourcecontrol.RequestInfo) {
 	resourceGroupName := req.GetResourceControlContext().GetResourceGroupName()
-	if len(resourceGroupName) == 0 {
-		return "", nil, nil
-	}
-	if !ResourceControlSwitch.Load().(bool) {
-		return "", nil, nil
-	}
-	rcInterceptor := ResourceControlInterceptor.Load()
-	if rcInterceptor == nil {
+	if resourceGroupName == "" || !ResourceControlSwitch.Load().(bool) || control == nil {
 		return "", nil, nil
 	}
 	// If the resource group has background jobs, we should not record consumption and wait for it.
 	// Background jobs will record and report in tikv side.
-	resourceControlInterceptor := *rcInterceptor
+	resourceControlInterceptor := control
 	if resourceControlInterceptor.IsBackgroundRequest(ctx, resourceGroupName, req.RequestSource) {
 		return "", nil, nil
 	}

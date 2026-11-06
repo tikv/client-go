@@ -39,6 +39,7 @@ import (
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/client/pkg/caller"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	sd "github.com/tikv/pd/client/servicediscovery"
 )
 
@@ -432,6 +433,14 @@ func (u *unimplementedKVStore) GetOracle() oracle.Oracle {
 // GetRegionCache implements kvstore.
 func (u *unimplementedKVStore) GetRegionCache() *locate.RegionCache {
 	panic("unimplemented")
+}
+
+// GetResourceControlInterceptor implements kvstore.
+func (u *unimplementedKVStore) GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	if control := client.ResourceControlInterceptor.Load(); control != nil {
+		return *control
+	}
+	return nil
 }
 
 // GetTiKVClient implements kvstore.

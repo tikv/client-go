@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
+
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -455,4 +457,18 @@ func TestSyncEtcdEndpointsWithRetry(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)
+}
+
+func TestKVStoreResourceControlInterceptor(t *testing.T) {
+	global := new(resourceControlClient.ResourceGroupsController)
+	local := new(resourceControlClient.ResourceGroupsController)
+	SetResourceControlInterceptor(global)
+	t.Cleanup(UnsetResourceControlInterceptor)
+	var first, second KVStore
+	require.Same(t, global, first.GetResourceControlInterceptor())
+	first.SetResourceControlInterceptor(local)
+	require.Same(t, local, first.GetResourceControlInterceptor())
+	require.Same(t, global, second.GetResourceControlInterceptor())
+	first.SetResourceControlInterceptor(nil)
+	require.Same(t, global, first.GetResourceControlInterceptor())
 }

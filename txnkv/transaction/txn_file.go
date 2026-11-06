@@ -765,7 +765,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	_, rcInterceptor, _ := client.GetResourceControlInfo(buildBo.GetCtx(), rcReq)
+	_, rcInterceptor, _ := client.GetResourceControlInfoWithInterceptor(buildBo.GetCtx(), rcReq, c.store.GetResourceControlInterceptor())
 	var ruDetails *util.RUDetails
 	if detail := ctx.Value(util.RUDetailsCtxKey); detail != nil {
 		ruDetails = detail.(*util.RUDetails)
