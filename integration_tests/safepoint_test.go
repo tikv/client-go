@@ -149,3 +149,20 @@ func (s *testSafePointSuite) TestSafePoint() {
 	// sleep to wait for the next transaction will get a valid startTS to make the next test stable.
 	time.Sleep(time.Second)
 }
+
+func (s *testSafePointSuite) TestCommitAfterTxnSafePoint() {
+	key := encodeKey(s.prefix, "commit_after_txn_safe_point")
+	txn := s.beginTxn()
+	s.Nil(txn.Set(key, []byte("v")))
+
+	s.waitUntilErrorPlugIn(txn.StartTS())
+
+	err := txn.Commit(context.Background())
+	_, ok := errors.Cause(err).(*error.ErrTxnAbortedByGC)
+	s.True(ok, errors.WithStack(err))
+	// sleep to wait for the next transaction will get a valid startTS.
+	time.Sleep(time.Second)
+
+	_, err = s.beginTxn().Get(context.Background(), key)
+	s.True(error.IsErrNotFound(err), errors.WithStack(err))
+}

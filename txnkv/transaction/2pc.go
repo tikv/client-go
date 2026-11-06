@@ -124,6 +124,8 @@ type kvstore interface {
 	IsClose() bool
 	// Go run the function in a separate goroutine.
 	Go(f func()) error
+	// CheckVisibility checks if it is safe to read or write using the given ts.
+	CheckVisibility(startTS uint64) error
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -1867,6 +1869,14 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 
+	// Once the txn safe point passes the start ts, GC may have removed the versions the prewrite would conflict with.
+	// A pipelined txn checks it after its flushes finish, so that cleanup cannot race with a flush.
+	if !c.txn.IsPipelined() {
+		if err = c.store.CheckVisibility(c.startTS); err != nil {
+			return err
+		}
+	}
+
 	if c.sessionID > 0 {
 		util.EvalFailpoint("beforePrewrite")
 	}
@@ -1888,6 +1898,9 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if len(c.pipelinedCommitInfo.pipelinedStart) == 0 || len(c.pipelinedCommitInfo.pipelinedEnd) == 0 {
 			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
 				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
+		}
+		if err = c.store.CheckVisibility(c.startTS); err != nil {
+			return err
 		}
 		return c.commitFlushedMutations(bo)
 	}

@@ -787,6 +787,10 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		return
 	}
 
+	if err = c.store.CheckVisibility(c.startTS); err != nil {
+		return
+	}
+
 	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})
 	stepDone("prewrite")
