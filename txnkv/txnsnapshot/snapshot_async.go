@@ -170,16 +170,12 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-<<<<<<< HEAD
 				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, regionErr, nil, opt, collectF)
-=======
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, regionErr, nil, opt, collectF)
 				// Finish request-owned processing before scheduling the completion.
 				// Schedule may race with RunLoop cancellation, but it no longer
 				// accesses this request's result collector or snapshot stats.
 				retryWorkers.Done()
->>>>>>> 01294c01 (txnkv: wait for async BatchGet retry processing on cancel (#2074))
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithRegionError.Inc()
@@ -196,14 +192,10 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
-<<<<<<< HEAD
 				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, nil, lockInfo, opt, collectF)
-=======
-				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, nil, lockInfo, opt, collectF)
 				// See the Region-error retry path above.
 				retryWorkers.Done()
->>>>>>> 01294c01 (txnkv: wait for async BatchGet retry processing on cancel (#2074))
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithLockError.Inc()
