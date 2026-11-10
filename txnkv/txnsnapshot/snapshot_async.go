@@ -15,6 +15,8 @@
 package txnsnapshot
 
 import (
+	"sync"
+
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -51,11 +53,11 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 	var (
 		runloop      = async.NewRunLoop()
 		completed    = 0
+		retryWorkers sync.WaitGroup
 		lastForkedBo *retry.Backoffer
 	)
 	runloop.Pool = &poolWrapper{pool: s.store}
 	forkedBo, cancel := bo.Fork()
-	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
 		if i == len(batches)-1 {
@@ -64,7 +66,7 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			backoffer = forkedBo.Clone()
 		}
 		batch := batch1
-		s.tryBatchGetSingleRegionUsingAsyncAPI(backoffer, batch, readTier, opt, collectF, async.NewCallback(runloop, func(_ struct{}, e error) {
+		s.tryBatchGetSingleRegionUsingAsyncAPI(backoffer, batch, readTier, opt, collectF, &retryWorkers, async.NewCallback(runloop, func(_ struct{}, e error) {
 			// The callback is designed to be executed in the runloop's goroutine thus it should be safe to update the
 			// following variables without locks.
 			completed++
@@ -83,6 +85,10 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			break
 		}
 	}
+	// Cancel any work that is still in flight, then wait until it can no longer
+	// collect results or update stats owned by this BatchGet request.
+	cancel()
+	retryWorkers.Wait()
 	if lastForkedBo != nil {
 		bo.UpdateUsingForked(lastForkedBo)
 	}
@@ -95,6 +101,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 	readTier int,
 	opt kv.BatchGetOptions,
 	collectF func(k []byte, v kv.ValueEntry),
+	retryWorkers *sync.WaitGroup,
 	cb async.Callback[struct{}],
 ) {
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
@@ -160,10 +167,15 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			return
 		}
 		if regionErr != nil {
+			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
 				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, regionErr, nil, opt, collectF)
+				// Finish request-owned processing before scheduling the completion.
+				// Schedule may race with RunLoop cancellation, but it no longer
+				// accesses this request's result collector or snapshot stats.
+				retryWorkers.Done()
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithRegionError.Inc()
@@ -177,10 +189,13 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 			return
 		}
 		if len(lockInfo.lockedKeys) > 0 {
+			retryWorkers.Add(1)
 			cb.Executor().Go(func() {
 				growStackForBatchGetWorker()
 				hints := txnlock.NewLockHintsInRequest(req.ResolvedLocks, req.CommittedLocks)
 				err := s.retryBatchGetSingleRegionAfterAsyncAPI(bo, cli, batch, readTier, req.ReadType, hints, nil, lockInfo, opt, collectF)
+				// See the Region-error retry path above.
+				retryWorkers.Done()
 				cb.Schedule(struct{}{}, err)
 			})
 			metrics.AsyncBatchGetCounterWithLockError.Inc()
