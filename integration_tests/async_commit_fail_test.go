@@ -359,9 +359,7 @@ func (o maxTxnTimeExpiredOracle) IsExpired(lockTS, ttl uint64, opt *oracle.Optio
 }
 
 func (s *testAsyncCommitFailSuite) TestAsyncCommitTooOldTxnNotPrewritten() {
-	baseOracle := s.store.GetOracle()
-	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: func() bool { return true }})
-	defer s.store.SetOracle(baseOracle)
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: s.store.GetOracle(), expired: func() bool { return true }})
 
 	txn := s.beginAsyncCommit()
 	s.Nil(txn.Set(s.key("a"), []byte("a")))
@@ -380,16 +378,13 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitTooOldTxnNotPrewritten() {
 	s.ErrorContains(err, "txn takes too much time")
 	s.Equal(int32(0), prewrites.Load())
 
-	s.store.SetOracle(baseOracle)
 	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("a"))
 	s.mustGetNoneFromSnapshot(math.MaxUint64, s.key("b"))
 }
 
 func (s *testAsyncCommitFailSuite) TestAsyncCommitTxnTooOldAfterPrewriteIsCommitted() {
 	var prewritten atomic.Bool
-	baseOracle := s.store.GetOracle()
-	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: baseOracle, expired: prewritten.Load})
-	defer s.store.SetOracle(baseOracle)
+	s.store.SetOracle(maxTxnTimeExpiredOracle{Oracle: s.store.GetOracle(), expired: prewritten.Load})
 
 	txn := s.beginAsyncCommit()
 	s.Nil(txn.Set(s.key("a"), []byte("a")))
@@ -407,7 +402,6 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitTxnTooOldAfterPrewriteIsCommit
 	s.Nil(txn.Commit(ctx))
 	s.True(txn.GetCommitter().IsAsyncCommit())
 
-	s.store.SetOracle(baseOracle)
 	s.mustGetFromSnapshot(math.MaxUint64, s.key("a"), []byte("a"))
 	s.mustGetFromSnapshot(math.MaxUint64, s.key("b"), []byte("b"))
 }
