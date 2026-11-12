@@ -1867,6 +1867,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 
+	// An async commit transaction is committed once its prewrite succeeds, so its age must be checked before that.
+	if c.isAsyncCommit() && c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+		return errors.Errorf("session %d txn takes too much time, txnStartTS: %d", c.sessionID, c.startTS)
+	}
+
 	if c.sessionID > 0 {
 		util.EvalFailpoint("beforePrewrite")
 	}
@@ -1994,7 +1999,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
 
-	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+	if !c.isAsyncCommit() && c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
 			c.sessionID, c.startTS, c.commitTS)
 		return err
