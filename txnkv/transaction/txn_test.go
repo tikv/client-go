@@ -19,6 +19,7 @@ import (
 	"context"
 	stderrs "errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1181,4 +1182,50 @@ func TestSharedLockCommitterIncompatibilities(t *testing.T) {
 		err = txn.GetMemBuffer().FlushWait()
 		require.ErrorContains(t, err, "shared lock is not supported in pipelined transaction")
 	})
+}
+
+func TestPipelinedFlushChecksTransactionKillSignal(t *testing.T) {
+	killed := uint32(7)
+	handlerErr := stderrs.New("interrupted by kill signal handler")
+	handlerVars := kv.NewVariables(nil)
+	handlerVars.KillSignalHandler = testKillSignalHandler(func() error {
+		return handlerErr
+	})
+
+	for _, tc := range []struct {
+		name    string
+		vars    *kv.Variables
+		wantErr error
+	}{
+		{"legacy signal", kv.NewVariables(&killed), tikverr.ErrQueryInterruptedWithSignal{Signal: killed}},
+		{"handler", handlerVars, handlerErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			startTS := uint64(1)
+			txn := newTestTxnWithOptions(t, startTS, &TxnOptions{
+				StartTS: &startTS,
+				PipelinedTxn: PipelinedTxnOptions{
+					Enable:                 true,
+					FlushConcurrency:       1,
+					ResolveLockConcurrency: 1,
+				},
+			})
+			defer txn.pipelinedCancel()
+
+			var sent atomic.Int32
+			txn.store.client.onSend = func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+				sent.Add(1)
+				return &tikvrpc.Response{}, nil
+			}
+			txn.SetVars(tc.vars)
+			require.NoError(t, txn.GetMemBuffer().Set([]byte("key"), []byte("value")))
+			flushed, err := txn.GetMemBuffer().Flush(true)
+			require.NoError(t, err)
+			require.True(t, flushed)
+
+			err = txn.GetMemBuffer().FlushWait()
+			require.Zero(t, sent.Load(), "interrupted flush sent a TiKV request")
+			require.ErrorIs(t, err, tc.wantErr)
+		})
+	}
 }
