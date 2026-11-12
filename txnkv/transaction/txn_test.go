@@ -1182,3 +1182,28 @@ func TestSharedLockCommitterIncompatibilities(t *testing.T) {
 		require.ErrorContains(t, err, "shared lock is not supported in pipelined transaction")
 	})
 }
+
+func TestPipelinedFlushChecksTransactionKillSignal(t *testing.T) {
+	killed := uint32(7)
+	startTS := uint64(1)
+	txn := newTestTxnWithOptions(t, startTS, &TxnOptions{
+		StartTS: &startTS,
+		PipelinedTxn: PipelinedTxnOptions{
+			Enable:                 true,
+			FlushConcurrency:       1,
+			ResolveLockConcurrency: 1,
+		},
+	})
+	defer txn.pipelinedCancel()
+	txn.store.client.onSend = func(context.Context, string, *tikvrpc.Request, time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{}, nil
+	}
+	txn.SetVars(kv.NewVariables(&killed))
+	require.NoError(t, txn.GetMemBuffer().Set([]byte("key"), []byte("value")))
+	flushed, err := txn.GetMemBuffer().Flush(true)
+	require.NoError(t, err)
+	require.True(t, flushed)
+	var interrupted tikverr.ErrQueryInterruptedWithSignal
+	require.ErrorAs(t, txn.GetMemBuffer().FlushWait(), &interrupted)
+	require.Equal(t, killed, interrupted.Signal)
+}

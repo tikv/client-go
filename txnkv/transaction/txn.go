@@ -647,7 +647,13 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
-		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
+		// Keep the default backoff settings while checking the transaction's kill signal.
+		vars := *tikv.DefaultVars
+		if txn.vars != nil {
+			vars.Killed = txn.vars.Killed
+			vars.KillSignalHandler = txn.vars.KillSignalHandler
+		}
+		bo := retry.NewBackofferWithVars(flushCtx, 20000, &vars)
 		mutations := newMemBufferMutations(memdb.Len(), memdb)
 		if memdb.Len() == 0 {
 			return nil

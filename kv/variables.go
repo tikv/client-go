@@ -64,7 +64,7 @@ type Variables struct {
 	// When its value is 0, use the config of "txn-file-min-mutation-size".
 	TxnFileMinMutationSize uint64
 
-	// KillSignalHandler takes precedence over Killed when it is set.
+	// KillSignalHandler runs when Killed is nil or points to zero.
 	// It must be configured before Variables is used by concurrent requests.
 	KillSignalHandler KillSignalHandler
 }
