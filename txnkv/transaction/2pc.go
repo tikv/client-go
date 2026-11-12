@@ -1590,6 +1590,12 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 		return false
 	}
 
+	// Keys that are only checked for existence don't write locks, so they are not in the secondaries of the primary
+	// lock. If such a check fails after the primary is prewritten, resolving the locks would commit the transaction.
+	if c.hasNoNeedCommitKeys {
+		return false
+	}
+
 	asyncCommitCfg := config.GetGlobalConfig().TiKVClient.AsyncCommit
 	// TODO the keys limit need more tests, this value makes the unit test pass by now.
 	// Async commit is not compatible with Binlog because of the non unique timestamp issue.
