@@ -1493,6 +1493,10 @@ github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf h1:8gzQg9J2EN
 github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf/go.mod h1:IP3HAzDbY5sdoLTQSkF5HjZukuO2koKzbX2FglVSaIA=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 h1:Q9CMGKUztbM0RWHdQu0pD9b9OC47sbISRiMvf9vJ2RY=
 github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3/go.mod h1:tyo4AX5P7udiSKN0Mv3nD9DcUnuLLmFfE22+dEs4vbU=
+github.com/pingcap/tidb v1.1.0-beta.0.20261113041548-7098f3c44780 h1:8kYIcOXbr52tocTcOzvp5orft4r5l8oZhn6/HW4MhBk=
+github.com/pingcap/tidb v1.1.0-beta.0.20261113041548-7098f3c44780/go.mod h1:dy4wFQfldL1qtiniqlpCAftE41W4T1xKM5yvfTm+HdE=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20261113041548-7098f3c44780 h1:0fgGqSlaEMtU4ATJU73U22t8pYPdrVyD9g4xhqJdtsU=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20261113041548-7098f3c44780/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
 github.com/pingcap/tipb v0.0.0-20260908093239-fed7bc47c39d h1:jQf0oStCMU6ZXGQmz5CmOIBsAwMWutorDHI49u8tURU=
 github.com/pingcap/tipb v0.0.0-20260908093239-fed7bc47c39d/go.mod h1:RM8iRcMalzOthG2XJxnNBniM4xFGb/lDwHUwqkaVzt4=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
@@ -1618,10 +1622,6 @@ github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.142 h1:oK2u
 github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.142/go.mod h1:r5r4xbfxSaeR04b166HGsBa/R4U3SueirEUpXGuw+Q0=
 github.com/tencentyun/cos-go-sdk-v5 v0.7.74 h1:YCsGhIK+Q5vMcmAiQqPuMyhSQ3zN1p7U+dhlHQD++6c=
 github.com/tencentyun/cos-go-sdk-v5 v0.7.74/go.mod h1:STbTNaNKq03u+gscPEGOahKzLcGSYOj6Dzc5zNay7Pg=
-github.com/ti-chi-bot/tidb v1.1.0-beta.0.20261111103101-dd932ce97e29 h1:ZqxGFNwgjWk+AZPL7N6Gso1I/zOPmDnMOIhQp07fFPs=
-github.com/ti-chi-bot/tidb v1.1.0-beta.0.20261111103101-dd932ce97e29/go.mod h1:pbHyqkvWCmafpkglvytLwADIa6WdvauCFG9J4b9qERo=
-github.com/ti-chi-bot/tidb/pkg/parser v0.0.0-20261111103101-dd932ce97e29 h1:s4kf6Ei1OF+s4QUGSmqB3eZCuSfQrO5vkEi/U3bciCE=
-github.com/ti-chi-bot/tidb/pkg/parser v0.0.0-20261111103101-dd932ce97e29/go.mod h1:zDLDsfNBU5+L6T4J9/OgWAHc/WZvMUjbpgHqQ/t3yKo=
 github.com/tiancaiamao/appdash v0.0.0-20181126055449-889f96f722a2 h1:mbAskLJ0oJfDRtkanvQPiooDH8HvJ2FBh+iKT/OmiQQ=
 github.com/tiancaiamao/appdash v0.0.0-20181126055449-889f96f722a2/go.mod h1:2PfKggNGDuadAa0LElHrByyrz4JPZ9fFx6Gs7nx7ZZU=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW93SG+q0F8KI+yFrcIDT4c/RNoc4=
