@@ -189,12 +189,38 @@ func (s *Runner) RunOnRange(ctx context.Context, startKey, endKey []byte) error 
 
 	startTime := time.Now()
 
+	logProgress := func() {
+		logutil.Logger(ctx).Info("range task in progress",
+			zap.String("name", s.identifier),
+			zap.String("startKey", redact.Key(startKey)),
+			zap.String("endKey", redact.Key(endKey)),
+			zap.Int("concurrency", s.concurrency),
+			zap.Duration("cost time", time.Since(startTime)),
+			zap.Int("completed regions", s.CompletedRegions()))
+	}
+	// waitWorkers waits for all workers to exit, and keeps logging the progress meanwhile.
+	waitWorkers := func() {
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		for {
+			select {
+			case <-done:
+				return
+			case <-statLogTicker.C:
+				logProgress()
+			}
+		}
+	}
+
 	// Make sure taskCh is closed exactly once
 	isClosed := false
 	defer func() {
 		if !isClosed {
 			close(taskCh)
-			wg.Wait()
+			waitWorkers()
 		}
 		statLogTicker.Stop()
 		cancel()
@@ -207,13 +233,7 @@ Loop:
 	for {
 		select {
 		case <-statLogTicker.C:
-			logutil.Logger(ctx).Info("range task in progress",
-				zap.String("name", s.identifier),
-				zap.String("startKey", redact.Key(startKey)),
-				zap.String("endKey", redact.Key(endKey)),
-				zap.Int("concurrency", s.concurrency),
-				zap.Duration("cost time", time.Since(startTime)),
-				zap.Int("completed regions", s.CompletedRegions()))
+			logProgress()
 		default:
 		}
 
@@ -259,7 +279,7 @@ Loop:
 
 	isClosed = true
 	close(taskCh)
-	wg.Wait()
+	waitWorkers()
 	for _, w := range workers {
 		if w.err != nil {
 			logutil.Logger(ctx).Info("range task failed",
