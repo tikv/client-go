@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/codec"
@@ -370,4 +371,200 @@ func (suite *testCodecV2Suite) TestDecodeBucketKeys() {
 		[]byte("c"),
 		{},
 	}, keys)
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseStoreBatchAndSplitRegion() {
+	makeRegionError := func(key, start, end []byte) *errorpb.Error {
+		encodedStart, encodedEnd := suite.codec.EncodeRegionRange(start, end)
+		return &errorpb.Error{
+			KeyNotInRegion: &errorpb.KeyNotInRegion{
+				Key:      suite.codec.EncodeKey(key),
+				StartKey: encodedStart,
+				EndKey:   encodedEnd,
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		req      *tikvrpc.Request
+		resp     *tikvrpc.Response
+		validate func(*require.Assertions, *tikvrpc.Response)
+	}{
+		{
+			name: "CmdCopStoreBatchLock",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("batch-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("batch-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("batch-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				lock := resp.BatchResponses[0].Locked
+				re.Equal([]byte("batch-lock-key"), lock.Key)
+				re.Equal([]byte("batch-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("batch-secondary")}, lock.Secondaries)
+
+				// A decoded lock must round-trip through request encoding, e.g. when
+				// the lock's primary is fed back into a CheckTxnStatus request.
+				checkTxnStatusReq, err := suite.codec.EncodeRequest(&tikvrpc.Request{
+					Type: tikvrpc.CmdCheckTxnStatus,
+					Req: &kvrpcpb.CheckTxnStatusRequest{
+						PrimaryKey: lock.PrimaryLock,
+					},
+				})
+				re.NoError(err)
+				re.Equal(append(keyspacePrefix, []byte("batch-primary")...), checkTxnStatusReq.CheckTxnStatus().PrimaryKey)
+			},
+		},
+		{
+			name: "CmdCopStoreBatchRegionError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: makeRegionError(
+								[]byte("batch-region-key"),
+								[]byte("batch-range-start"),
+								[]byte("batch-range-end"),
+							),
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				regionErr := resp.BatchResponses[0].RegionError.KeyNotInRegion
+				re.Equal([]byte("batch-region-key"), regionErr.Key)
+				re.Equal([]byte("batch-range-start"), regionErr.StartKey)
+				re.Equal([]byte("batch-range-end"), regionErr.EndKey)
+			},
+		},
+		{
+			name: "CmdCopStoreBatchBucketVersionNotMatch",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCop,
+				Req:  &coprocessor.Request{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &coprocessor.Response{
+					BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+						{
+							RegionError: &errorpb.Error{
+								BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+									Version: 2,
+									Keys: [][]byte{
+										suite.codec.EncodeRegionKey([]byte("bucket-a")),
+										suite.codec.EncodeRegionKey([]byte("bucket-b")),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*coprocessor.Response)
+				re.Len(resp.BatchResponses, 1)
+				bucketErr := resp.BatchResponses[0].RegionError.BucketVersionNotMatch
+				re.Equal(uint64(2), bucketErr.Version)
+				re.Equal([][]byte{[]byte("bucket-a"), []byte("bucket-b")}, bucketErr.Keys)
+			},
+		},
+		{
+			name: "CmdSplitRegionKeyError",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdSplitRegion,
+				Req:  &kvrpcpb.SplitRegionRequest{},
+			},
+			resp: &tikvrpc.Response{
+				Resp: &kvrpcpb.SplitRegionResponse{
+					RegionError: makeRegionError([]byte("region-key"), []byte("range-start"), []byte("range-end")),
+					Regions: []*metapb.Region{
+						{
+							StartKey: suite.codec.EncodeRegionKey([]byte("split-start")),
+							EndKey:   suite.codec.EncodeRegionKey([]byte("split-end")),
+						},
+					},
+					Errors: []*kvrpcpb.KeyError{
+						{
+							Locked: &kvrpcpb.LockInfo{
+								Key:         suite.codec.EncodeKey([]byte("split-lock-key")),
+								PrimaryLock: suite.codec.EncodeKey([]byte("split-primary")),
+								Secondaries: [][]byte{suite.codec.EncodeKey([]byte("split-secondary"))},
+							},
+						},
+					},
+				},
+			},
+			validate: func(re *require.Assertions, decoded *tikvrpc.Response) {
+				resp := decoded.Resp.(*kvrpcpb.SplitRegionResponse)
+				re.Equal([]byte("region-key"), resp.RegionError.KeyNotInRegion.Key)
+				re.Len(resp.Regions, 1)
+				re.Equal([]byte("split-start"), resp.Regions[0].StartKey)
+				re.Equal([]byte("split-end"), resp.Regions[0].EndKey)
+				re.Len(resp.Errors, 1)
+				lock := resp.Errors[0].Locked
+				re.Equal([]byte("split-lock-key"), lock.Key)
+				re.Equal([]byte("split-primary"), lock.PrimaryLock)
+				re.Equal([][]byte{[]byte("split-secondary")}, lock.Secondaries)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		suite.Run(test.name, func() {
+			re := suite.Require()
+			decoded, err := suite.codec.DecodeResponse(test.req, test.resp)
+			re.NoError(err)
+			test.validate(re, decoded)
+		})
+	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeResponseMalformedBucketKeys() {
+	re := suite.Require()
+	req := &tikvrpc.Request{
+		Type: tikvrpc.CmdCop,
+		Req:  &coprocessor.Request{},
+	}
+	resp := &tikvrpc.Response{
+		Resp: &coprocessor.Response{
+			BatchResponses: []*coprocessor.StoreBatchTaskResponse{
+				{
+					RegionError: &errorpb.Error{
+						BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{
+							Keys: [][]byte{
+								suite.codec.EncodeRegionKey([]byte("bucket-a")),
+								{0x01}, // Invalid mem-comparable encoding.
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	decoded, err := suite.codec.DecodeResponse(req, resp)
+	re.Error(err)
+	re.True(IsDecodeError(err))
+	re.Nil(decoded)
 }
