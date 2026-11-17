@@ -43,8 +43,10 @@ func (c *RPCClient) UpdateKVServerSecurity(ctx context.Context, security config.
 	c.RUnlock()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	c.securityUpdateMu.Lock()
-	defer c.securityUpdateMu.Unlock()
+	if err := c.securityUpdateSem.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer c.securityUpdateSem.Release(1)
 	c.Lock()
 	if err := c.validateKVServerSecurityUpdate(ctx, security); err != nil {
 		c.Unlock()
@@ -118,7 +120,7 @@ func (c *RPCClient) UpdateKVServerSecurity(ctx context.Context, security config.
 		for addr, old := range missing {
 			// Candidates use an isolated monitor until committed, so a failed
 			// preparation cannot replace/remove active connection metrics.
-			pool, err := newConnPool(uint(len(old.conns)), addr, 0, old.keyspaceID, security,
+			pool, err := newConnPool(ctx, uint(len(old.conns)), addr, 0, old.keyspaceID, security,
 				&c.idleNotify, old.batchConn != nil, c.option.dialTimeout,
 				&connMonitor{}, c.eventListener, c.option.gRPCDialOptions)
 			if err != nil {

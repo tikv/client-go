@@ -66,7 +66,7 @@ type connPool struct {
 	metrics atomic.Pointer[storeMetrics]
 }
 
-func newConnPool(maxSize uint, addr string, ver uint64, keyspaceID apicodec.KeyspaceID, security config.Security,
+func newConnPool(ctx context.Context, maxSize uint, addr string, ver uint64, keyspaceID apicodec.KeyspaceID, security config.Security,
 	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], opts []grpc.DialOption) (*connPool, error) {
 	a := &connPool{
 		ver:           ver,
@@ -79,7 +79,7 @@ func newConnPool(maxSize uint, addr string, ver uint64, keyspaceID apicodec.Keys
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
+	if err := a.Init(ctx, addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -98,7 +98,7 @@ func (a *connPool) monitoredDial(ctx context.Context, connName, target string, o
 	return conn, nil
 }
 
-func (a *connPool) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], opts ...grpc.DialOption) error {
+func (a *connPool) Init(ctx context.Context, addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -127,7 +127,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.conns {
-		ctx, cancel := context.WithTimeout(context.Background(), a.dialTimeout)
+		dialCtx, cancel := context.WithTimeout(ctx, a.dialTimeout)
 		var callOptions []grpc.CallOption
 		callOptions = append(callOptions, grpc.MaxCallRecvMsgSize(MaxRecvMsgSize))
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
@@ -163,7 +163,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 			dialOpts = append(dialOpts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
-			ctx,
+			dialCtx,
 			fmt.Sprintf("%s-%d", a.target, i),
 			addr,
 			dialOpts...,

@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -201,7 +202,7 @@ type RPCClient struct {
 	vers                 map[string]uint64
 	option               *option
 	connPoolCreateMu     sync.Mutex // dialing must not hold the admission lock
-	securityUpdateMu     sync.Mutex
+	securityUpdateSem    *semaphore.Weighted
 	securityUpdateCancel context.CancelFunc // protected by RWMutex
 	securityUpdateEpoch  uint64             // off invalidates older queued updates
 	securityGeneration   uint64             // fences pools created outside RWMutex
@@ -223,9 +224,10 @@ var _ Client = &RPCClient{}
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		connPools:    make(map[string]*connPool),
-		vers:         make(map[string]uint64),
-		retiredPools: make(map[*connPool]struct{}),
+		connPools:         make(map[string]*connPool),
+		vers:              make(map[string]uint64),
+		retiredPools:      make(map[*connPool]struct{}),
+		securityUpdateSem: semaphore.NewWeighted(1),
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
@@ -304,6 +306,7 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 		}
 
 		pool, err := newConnPool(
+			context.Background(),
 			client.GrpcConnectionCount,
 			addr,
 			0,

@@ -202,7 +202,7 @@ func TestKVServerSecurityDrain(t *testing.T) {
 					require.NoError(t, err)
 					stream = resp.Resp.(*tikvrpc.CopStreamResponse)
 					defer stream.Close()
-					require.Equal(t, "first", string(stream.Response.Data))
+					require.Equal(t, "first", string(stream.Data))
 				default:
 					go func() { _, err := cli.SendRequest(ctx, addr, kvGet("hold"), 5*time.Second); result <- err }()
 				}
@@ -523,8 +523,8 @@ func TestKVServerSecurityDisableInvalidatesQueuedUpdate(t *testing.T) {
 	sec := config.NewSecurity(ca.path, "", "", nil)
 	cli := NewRPCClient(WithSecurity(sec))
 	defer cli.Close()
-	cli.securityUpdateMu.Lock()
-	unlock := sync.OnceFunc(cli.securityUpdateMu.Unlock)
+	require.NoError(t, cli.securityUpdateSem.Acquire(context.Background(), 1))
+	unlock := sync.OnceFunc(func() { cli.securityUpdateSem.Release(1) })
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -574,6 +574,7 @@ func TestKVServerSecurityDisableDuringBlockingDial(t *testing.T) {
 	sec := config.NewSecurity(ca.path, "", "", nil)
 	sec.KVServerVerifyCNMode, sec.KVServerVerifyCN = "enforce", []string{"trusted-server"}
 	// A library consumer can opt into blocking dialing, unlike TiDB's default.
+	//nolint:staticcheck // WithBlock intentionally exercises blocking DialContext behavior.
 	cli := NewRPCClient(WithSecurity(sec), WithGRPCDialOptions(grpc.WithBlock(), grpc.WithContextDialer(dial)))
 	defer cli.Close()
 	request := make(chan error, 1)
@@ -638,6 +639,147 @@ func TestKVServerSecurityDrainCancellationAndClose(t *testing.T) {
 	}
 }
 
+func TestKVServerSecurityAsyncDrainWithoutCallback(t *testing.T) {
+	for _, outcome := range []string{"response", "cancel"} {
+		t.Run(outcome, func(t *testing.T) {
+			defer config.UpdateGlobal(func(c *config.Config) {
+				c.TiKVClient.GrpcConnectionCount = 1
+				c.TiKVClient.MaxBatchSize = 128
+			})()
+			ca := newKVTestCA(t)
+			srv, addr := newDrainServer(t, ca)
+			finish := sync.OnceFunc(func() { close(srv.finish) })
+			defer finish()
+			sec := config.NewSecurity(ca.path, "", "", nil)
+			cli := NewRPCClient(WithSecurity(sec))
+			defer cli.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rl := async.NewRunLoop()
+			callbackResult := make(chan error, 1)
+			cli.SendRequestAsync(ctx, addr, kvGet("hold"), async.NewCallback(rl, func(_ *tikvrpc.Response, err error) {
+				callbackResult <- err
+			}))
+			awaitKVSignal(t, srv.started)
+			old, err := cli.getConnPool(addr, true)
+			require.NoError(t, err)
+			sec.KVServerVerifyCNMode = "off"
+			require.NoError(t, cli.UpdateKVServerSecurity(context.Background(), sec))
+			requireKVOpen(t, old)
+			if outcome == "cancel" {
+				cancel()
+			} else {
+				finish()
+			}
+			require.Eventually(t, func() bool { return rl.NumRunnable() == 1 }, time.Second, time.Millisecond)
+			stopped, stop := context.WithCancel(context.Background())
+			stop()
+			n, err := rl.Exec(stopped)
+			require.Zero(t, n)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Len(t, callbackResult, 0)
+			select {
+			case <-old.done:
+			case <-time.After(time.Second):
+				t.Fatal("retired pool waits for a callback left in the stopped run loop")
+			}
+			// Executing the queued callback later must not release the pool again.
+			n, err = rl.Exec(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			err = <-callbackResult
+			if outcome == "cancel" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Zero(t, old.users.Load())
+		})
+	}
+}
+
+func TestKVServerSecurityQueuedUpdateCancellation(t *testing.T) {
+	ca := newKVTestCA(t)
+	sec := config.NewSecurity(ca.path, "", "", nil)
+	sec.KVServerVerifyCNMode, sec.KVServerVerifyCN = "enforce", []string{"trusted-server"}
+	cli := NewRPCClient(WithSecurity(sec))
+	defer cli.Close()
+	require.NoError(t, cli.securityUpdateSem.Acquire(context.Background(), 1))
+	unlock := sync.OnceFunc(func() { cli.securityUpdateSem.Release(1) })
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed := &observedKVUpdateContext{Context: ctx, entered: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() { result <- cli.UpdateKVServerSecurity(observed, sec) }()
+	awaitKVSignal(t, observed.entered)
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("queued update did not honor cancellation")
+	}
+}
+
+func TestKVServerSecurityCancelBlockingPreflight(t *testing.T) {
+	for _, action := range []string{"cancel", "off", "close"} {
+		t.Run(action, func(t *testing.T) {
+			defer config.UpdateGlobal(func(c *config.Config) {
+				c.TiKVClient.GrpcConnectionCount = 1
+				c.TiKVClient.MaxBatchSize = 0
+			})()
+			ca := newKVTestCA(t)
+			_, addr := newDrainServer(t, ca)
+			var block atomic.Bool
+			var once sync.Once
+			entered, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			dial := func(ctx context.Context, addr string) (net.Conn, error) {
+				if block.Load() {
+					once.Do(func() { close(entered) })
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-resume:
+					}
+				}
+				return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			}
+			sec := config.NewSecurity(ca.path, "", "", nil)
+			//nolint:staticcheck // WithBlock intentionally exercises blocking DialContext behavior.
+			cli := NewRPCClient(WithSecurity(sec), WithGRPCDialOptions(grpc.WithBlock(), grpc.WithContextDialer(dial)))
+			defer cli.Close()
+			defer release()
+			_, err := cli.SendRequest(context.Background(), addr, kvGet("warm"), time.Second)
+			require.NoError(t, err)
+			block.Store(true)
+			sec.KVServerVerifyCNMode, sec.KVServerVerifyCN = "enforce", []string{"trusted-server"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() { result <- cli.UpdateKVServerSecurity(ctx, sec) }()
+			awaitKVSignal(t, entered)
+			switch action {
+			case "cancel":
+				cancel()
+			case "off":
+				off := sec
+				off.KVServerVerifyCNMode = "off"
+				require.NoError(t, cli.UpdateKVServerSecurity(context.Background(), off))
+			case "close":
+				require.NoError(t, cli.Close())
+			}
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("canceled update is still blocked in candidate dialing")
+			}
+		})
+	}
+}
+
 func newKVTestCA(t *testing.T) kvTestCA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -677,7 +819,7 @@ func (ca kvTestCA) issue(t *testing.T, cn string, validSAN bool) tls.Certificate
 
 func startKVTLSServer(t *testing.T, cert tls.Certificate, service tikvpb.TikvServer) string {
 	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{cert}})))
 	tikvpb.RegisterTikvServer(srv, service)
