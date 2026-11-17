@@ -38,6 +38,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"slices"
 
 	"github.com/pkg/errors"
 )
@@ -48,6 +49,55 @@ type Security struct {
 	ClusterSSLCert  string   `toml:"cluster-ssl-cert" json:"cluster-ssl-cert"`
 	ClusterSSLKey   string   `toml:"cluster-ssl-key" json:"cluster-ssl-key"`
 	ClusterVerifyCN []string `toml:"cluster-verify-cn" json:"cluster-verify-cn"`
+	// KVServerVerifyCNMode is off (including the empty default) or enforce.
+	// This policy applies only to outbound KV RPC connections.
+	KVServerVerifyCNMode string   `toml:"kv-server-verify-cn-mode" json:"kv-server-verify-cn-mode"`
+	KVServerVerifyCN     []string `toml:"kv-server-verify-cn" json:"kv-server-verify-cn"`
+}
+
+// ValidateKVServerCN validates the independent outbound server identity policy.
+func (s *Security) ValidateKVServerCN() error {
+	switch s.KVServerVerifyCNMode {
+	case "", "off":
+		return nil
+	case "enforce":
+		if s.ClusterSSLCA == "" || len(s.KVServerVerifyCN) == 0 {
+			return errors.New("kv-server-verify-cn-mode=enforce requires cluster-ssl-ca and a nonempty kv-server-verify-cn")
+		}
+		for _, cn := range s.KVServerVerifyCN {
+			if cn == "" {
+				return errors.New("kv-server-verify-cn must not contain an empty CN")
+			}
+		}
+		return nil
+	default:
+		return errors.New("kv-server-verify-cn-mode must be off or enforce")
+	}
+}
+
+// ToKVServerTLSConfig adds an exact server leaf CN check after standard TLS
+// chain and SAN verification. The policy is a snapshot owned by one pool
+// generation, including during preflight and subsequent reconnections.
+func (s *Security) ToKVServerTLSConfig() (*tls.Config, error) {
+	if err := s.ValidateKVServerCN(); err != nil {
+		return nil, err
+	}
+	cfg, err := s.ToTLSConfig()
+	if err != nil || cfg == nil || s.KVServerVerifyCNMode != "enforce" {
+		return cfg, err
+	}
+	allowed := slices.Clone(s.KVServerVerifyCN)
+	cfg.VerifyConnection = func(state tls.ConnectionState) error {
+		if len(state.VerifiedChains) == 0 || len(state.PeerCertificates) == 0 {
+			return errors.New("KV server certificate has no verified chain")
+		}
+		cn := state.PeerCertificates[0].Subject.CommonName
+		if !slices.Contains(allowed, cn) {
+			return errors.Errorf("KV server certificate CN %q is not in kv-server-verify-cn", cn)
+		}
+		return nil
+	}
+	return cfg, nil
 }
 
 // NewSecurity creates a Security.

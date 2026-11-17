@@ -76,11 +76,14 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	// TODO(zyguan): If the client created `WithGRPCDialOptions(grpc.WithBlock())`, `getConnPool` might be blocked for
 	// a while when the corresponding conn array is uninitialized. However, since tidb won't set this option, we just
 	// keep `getConnPool` synchronous for now.
-	connPool, err := c.getConnPool(addr, true)
+	connPool, err := c.selectConnPool(addr, true, true)
 	if err != nil {
 		cb.Invoke(nil, err)
 		return
 	}
+	// Keep admission alive until enqueue finishes, even if cancellation invokes
+	// the callback concurrently. A separate reference spans callback completion.
+	defer connPool.release()
 
 	if err := encodeRequestCmd(batchReq); err != nil {
 		cb.Invoke(nil, err)
@@ -104,7 +107,9 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	)
 
 	// defer post actions
+	connPool.users.Add(1)
 	entry.cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+		defer connPool.release()
 		if stop != nil {
 			stop()
 		}

@@ -53,7 +53,13 @@ type connPool struct {
 	conns         []*monitoredConn
 	// batchConn is not null when batch is enabled.
 	*batchConn
-	done chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	// users includes admitted requests and non-batch streams that outlive them.
+	users     atomic.Int64
+	draining  atomic.Bool
+	drained   chan struct{}
+	drainOnce sync.Once
 
 	monitor *connMonitor
 
@@ -69,6 +75,7 @@ func newConnPool(maxSize uint, addr string, ver uint64, keyspaceID apicodec.Keys
 		conns:         make([]*monitoredConn, maxSize),
 		streamTimeout: make(chan *tikvrpc.Lease, 1024),
 		done:          make(chan struct{}),
+		drained:       make(chan struct{}),
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
@@ -95,11 +102,11 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	if len(security.ClusterSSLCA) != 0 {
-		tlsConfig, err := security.ToTLSConfig()
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	tlsConfig, err := security.ToKVServerTLSConfig()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if tlsConfig != nil {
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
 
@@ -130,12 +137,13 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 		// Don't remove this until we no longer use sharedBytes in tipb and kvproto.
 		callOptions = append(callOptions, grpc.ForceCodec(&legacyCodec{}))
 
-		opts = append([]grpc.DialOption{
+		dialOpts := append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
 			grpc.WithUnaryInterceptor(unaryInterceptor),
 			grpc.WithStreamInterceptor(streamInterceptor),
+			grpc.WithChainStreamInterceptor(a.trackStream),
 			grpc.WithDefaultCallOptions(callOptions...),
 			grpc.WithConnectParams(grpc.ConnectParams{
 				Backoff: backoff.Config{
@@ -152,13 +160,13 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 			}),
 		}, opts...)
 		if !cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithBufferPool(mem.NopBufferPool{}))
+			dialOpts = append(dialOpts, experimental.WithBufferPool(mem.NopBufferPool{}))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
 			fmt.Sprintf("%s-%d", a.target, i),
 			addr,
-			opts...,
+			dialOpts...,
 		)
 
 		cancel()
@@ -205,6 +213,10 @@ func (a *connPool) Get() *grpc.ClientConn {
 }
 
 func (a *connPool) Close() {
+	a.closeOnce.Do(a.close)
+}
+
+func (a *connPool) close() {
 	if a.batchConn != nil {
 		a.batchConn.Close()
 	}
@@ -220,6 +232,36 @@ func (a *connPool) Close() {
 	}
 
 	close(a.done)
+}
+
+func (a *connPool) release() {
+	if a.users.Add(-1) == 0 && a.draining.Load() {
+		a.drainOnce.Do(func() { close(a.drained) })
+	}
+}
+
+// retire is called after removing the pool from admission, under RPCClient's lock.
+func (a *connPool) retire() {
+	a.draining.Store(true)
+	if a.users.Load() == 0 {
+		a.drainOnce.Do(func() { close(a.drained) })
+	}
+}
+
+func (a *connPool) trackStream(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	// BatchCommands is a persistent transport; its logical requests are counted
+	// at admission. Counting the stream itself would prevent it ever draining.
+	if method == "/tikvpb.Tikv/BatchCommands" {
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+	a.users.Add(1)
+	release := sync.OnceFunc(a.release)
+	opts = append(opts, grpc.OnFinish(func(error) { release() }))
+	stream, err := streamer(ctx, desc, cc, method, opts...)
+	if err != nil {
+		release()
+	}
+	return stream, err
 }
 
 func (a *connPool) getStoreMetrics(storeID uint64) *storeMetrics {
