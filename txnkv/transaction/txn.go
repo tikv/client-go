@@ -1450,6 +1450,10 @@ func (txn *KVTxn) recordSharedLockAbort(err error) {
 	if !errors.As(err, &sharedLockLost) && !errors.As(err, &lockUpgradeConflict) {
 		return
 	}
+	txn.setSharedLockAbort(err)
+}
+
+func (txn *KVTxn) setSharedLockAbort(err error) {
 	txn.sharedLockAbortMu.Lock()
 	defer txn.sharedLockAbortMu.Unlock()
 	if txn.sharedLockAbortErr == nil {
@@ -1468,6 +1472,20 @@ func (txn *KVTxn) getTxnStateErr() error {
 		return errors.WithStack(tikverr.ErrResultUndetermined)
 	}
 	return txn.getSharedLockAbortErr()
+}
+
+// A statement retry cannot release previously returned shared reads. Preserve
+// the deadlock diagnostic and poison the whole transaction when it is the victim.
+func (txn *KVTxn) onLockDeadlock(lockCtx *tikv.LockCtx, dl *tikverr.ErrDeadlock, keys [][]byte) {
+	if txn.usesSharedLockPrimary || (lockCtx.InShareMode && lockCtx.AllowSharedLockPrimary) {
+		dl.IsRetryable = false
+		txn.setSharedLockAbort(dl)
+	} else if hashInKeys(dl.DeadlockKeyHash, keys) {
+		dl.IsRetryable = true
+	}
+	if lockCtx.OnDeadlock != nil {
+		lockCtx.OnDeadlock(dl)
+	}
 }
 
 func (txn *KVTxn) lockPessimisticKeyGroup(
@@ -1500,6 +1518,9 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		}
 
 		if isUpgrade {
+			if dl, ok := errors.Cause(err).(*tikverr.ErrDeadlock); ok && txn.usesSharedLockPrimary {
+				txn.onLockDeadlock(lockCtx, dl, keys)
+			}
 			txn.recordSharedLockAbort(err)
 			return 0, err
 		}
@@ -1508,12 +1529,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		if len(keys) > 1 || keyMayBeLocked {
 			dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
 			if isDeadlock {
-				if hashInKeys(dl.DeadlockKeyHash, keys) {
-					dl.IsRetryable = true
-				}
-				if lockCtx.OnDeadlock != nil {
-					lockCtx.OnDeadlock(dl)
-				}
+				txn.onLockDeadlock(lockCtx, dl, keys)
 			}
 
 			rollbackForUpdateTS := lockCtx.ForUpdateTS
@@ -1908,13 +1924,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			if len(keys) > 1 || keyMayBeLocked {
 				dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
 				if isDeadlock {
-					if hashInKeys(dl.DeadlockKeyHash, keys) {
-						dl.IsRetryable = true
-					}
-					if lockCtx.OnDeadlock != nil {
-						// Call OnDeadlock before pessimistic rollback.
-						lockCtx.OnDeadlock(dl)
-					}
+					txn.onLockDeadlock(lockCtx, dl, keys)
 				}
 
 				// TODO: It's possible that there are some locks successfully locked with conflict but the client didn't

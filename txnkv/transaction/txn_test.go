@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	stderrs "errors"
+	"github.com/dgryski/go-farm"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -503,6 +504,39 @@ func TestSharedLockUpgrade(t *testing.T) {
 		require.False(t, txn.usesSharedLockPrimary)
 		require.Empty(t, txn.collectLockedKeys())
 	})
+	for _, upgrade := range []bool{false, true} {
+		name := "DeadlockOnNewKeyAbortsSharedTransaction"
+		if upgrade {
+			name = "UpgradeDeadlockAbortsSharedTransaction"
+		}
+		t.Run(name, func(t *testing.T) {
+			txn, _ := newRecorderTxn(t, func(call int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+				response := &kvrpcpb.PessimisticLockResponse{}
+				if call == 1 {
+					response.Errors = []*kvrpcpb.KeyError{{Deadlock: &kvrpcpb.Deadlock{
+						LockKey: req.Mutations[0].Key, DeadlockKeyHash: farm.Fingerprint64(req.Mutations[0].Key),
+					}}}
+				}
+				return &tikvrpc.Response{Resp: response}, nil
+			})
+			lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+			lock.AllowSharedLockPrimary = true
+			lock.InShareMode = true
+			key := []byte("primary")
+			require.NoError(t, txn.LockKeys(context.Background(), lock, key))
+			if !upgrade {
+				key = []byte("new-key")
+			}
+			err := txn.LockKeys(context.Background(), kv.NewLockCtx(3, kv.LockNoWait, time.Now()), key)
+			var deadlock *tikverr.ErrDeadlock
+			require.ErrorAs(t, err, &deadlock)
+			require.False(t, deadlock.IsRetryable)
+			txn.KVTxn.store.WaitGroup().Wait()
+			require.Same(t, deadlock, txn.Commit(context.Background()))
+			require.NoError(t, txn.Rollback())
+		})
+	}
+
 	t.Run("LockKeysWithWaitTimeReturnsAbortBeforeTSO", func(t *testing.T) {
 		testCases := []struct {
 			name string
