@@ -34,6 +34,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util/codec"
 )
 
 func TestSharedLock(t *testing.T) {
@@ -103,8 +104,13 @@ func (s *testSharedLockSuite) TearDownSuite() {
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 40000)
 }
 
+const sharedLockTestPrefix = "~shared_lock"
+
 func (s *testSharedLockSuite) SetupTest() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+	// This suite only owns keys produced by s.key. Other clients may be using
+	// the same cluster to inspect transaction outcomes and lock diagnostics.
+	prefix := []byte(sharedLockTestPrefix + "_")
+	s.store = tikv.StoreProbe{KVStore: newTiKVStore(s.T(), codec.EncodeBytes(nil, prefix), codec.EncodeBytes(nil, kv.PrefixNextKey(prefix)))}
 }
 
 func (s *testSharedLockSuite) TearDownTest() {
@@ -112,7 +118,7 @@ func (s *testSharedLockSuite) TearDownTest() {
 }
 
 func (s *testSharedLockSuite) key(name string) []byte {
-	return encodeKey("~shared_lock", name)
+	return encodeKey(sharedLockTestPrefix, name)
 }
 
 func (s *testSharedLockSuite) begin() transaction.TxnProbe {

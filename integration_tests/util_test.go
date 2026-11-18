@@ -74,7 +74,7 @@ func NewTestStore(t *testing.T) *tikv.KVStore {
 	}
 
 	if *withTiKV {
-		return newTiKVStore(t)
+		return newTiKVStore(t, nil, nil)
 	}
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 	}
 
 	if *withTiKV {
-		return newTiKVStore(t)
+		return newTiKVStore(t, nil, nil)
 	}
 	client, pdClient, cluster, err := unistore.New("", nil, constants.NullKeyspaceID, nil)
 	require.Nil(t, err)
@@ -102,7 +102,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 	return store
 }
 
-func newTiKVStore(t *testing.T) *tikv.KVStore {
+func newTiKVStore(t *testing.T, clearStart, clearEnd []byte) *tikv.KVStore {
 	re := require.New(t)
 	addrs := strings.Split(*pdAddrs, ",")
 	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
@@ -133,7 +133,7 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 		tikv.NewRPCClient(opt),
 	)
 	re.Nil(err)
-	err = clearStorage(store)
+	err = clearStorage(store, clearStart, clearEnd)
 	re.Nil(err)
 	return store
 }
@@ -167,12 +167,12 @@ func mustGetConfig(re *require.Assertions, url string) string {
 	return string(body)
 }
 
-func clearStorage(store *tikv.KVStore) error {
+func clearStorage(store *tikv.KVStore, start, end []byte) error {
 	txn, err := store.Begin()
 	if err != nil {
 		return err
 	}
-	iter, err := txn.Iter(nil, nil)
+	iter, err := txn.Iter(start, end)
 	if err != nil {
 		return errors.WithStack(err)
 	}
