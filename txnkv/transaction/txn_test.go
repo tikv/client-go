@@ -1307,3 +1307,25 @@ func TestPipelinedFlushChecksTransactionKillSignal(t *testing.T) {
 		})
 	}
 }
+
+func TestUpgradeRecentBlockersHonorWaitBudget(t *testing.T) {
+	txn := newTestTxn(t, 1)
+	txn.SetPessimistic(true)
+	c, err := newTwoPhaseCommitter(txn.KVTxn, 0)
+	require.NoError(t, err)
+	key := []byte("k")
+	resp := &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.LockInfo{
+		Key: key, LockType: kvrpcpb.Op_SharedLock, SharedLockInfos: []*kvrpcpb.LockInfo{
+			{Key: key, LockVersion: 1}, {Key: key, LockVersion: 2, DurationToLastUpdateMs: 1},
+		},
+	}}}}}
+	for _, tc := range []struct {
+		wait     int64
+		expected error
+	}{{kv.LockNoWait, tikverr.ErrLockAcquireFailAndNoWaitSet}, {10, tikverr.ErrLockWaitTimeout}} {
+		a := actionPessimisticLock{LockCtx: kv.NewLockCtx(2, tc.wait, time.Now().Add(-time.Second)), isSharedLockUpgrade: true}
+		done, err := a.handlePessimisticLockResponseNormalMode(c, nil, nil, nil, resp, nil)
+		require.True(t, done)
+		require.ErrorIs(t, err, tc.expected)
+	}
+}

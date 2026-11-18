@@ -404,7 +404,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		return finished, err
 	}
 	if len(locks) == 0 {
-		return false, nil
+		// All blockers were recently updated (or our own S). Skipping the
+		// resolver does not extend NOWAIT or the statement's lock wait budget.
+		return action.checkLockWaitBudget()
 	}
 	if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
 		return true, err
@@ -434,23 +436,23 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 	// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 	if resolveLockRes.TTL > 0 {
-		// Check max_execution_time deadline first
-		if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
-			return true, err
-		}
-
-		if action.LockWaitTime() == kv.LockNoWait {
-			return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
-		} else if action.LockWaitTime() == kv.LockAlwaysWait {
-			// do nothing but keep wait
-		} else {
-			// the lockWaitTime is set, we should return wait timeout if we are still blocked by a lock
-			if time.Since(action.WaitStartTime).Milliseconds() >= action.LockWaitTime() {
-				return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
-			}
-		}
+		return action.checkLockWaitBudget()
 	}
+	return false, nil
+}
 
+func (action actionPessimisticLock) checkLockWaitBudget() (bool, error) {
+	now := time.Now()
+	if err := checkMaxExecutionTimeExceeded(action.LockCtx, now); err != nil {
+		return true, err
+	}
+	budget := action.LockWaitTime()
+	if budget == kv.LockNoWait {
+		return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
+	}
+	if budget > 0 && now.Sub(action.WaitStartTime).Milliseconds() >= budget {
+		return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
+	}
 	return false, nil
 }
 
