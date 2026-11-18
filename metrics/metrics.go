@@ -86,6 +86,7 @@ var (
 	TiKVBatchClientUnavailable              prometheus.Histogram
 	TiKVBatchClientWaitEstablish            prometheus.Histogram
 	TiKVBatchClientRecycle                  prometheus.Histogram
+	TiKVBatchClientRecycledConnCounter      prometheus.Counter
 	TiKVRangeTaskStats                      *prometheus.GaugeVec
 	TiKVRangeTaskPushDuration               *prometheus.HistogramVec
 	TiKVTokenWaitDuration                   prometheus.Histogram
@@ -605,6 +606,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_client_reset",
 			Buckets:     prometheus.ExponentialBuckets(0.001, 2, 28), // 1ms ~ 1.5days
 			Help:        "batch client recycle connection and reconnect duration",
+			ConstLabels: constLabels,
+		})
+
+	TiKVBatchClientRecycledConnCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_client_recycled_connections_total",
+			Help:        "Counter of idle batch client connection arrays recycled.",
 			ConstLabels: constLabels,
 		})
 
@@ -1222,6 +1232,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
 	prometheus.MustRegister(TiKVBatchClientRecycle)
+	prometheus.MustRegister(TiKVBatchClientRecycledConnCounter)
 	prometheus.MustRegister(TiKVRangeTaskStats)
 	prometheus.MustRegister(TiKVRangeTaskPushDuration)
 	prometheus.MustRegister(TiKVTokenWaitDuration)
