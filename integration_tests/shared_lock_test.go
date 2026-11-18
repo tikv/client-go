@@ -1007,3 +1007,156 @@ func (s *testSharedLockSuite) TestClassicSharedPrimaryRejectsMissingSharedLock()
 		})
 	}
 }
+
+type observedSharedWrite struct {
+	mode      string
+	holders   []uint64
+	optimized bool
+}
+type traceSharedWriteClient struct {
+	tikv.Client
+	writer uint64
+	events chan observedSharedWrite
+}
+
+func (c *traceSharedWriteClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err != nil || resp == nil || resp.Resp == nil {
+		return resp, err
+	}
+	event := observedSharedWrite{optimized: true}
+	var errs []*kvrpcpb.KeyError
+	switch req.Type {
+	case tikvrpc.CmdPrewrite:
+		request := req.Prewrite()
+		if request.StartVersion != c.writer {
+			return resp, err
+		}
+		reply := resp.Resp.(*kvrpcpb.PrewriteResponse)
+		if reply.RegionError != nil {
+			return resp, err
+		}
+		errs = reply.Errors
+		switch {
+		case request.TryOnePc:
+			event.mode = "1pc"
+			event.optimized = reply.OnePcCommitTs != 0
+		case request.UseAsyncCommit:
+			event.mode = "async"
+			event.optimized = reply.MinCommitTs != 0
+		default:
+			event.mode = "2pc"
+		}
+	case tikvrpc.CmdFlush:
+		request := req.Flush()
+		if request.StartTs != c.writer {
+			return resp, err
+		}
+		reply := resp.Resp.(*kvrpcpb.FlushResponse)
+		if reply.RegionError != nil {
+			return resp, err
+		}
+		event.mode = "flush"
+		event.optimized = request.Generation > 0
+		errs = reply.Errors
+	default:
+		return resp, err
+	}
+	for _, keyErr := range errs {
+		for _, holder := range keyErr.GetLocked().GetSharedLockInfos() {
+			event.holders = append(event.holders, holder.LockVersion)
+		}
+	}
+	// Only expose confirmed lock conflicts and successful writes.
+	if len(event.holders) > 0 || len(errs) == 0 {
+		select {
+		case c.events <- event:
+		case <-ctx.Done():
+		}
+	}
+	return resp, err
+}
+
+func (s *testSharedLockSuite) TestOrdinaryWriteProtocolsWaitForSharedHolders() {
+	if config.NextGen {
+		s.T().Skip("Classic shared-primary protocol")
+	}
+	for _, mode := range []string{"2pc", "1pc", "async", "flush"} {
+		s.Run(mode, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			key := s.key("writer_wait_" + mode)
+			first, second := s.begin(), s.begin()
+			for _, txn := range []transaction.TxnProbe{first, second} {
+				defer func() {
+					if txn.Valid() {
+						s.NoError(txn.Rollback())
+					}
+				}()
+				read := kv.NewLockCtx(s.getTS(), kv.LockAlwaysWait, time.Now())
+				read.InShareMode = true
+				read.AllowSharedLockPrimary = true
+				s.Require().NoError(txn.LockKeys(ctx, read, key))
+			}
+			var opts []tikv.TxnOption
+			if mode == "flush" {
+				opts = append(opts, tikv.WithDefaultPipelinedTxn())
+			}
+			writer, err := s.store.Begin(opts...)
+			s.Require().NoError(err)
+			writer.SetEnableAsyncCommit(mode == "async")
+			writer.SetEnable1PC(mode == "1pc")
+			s.Require().NoError(writer.Set(key, []byte(mode)))
+			original := s.store.GetTiKVClient()
+			trace := &traceSharedWriteClient{Client: original, writer: writer.StartTS(), events: make(chan observedSharedWrite, 8)}
+			s.store.SetTiKVClient(trace)
+			defer s.store.SetTiKVClient(original)
+			done := make(chan error, 1)
+			go func() { done <- writer.Commit(ctx) }()
+			waitForConflict := func(ids ...uint64) {
+				for {
+					select {
+					case event := <-trace.events:
+						s.Require().Equal(mode, event.mode)
+						if len(event.holders) == len(ids) {
+							s.Require().ElementsMatch(ids, event.holders)
+							return
+						}
+						s.Require().NotEmpty(event.holders, "write succeeded while a shared holder remained")
+					case err := <-done:
+						s.FailNow("writer finished while shared holders remained", err)
+					case <-ctx.Done():
+						s.FailNow("did not observe shared holder conflict", ctx.Err())
+					}
+				}
+			}
+			waitForConflict(first.StartTS(), second.StartTS())
+			s.Require().NoError(first.Rollback())
+			waitForConflict(second.StartTS())
+			s.Require().NoError(second.Rollback())
+			select {
+			case err := <-done:
+				s.Require().NoError(err)
+			case <-ctx.Done():
+				s.FailNow("writer did not finish after release", ctx.Err())
+			}
+			for {
+				select {
+				case event := <-trace.events:
+					if len(event.holders) > 0 {
+						continue
+					}
+					s.Require().Equal(mode, event.mode)
+					s.Require().True(event.optimized, "requested write protocol fell back")
+					s.T().Logf("%s write RPC: observed both shared holders, the last holder, then a successful write without fallback", event.mode)
+				default:
+					s.FailNow("missing successful write RPC")
+				}
+				break
+			}
+			val, err := s.store.GetSnapshot(writer.CommitTS()).Get(ctx, key)
+			s.Require().NoError(err)
+			s.Equal([]byte(mode), val.Value)
+		})
+	}
+}

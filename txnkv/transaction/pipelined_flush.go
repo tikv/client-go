@@ -217,36 +217,38 @@ func (action actionPipelinedFlush) handleSingleBatch(
 				return c.extractKeyExistsErr(e)
 			}
 
-			// Extract lock from key error
-			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+			// Shared wrappers carry one owner and primary per member.
+			blockers, err1 := txnlock.ExtractLocksFromKeyErr(keyErr)
 			if err1 != nil {
 				return err1
 			}
-			if _, ok := logged[lock.TxnID]; !ok {
-				logutil.Logger(bo.GetCtx()).Info(
-					"[pipelined dml] flush encounters lock. "+
-						"More locks belonging to the same transaction may be omitted",
-					zap.Uint64("txnID", c.startTS),
-					zap.Uint64("generation", action.generation),
-					zap.Stringer("lock", lock),
-				)
-				logged[lock.TxnID] = struct{}{}
+			for _, lock := range blockers {
+				if _, ok := logged[lock.TxnID]; !ok {
+					logutil.Logger(bo.GetCtx()).Info(
+						"[pipelined dml] flush encounters lock. "+
+							"More locks belonging to the same transaction may be omitted",
+						zap.Uint64("txnID", c.startTS),
+						zap.Uint64("generation", action.generation),
+						zap.Stringer("lock", lock),
+					)
+					logged[lock.TxnID] = struct{}{}
+				}
+				// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
+				// fail due to a WriteConflict error. So we can construct and return an error here early.
+				// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
+				// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
+				// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
+				if lock.TxnID > c.startTS && !c.isPessimistic {
+					return tikverr.NewErrWriteConflictWithArgs(
+						c.startTS,
+						lock.TxnID,
+						0,
+						lock.Key,
+						kvrpcpb.WriteConflict_Optimistic,
+					)
+				}
+				locks = append(locks, lock)
 			}
-			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
-			// fail due to a WriteConflict error. So we can construct and return an error here early.
-			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
-			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
-			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-			if lock.TxnID > c.startTS && !c.isPessimistic {
-				return tikverr.NewErrWriteConflictWithArgs(
-					c.startTS,
-					lock.TxnID,
-					0,
-					lock.Key,
-					kvrpcpb.WriteConflict_Optimistic,
-				)
-			}
-			locks = append(locks, lock)
 		}
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
