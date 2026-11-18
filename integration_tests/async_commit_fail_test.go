@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,6 +49,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
@@ -341,4 +343,52 @@ func (s *testAsyncCommitFailSuite) TestConfirmedFallbackWithRPCError() {
 	s.ErrorIs(err, context.Canceled)
 	s.False(txn.GetCommitter().IsAsyncCommit())
 	s.Nil(txn.GetCommitter().GetUndeterminedErr())
+}
+
+func (s *testAsyncCommitFailSuite) TestAsyncCommitFailedCheckNotExistsNotCommitted() {
+	if *withTiKV {
+		s.T().Skip("requires a controlled region split in unistore")
+	}
+	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := s.store.GetRegionCache().LocateKey(bo, s.key("s"))
+	s.Require().NoError(err)
+	regionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
+	s.cluster.Split(loc.Region.GetID(), regionID, s.key("s"), []uint64{peerID}, peerID)
+	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+	s.putKV(s.key("z"), []byte("z0"), false)
+
+	s.Require().NoError(failpoint.Enable("tikvclient/commitFailedSkipCleanup", "return"))
+	defer func() { s.NoError(failpoint.Disable("tikvclient/commitFailedSkipCleanup")) }()
+
+	txn := s.beginAsyncCommit()
+	s.Nil(txn.Set(s.key("a"), []byte("a1")))
+	s.Nil(txn.GetMemBuffer().SetWithFlags(s.key("z"), []byte("z1"), kv.SetPresumeKeyNotExists))
+	s.Nil(txn.Delete(s.key("z")))
+	primaryPrewritten := make(chan struct{})
+	var once sync.Once
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("primary-prewrite-first", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPrewrite {
+				return next(target, req)
+			}
+			if bytes.Equal(req.Prewrite().Mutations[0].Key, s.key("a")) {
+				defer once.Do(func() { close(primaryPrewritten) })
+				return next(target, req)
+			}
+			<-primaryPrewritten
+			return next(target, req)
+		}
+	}))
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	err = txn.Commit(ctx)
+	s.Error(err)
+	_, ok := errors.Cause(err).(*tikverr.ErrKeyExist)
+	s.True(ok, errors.WithStack(err))
+
+	// The primary lock is left behind, resolving it must not commit the transaction.
+	s.Nil(tikv.StoreProbe{KVStore: s.store}.NewLockResolver().ForceResolveLock(context.Background(), s.mustGetLock(s.key("a"))))
+	reader := s.begin()
+	_, err = reader.Get(context.Background(), s.key("a"))
+	s.True(tikverr.IsErrNotFound(err), errors.WithStack(err))
+	s.mustGetFromTxn(reader, s.key("z"), []byte("z0"))
 }
