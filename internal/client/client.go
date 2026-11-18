@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -197,9 +198,15 @@ func WithCodec(codec apicodec.Codec) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	connPools map[string]*connPool
-	vers      map[string]uint64
-	option    *option
+	connPools            map[string]*connPool
+	vers                 map[string]uint64
+	option               *option
+	connPoolCreateMu     sync.Mutex // dialing must not hold the admission lock
+	securityUpdateSem    *semaphore.Weighted
+	securityUpdateCancel context.CancelFunc // protected by RWMutex
+	securityUpdateEpoch  uint64             // off invalidates older queued updates
+	securityGeneration   uint64             // fences pools created outside RWMutex
+	retiredPools         map[*connPool]struct{}
 
 	idleNotify uint32
 
@@ -217,8 +224,10 @@ var _ Client = &RPCClient{}
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		connPools: make(map[string]*connPool),
-		vers:      make(map[string]uint64),
+		connPools:         make(map[string]*connPool),
+		vers:              make(map[string]uint64),
+		retiredPools:      make(map[*connPool]struct{}),
+		securityUpdateSem: semaphore.NewWeighted(1),
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
@@ -233,36 +242,52 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 }
 
 func (c *RPCClient) getConnPool(addr string, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connPool, error) {
-	c.RLock()
-	if c.isClosed {
+	return c.selectConnPool(addr, enableBatch, false, opt...)
+}
+
+func (c *RPCClient) selectConnPool(addr string, enableBatch, acquire bool, opt ...func(cfg *config.TiKVClient)) (*connPool, error) {
+	for {
+		c.RLock()
+		if c.isClosed {
+			c.RUnlock()
+			return nil, errors.New("rpcClient is closed")
+		}
+		pool, ok := c.connPools[addr]
+		if ok {
+			// Idle pools never become active again.
+			if pool.batchConn != nil && pool.isIdle() {
+				c.RUnlock()
+				return nil, errors.New("rpcClient is idle")
+			}
+			if acquire {
+				// Admission and pool replacement share this lock.
+				pool.users.Add(1)
+			}
+			c.RUnlock()
+			return pool, nil
+		}
 		c.RUnlock()
-		return nil, errors.Errorf("rpcClient is closed")
-	}
-	pool, ok := c.connPools[addr]
-	c.RUnlock()
-	if !ok {
-		var err error
-		pool, err = c.createConnPool(addr, enableBatch, opt...)
-		if err != nil {
+		if _, err := c.createConnPool(addr, enableBatch, opt...); err != nil {
 			return nil, err
 		}
 	}
-
-	// An idle connPool will not change to active again, this avoid the race condition
-	// that recycling idle connection close an active connection unexpectedly (idle -> active).
-	if pool.batchConn != nil && pool.isIdle() {
-		return nil, errors.Errorf("rpcClient is idle")
-	}
-
-	return pool, nil
 }
 
 func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(cfg *config.TiKVClient)) (*connPool, error) {
-	c.Lock()
-	defer c.Unlock()
-	pool, ok := c.connPools[addr]
-	if !ok {
-		var err error
+	c.connPoolCreateMu.Lock()
+	defer c.connPoolCreateMu.Unlock()
+	for {
+		c.RLock()
+		if c.isClosed {
+			c.RUnlock()
+			return nil, errors.New("rpcClient is closed")
+		}
+		if pool := c.connPools[addr]; pool != nil {
+			c.RUnlock()
+			return pool, nil
+		}
+		security, generation := c.option.security, c.securityGeneration
+		c.RUnlock()
 		client := config.GetGlobalConfig().TiKVClient
 		for _, opt := range opts {
 			opt(&client)
@@ -280,35 +305,62 @@ func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(c
 			keyspaceID = c.option.codec.GetKeyspaceID()
 		}
 
-		ver := c.vers[addr] + 1
-		pool, err = newConnPool(
+		pool, err := newConnPool(
+			context.Background(),
 			client.GrpcConnectionCount,
 			addr,
-			ver,
+			0,
 			keyspaceID,
-			c.option.security,
+			security,
 			&c.idleNotify,
 			enableBatch,
 			c.option.dialTimeout,
-			c.connMonitor,
+			&connMonitor{},
 			c.eventListener,
 			c.option.gRPCDialOptions)
 
-		if err != nil {
+		c.Lock()
+		if c.securityGeneration != generation {
+			c.Unlock()
+			if pool != nil {
+				pool.Close()
+			}
+			continue
+		}
+		if c.isClosed || err != nil {
+			c.Unlock()
+			if pool != nil {
+				pool.Close()
+			}
+			if err == nil {
+				err = errors.New("rpcClient is closed")
+			}
 			return nil, err
 		}
+		c.vers[addr]++
+		pool.ver = c.vers[addr]
+		pool.monitor = c.connMonitor
+		for _, conn := range pool.conns {
+			c.connMonitor.AddConn(conn)
+		}
 		c.connPools[addr] = pool
-		c.vers[addr] = ver
+		c.Unlock()
+		return pool, nil
 	}
-	return pool, nil
 }
 
 func (c *RPCClient) closeConns() {
 	c.Lock()
 	if !c.isClosed {
 		c.isClosed = true
+		if c.securityUpdateCancel != nil {
+			c.securityUpdateCancel()
+		}
 		// close all connections
 		for _, pool := range c.connPools {
+			pool.Close()
+		}
+		for pool := range c.retiredPools {
 			pool.Close()
 		}
 	}
@@ -353,10 +405,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
 	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
 	enableBatch := req.StoreTp == tikvrpc.TiKV
-	connPool, err := c.getConnPool(addr, enableBatch)
+	connPool, err := c.selectConnPool(addr, enableBatch, true)
 	if err != nil {
 		return nil, err
 	}
+	defer connPool.release()
 
 	wrapErrConn := func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
 		return resp, WrapErrConn(err, connPool)

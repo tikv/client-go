@@ -51,7 +51,10 @@ func (c *connMonitor) AddConn(conn *monitoredConn) {
 }
 
 func (c *connMonitor) RemoveConn(conn *monitoredConn) {
-	c.m.Delete(conn.Name)
+	// A draining pool may share names with its replacement.
+	if !c.m.CompareAndDelete(conn.Name, conn) {
+		return
+	}
 	for state := connectivity.Idle; state <= connectivity.Shutdown; state++ {
 		metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), state.String()).Set(0)
 	}

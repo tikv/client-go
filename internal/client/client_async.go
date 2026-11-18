@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/trace"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,24 @@ import (
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 )
+
+// poolReleaseCallback releases transport ownership at completion, independently
+// of whether the executor runs the application callback. release is idempotent
+// because cancellation and a response may both try to complete the request.
+type poolReleaseCallback struct {
+	async.Callback[*tikvrpc.Response]
+	release func()
+}
+
+func (cb *poolReleaseCallback) Invoke(resp *tikvrpc.Response, err error) {
+	cb.release()
+	cb.Callback.Invoke(resp, err)
+}
+
+func (cb *poolReleaseCallback) Schedule(resp *tikvrpc.Response, err error) {
+	cb.release()
+	cb.Callback.Schedule(resp, err)
+}
 
 // SendRequestAsync sends a request to the target address asynchronously.
 func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
@@ -76,16 +95,22 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 	// TODO(zyguan): If the client created `WithGRPCDialOptions(grpc.WithBlock())`, `getConnPool` might be blocked for
 	// a while when the corresponding conn array is uninitialized. However, since tidb won't set this option, we just
 	// keep `getConnPool` synchronous for now.
-	connPool, err := c.getConnPool(addr, true)
+	connPool, err := c.selectConnPool(addr, true, true)
 	if err != nil {
 		cb.Invoke(nil, err)
 		return
 	}
+	// Keep admission alive until enqueue finishes, even if cancellation invokes
+	// the callback concurrently. A separate reference spans transport completion.
+	defer connPool.release()
 
 	if err := encodeRequestCmd(batchReq); err != nil {
 		cb.Invoke(nil, err)
 		return
 	}
+
+	connPool.users.Add(1)
+	cb = &poolReleaseCallback{Callback: cb, release: sync.OnceFunc(connPool.release)}
 
 	var (
 		storeMetrics = connPool.getStoreMetrics(req.Context.GetPeer().GetStoreId())
