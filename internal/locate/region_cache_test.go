@@ -54,6 +54,7 @@ import (
 	pingcaperrors "github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
@@ -1489,6 +1490,70 @@ func loadRegionsToCache(cache *RegionCache, regionCnt int) {
 		rawKey := []byte(fmt.Sprintf(regionSplitKeyFormat, i))
 		cache.LocateKey(retry.NewBackofferWithVars(context.Background(), 1, nil), rawKey)
 	}
+}
+
+func TestTiFlashComputeStoresKeyspaceFilter(t *testing.T) {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	engineLabel := &metapb.StoreLabel{Key: tikvrpc.EngineLabelKey, Value: tikvrpc.EngineLabelTiFlashCompute}
+	keyspaceLabel := func(name string) *metapb.StoreLabel {
+		return &metapb.StoreLabel{Key: tikvrpc.KeyspaceLabelKey, Value: name}
+	}
+	cluster := mocktikv.NewCluster(mvccStore)
+	// store1 has no keyspace label so it is shared by every keyspace, store2 is
+	// dedicated to KS1, store3 is dedicated to KS2, and store4 declares an empty
+	// keyspace label value, which is treated the same as no label at all.
+	cluster.AddStore(1, "shared:3930", engineLabel)
+	cluster.AddStore(2, "ks1:3930", engineLabel, keyspaceLabel("KS1"))
+	cluster.AddStore(3, "ks2:3930", engineLabel, keyspaceLabel("KS2"))
+	cluster.AddStore(4, "empty:3930", engineLabel, keyspaceLabel(""))
+
+	listComputeStoreAddrs := func(t *testing.T, cache *RegionCache) []string {
+		re := require.New(t)
+		stores, err := cache.GetTiFlashComputeStores(retry.NewNoopBackoff(context.Background()))
+		re.NoError(err)
+		addrs := make([]string, 0, len(stores))
+		for _, store := range stores {
+			addrs = append(addrs, store.GetAddr())
+		}
+		return addrs
+	}
+
+	t.Run("API V1 returns all compute stores", func(t *testing.T) {
+		re := require.New(t)
+		// API V1 has no keyspace concept, so no store is filtered out no matter
+		// what labels it carries. This guards the compatibility contract for
+		// clusters that don't use keyspace labels.
+		cache := NewRegionCache(NewCodecPDClient(apicodec.ModeTxn, mocktikv.NewPDClient(cluster)))
+		defer cache.Close()
+		re.ElementsMatch(
+			[]string{"shared:3930", "ks1:3930", "ks2:3930", "empty:3930"},
+			listComputeStoreAddrs(t, cache),
+		)
+	})
+
+	t.Run("API V2 filters by the keyspace bound to the cache", func(t *testing.T) {
+		re := require.New(t)
+		// mockPDClient always returns the same meta regardless of the requested
+		// name, so requesting a name different from meta.Name proves that the
+		// filter follows the meta reported by PD instead of the construction
+		// parameter.
+		meta := &keyspacepb.KeyspaceMeta{
+			Name:     "KS1",
+			State:    keyspacepb.KeyspaceState_ENABLED,
+			Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+		}
+		pdClient := &mockPDClient{Client: mocktikv.NewPDClient(cluster), meta: meta}
+		codecPDClient, err := NewCodecPDClientWithKeyspace(apicodec.ModeTxn, pdClient, "some-other-keyspace")
+		re.NoError(err)
+		cache := NewRegionCache(codecPDClient)
+		defer cache.Close()
+		re.ElementsMatch(
+			[]string{"shared:3930", "ks1:3930", "empty:3930"},
+			listComputeStoreAddrs(t, cache),
+		)
+	})
 }
 
 func (s *testRegionCacheSuite) TestListRegionIDsInCache() {

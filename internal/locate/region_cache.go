@@ -683,8 +683,13 @@ func (r *bgRunner) scheduleWithTrigger(f func(context.Context, time.Time) bool, 
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
-	pdClient         pd.Client
-	codec            apicodec.Codec
+	pdClient pd.Client
+	codec    apicodec.Codec
+	// keyspace is the name of the keyspace this cache is bound to, empty when the
+	// client is not keyspace-aware (API V1). It filters out tiflash_compute stores
+	// that are dedicated to another keyspace. The name is snapshotted at
+	// construction time and is not updated if the keyspace is renamed in PD later.
+	keyspace         string
 	enableForwarding bool
 
 	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
@@ -733,6 +738,9 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	if codecPDClient, ok := pdClient.(*CodecPDClient); ok {
 		c.codec = codecPDClient.GetCodec()
+	}
+	if meta := c.codec.GetKeyspaceMeta(); meta != nil {
+		c.keyspace = meta.GetName()
 	}
 
 	c.stores = newStoreCache(pdClient)
@@ -2960,12 +2968,16 @@ func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	})
 }
 
-// GetTiFlashComputeStores returns all stores with lable <engine, tiflash_compute>.
+// GetTiFlashComputeStores returns all stores with label <engine, tiflash_compute>
+// that can serve the keyspace bound to this cache. A store whose <keyspace> label
+// is bound to a different keyspace is filtered out, while stores without the
+// label are shared by all keyspaces. When the client is not keyspace-aware
+// (API V1), every tiflash_compute store is returned.
 func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store, err error) {
 	stores, needReload := c.stores.listTiflashComputeStores()
 
 	if needReload {
-		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c.stores)
+		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c.stores, c.keyspace)
 		if err == nil {
 			c.stores.setTiflashComputeStores(stores)
 		}
@@ -2974,13 +2986,15 @@ func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store
 	return stores, nil
 }
 
-func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (res []*Store, _ error) {
+func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry, keyspace string) (res []*Store, _ error) {
 	stores, err := registry.fetchAllStores(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range stores {
-		if s.GetState() == metapb.StoreState_Up && isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
+		if s.GetState() == metapb.StoreState_Up &&
+			isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) &&
+			storeServesKeyspace(s.GetLabels(), keyspace) {
 			res = append(res, newStore(
 				s.GetId(),
 				s.GetAddress(),
@@ -2993,6 +3007,25 @@ func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (re
 		}
 	}
 	return res, nil
+}
+
+// storeServesKeyspace reports whether a tiflash_compute store is allowed to serve the
+// given keyspace. An empty keyspace means the caller has no keyspace concept (API V1),
+// so nothing is filtered out. A store that doesn't declare the keyspace label, or
+// declares it with an empty value, is shared by all keyspaces, which keeps clusters
+// that don't use the label working unchanged.
+func storeServesKeyspace(labels []*metapb.StoreLabel, keyspace string) bool {
+	if keyspace == "" {
+		return true
+	}
+	for _, label := range labels {
+		if label.GetKey() == tikvrpc.KeyspaceLabelKey {
+			// An empty label value carries no binding, so treat it the same as
+			// if the label were not set at all.
+			return label.GetValue() == "" || label.GetValue() == keyspace
+		}
+	}
+	return true
 }
 
 // InvalidateTiFlashComputeStoresIfGRPCError will invalid cache if is GRPC error.

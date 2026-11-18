@@ -77,6 +77,12 @@ const (
 	EngineRoleWrite           = "write"
 )
 
+// KeyspaceLabelKey is an optional store label that binds a tiflash_compute store to
+// a single keyspace. The value is the keyspace name as registered in PD. A store
+// without this label serves every keyspace, so existing deployments that don't set
+// the label keep working unchanged.
+const KeyspaceLabelKey = "keyspace"
+
 // GetStoreTypeByMeta gets store type by store meta pb.
 func GetStoreTypeByMeta(store *metapb.Store) EndpointType {
 	for _, label := range store.Labels {
