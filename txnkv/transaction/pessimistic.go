@@ -105,8 +105,9 @@ func calculateEffectiveWaitTime(lockCtx *kv.LockCtx, lockWaitTime int64, lockWai
 
 type actionPessimisticLock struct {
 	*kv.LockCtx
-	wakeUpMode kvrpcpb.PessimisticLockWakeUpMode
-	isInternal bool
+	wakeUpMode          kvrpcpb.PessimisticLockWakeUpMode
+	isInternal          bool
+	isSharedLockUpgrade bool
 }
 type actionPessimisticRollback struct {
 	isInternal bool
@@ -173,17 +174,18 @@ func (action actionPessimisticLock) handleSingleBatch(
 	mutations := convertMutationsToPb(m)
 	req := tikvrpc.NewRequest(
 		tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-			Mutations:        mutations,
-			PrimaryLock:      c.primary(),
-			StartVersion:     c.startTS,
-			ForUpdateTs:      c.forUpdateTS,
-			IsFirstLock:      c.isFirstLock,
-			WaitTimeout:      action.LockWaitTime(),
-			ReturnValues:     action.ReturnValues,
-			CheckExistence:   action.CheckExistence,
-			MinCommitTs:      c.forUpdateTS + 1,
-			WakeUpMode:       action.wakeUpMode,
-			LockOnlyIfExists: action.LockOnlyIfExists,
+			Mutations:           mutations,
+			PrimaryLock:         c.primary(),
+			StartVersion:        c.startTS,
+			ForUpdateTs:         c.forUpdateTS,
+			IsFirstLock:         c.isFirstLock,
+			WaitTimeout:         action.LockWaitTime(),
+			ReturnValues:        action.ReturnValues,
+			CheckExistence:      action.CheckExistence,
+			MinCommitTs:         c.forUpdateTS + 1,
+			WakeUpMode:          action.wakeUpMode,
+			LockOnlyIfExists:    action.LockOnlyIfExists,
+			IsSharedLockUpgrade: action.isSharedLockUpgrade,
 		}, kvrpcpb.Context{
 			Priority:               c.priority,
 			SyncLog:                c.syncLog,
@@ -276,7 +278,7 @@ func (action actionPessimisticLock) handleRegionError(
 	if same {
 		return false, nil
 	}
-	err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
+	err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations, action.isSharedLockUpgrade)
 	return true, err
 }
 
@@ -304,6 +306,10 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		if lockInfo != nil {
 			if sharedLockInfos := lockInfo.GetSharedLockInfos(); len(sharedLockInfos) > 0 {
 				for _, sharedLockInfo := range sharedLockInfos {
+					if action.isSharedLockUpgrade && sharedLockInfo.LockVersion == c.startTS {
+						// The upgrader keeps its own S while waiting for peers.
+						continue
+					}
 					if sharedLockInfo.DurationToLastUpdateMs > 0 &&
 						sharedLockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
 						continue
@@ -663,7 +669,7 @@ func (actionPessimisticRollback) isInterruptible() bool {
 
 func (c *twoPhaseCommitter) pessimisticLockMutations(
 	bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWakeUpMode,
-	mutations CommitterMutations,
+	mutations CommitterMutations, isSharedLockUpgrade bool,
 ) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
@@ -692,7 +698,7 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(
 	}
 	return c.doActionOnMutations(
 		bo,
-		actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode, isInternal: c.txn.isInternal()},
+		actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode, isInternal: c.txn.isInternal(), isSharedLockUpgrade: isSharedLockUpgrade},
 		mutations,
 	)
 }

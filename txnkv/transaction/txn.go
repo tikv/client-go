@@ -164,6 +164,9 @@ type KVTxn struct {
 	vars      *tikv.Variables
 	committer *twoPhaseCommitter
 	lockedCnt int
+	// Uses the shared-primary protocol after a successful opt-in locking read,
+	// including when all shared locks are subsequently upgraded to exclusive.
+	usesSharedLockPrimary bool
 
 	valid bool
 
@@ -1167,6 +1170,9 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 // invocations that involves only one key, the pessimistic lock request will be performed in ForceLock mode
 // (kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock).
 func (txn *KVTxn) StartAggressiveLocking() {
+	if txn.usesSharedLockPrimary {
+		return
+	}
 	if txn.IsInAggressiveLockingMode() {
 		panic("Trying to start aggressive locking while it's already started")
 	}
@@ -1184,6 +1190,9 @@ func (txn *KVTxn) StartAggressiveLocking() {
 // If some locks is acquired in the previous attempt but not needed in the current attempt, after calling this function,
 // these locks will then be released.
 func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
+	if txn.usesSharedLockPrimary {
+		return
+	}
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to retry aggressive locking while it's not started")
 	}
@@ -1249,6 +1258,9 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 // DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
 // these keys are locked in nomral way. If there's any unneeded locks, they will be released.
 func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
+	if txn.usesSharedLockPrimary {
+		return
+	}
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
@@ -1466,7 +1478,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 ) (int, error) {
 	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 	txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-	err := txn.committer.pessimisticLockMutations(bo, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &PlainMutations{keys: keys})
+	err := txn.committer.pessimisticLockMutations(bo, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &PlainMutations{keys: keys}, isUpgrade && txn.usesSharedLockPrimary)
 	if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 		atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 		lockCtx.Stats.Mu.Lock()
@@ -1640,6 +1652,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	if err := txn.getTxnStateErr(); err != nil {
 		return err
 	}
+	if lockCtx.AllowSharedLockPrimary && lockCtx.InShareMode && txn.IsInAggressiveLockingMode() {
+		// Transfer already acquired exclusive locks to the normal buffer before
+		// taking S. Canceling the stage would release them.
+		txn.DoneAggressiveLocking(ctx)
+	}
 	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
 	if err != nil {
 		return err
@@ -1707,9 +1724,12 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
 
+		if lockedInShareMode && lockCtx.InShareMode && lockCtx.AllowSharedLockPrimary {
+			txn.usesSharedLockPrimary = true
+		}
 		upgradeCandidate := lockedInShareMode && !lockCtx.InShareMode
 		if upgradeCandidate {
-			if !txn.IsPessimistic() || !lockCtx.AllowSharedLockUpgrade {
+			if !txn.IsPessimistic() || (!txn.usesSharedLockPrimary && !lockCtx.AllowSharedLockUpgrade) {
 				memBuf.RUnlock()
 				return errors.New("upgrading a shared lock to an exclusive lock is not supported")
 			}
@@ -1814,9 +1834,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 		if txn.committer.primaryKey == nil {
-			if lockCtx.InShareMode {
-				// TODO(slock): currently a shared locked key can not be selected as primary key, that is, some keys
-				// should be locked in exclusive mode before acquiring shared locks.
+			if lockCtx.InShareMode && !lockCtx.AllowSharedLockPrimary {
 				return errors.New("pessimistic lock in share mode requires primary key to be selected")
 			}
 			assignedPrimaryKey = true
@@ -1860,7 +1878,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		// If the number of keys greater than 1, it can be on different region,
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWakeUpMode, &PlainMutations{keys: keys})
+		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWakeUpMode, &PlainMutations{keys: keys}, false)
 		if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
@@ -1992,6 +2010,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			setLockMode := tikv.SetKeyLockedInExclusiveMode
 			if lockCtx.InShareMode && txn.IsPessimistic() {
 				setLockMode = tikv.SetKeyLockedInShareMode
+				if lockCtx.AllowSharedLockPrimary {
+					txn.usesSharedLockPrimary = true
+				}
 			}
 			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setLockMode)
 		}

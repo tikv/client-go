@@ -459,6 +459,50 @@ func TestSharedLockUpgrade(t *testing.T) {
 		return ret
 	}
 
+	t.Run("SharedPrimaryKeepsProtocolAfterUpgrade", func(t *testing.T) {
+		primary := []byte("primary")
+		var upgradeFlags []bool
+		txn, _ := newRecorderTxn(t, func(_ int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			require.Equal(t, primary, req.PrimaryLock)
+			require.Equal(t, uint64(1), req.StartVersion)
+			upgradeFlags = append(upgradeFlags, req.IsSharedLockUpgrade)
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		txn.StartAggressiveLocking()
+		lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lock.InShareMode = true
+		lock.AllowSharedLockPrimary = true
+		require.NoError(t, txn.LockKeys(context.Background(), lock, primary))
+		require.True(t, txn.usesSharedLockPrimary)
+		require.False(t, txn.IsInAggressiveLockingMode())
+		require.NoError(t, txn.committer.initKeysAndMutations(context.Background()))
+		require.Equal(t, kvrpcpb.Op_SharedLock, txn.committer.mutations.GetOp(0))
+		// The session option may be turned off while this transaction is open.
+		txn.StartAggressiveLocking()
+		require.False(t, txn.IsInAggressiveLockingMode())
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(3, kv.LockNoWait, time.Now()), primary))
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(4, kv.LockNoWait, time.Now()), []byte("other")))
+		require.Equal(t, []bool{false, true, false}, upgradeFlags)
+		require.NoError(t, txn.committer.initKeysAndMutations(context.Background()))
+		require.True(t, txn.committer.hasSharedLocks)
+		require.Equal(t, primary, txn.committer.primaryKey)
+		require.NoError(t, txn.Rollback())
+	})
+
+	t.Run("MissingRCKeyDoesNotSelectSharedPrimary", func(t *testing.T) {
+		txn, _ := newRecorderTxn(t, func(_ int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{Values: [][]byte{nil}, NotFounds: []bool{true}}}, nil
+		})
+		lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lock.InShareMode = true
+		lock.AllowSharedLockPrimary = true
+		lock.LockOnlyIfExists = true
+		lock.InitReturnValues(1)
+		require.NoError(t, txn.LockKeys(context.Background(), lock, []byte("missing")))
+		require.Empty(t, txn.committer.primaryKey)
+		require.False(t, txn.usesSharedLockPrimary)
+		require.Empty(t, txn.collectLockedKeys())
+	})
 	t.Run("LockKeysWithWaitTimeReturnsAbortBeforeTSO", func(t *testing.T) {
 		testCases := []struct {
 			name string
