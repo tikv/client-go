@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -120,6 +121,7 @@ type RegionLockResolver interface {
 	GetStore() Storage
 }
 
+// ResolveLocksForRange scans and resolves every lock for garbage collection.
 func ResolveLocksForRange(
 	ctx context.Context,
 	resolver RegionLockResolver,
@@ -129,9 +131,33 @@ func ResolveLocksForRange(
 	createBackoffFn func(context.Context) *Backoffer,
 	scanLimit uint32,
 ) (rangetask.TaskStat, error) {
-	// for scan lock request, we must return all locks even if they are generated
-	// by the same transaction. because gc worker need to make sure all locks have been
-	// cleaned.
+	return resolveLocksForRange(ctx, resolver, maxVersion, startKey, endKey, createBackoffFn, scanLimit, false)
+}
+
+// ResolveDataLocksForRange lets a progress-repair task visit the data locks in a range.
+// Pure lock metadata cannot block the data checkpoint and is left to its owner or GC.
+func ResolveDataLocksForRange(
+	ctx context.Context,
+	resolver RegionLockResolver,
+	maxVersion uint64,
+	startKey []byte,
+	endKey []byte,
+	createBackoffFn func(context.Context) *Backoffer,
+	scanLimit uint32,
+) (rangetask.TaskStat, error) {
+	return resolveLocksForRange(ctx, resolver, maxVersion, startKey, endKey, createBackoffFn, scanLimit, true)
+}
+
+func resolveLocksForRange(
+	ctx context.Context,
+	resolver RegionLockResolver,
+	maxVersion uint64,
+	startKey []byte,
+	endKey []byte,
+	createBackoffFn func(context.Context) *Backoffer,
+	scanLimit uint32,
+	dataOnly bool,
+) (rangetask.TaskStat, error) {
 	var stat rangetask.TaskStat
 	key := startKey
 	// create new backoffer for every scan and resolve locks
@@ -147,15 +173,28 @@ func ResolveLocksForRange(
 			return stat, err
 		}
 
-		resolvedLocation, err := resolver.ResolveLocksInOneRegion(bo, locks, loc)
-		if err != nil {
-			return stat, err
+		scanned := len(locks)
+		var lastKey []byte
+		if scanned > 0 {
+			lastKey = locks[scanned-1].Key
 		}
-		// resolve locks failed since the locks are not in one region anymore, need retry.
-		if resolvedLocation == nil {
-			continue
+		if dataOnly {
+			locks = slices.DeleteFunc(locks, func(lock *txnlock.Lock) bool {
+				return lock.IsPessimistic() || lock.IsShared() || lock.LockType == kvrpcpb.Op_Lock
+			})
 		}
-		if len(locks) < int(scanLimit) {
+		resolvedLocation := loc
+		if !dataOnly || len(locks) > 0 {
+			resolvedLocation, err = resolver.ResolveLocksInOneRegion(bo, locks, loc)
+			if err != nil {
+				return stat, err
+			}
+			if resolvedLocation == nil {
+				// Locks crossed a region boundary. Rescan from the original cursor.
+				continue
+			}
+		}
+		if scanned == 0 || scanned < int(scanLimit) {
 			stat.CompletedRegions++
 			key = loc.EndKey
 			logutil.Logger(ctx).Debug("resolve one region finshed ",
@@ -168,7 +207,12 @@ func ResolveLocksForRange(
 				zap.Int("regionID", int(resolvedLocation.Region.GetID())),
 				zap.Int("resolvedLocksNum", len(locks)),
 				zap.Uint32("scan lock limit", scanLimit))
-			key = locks[len(locks)-1].Key
+			key = lastKey
+			if dataOnly {
+				// A full page can contain only live members of one shared wrapper.
+				// The next data lock must have a different physical key.
+				key = kv.NextKey(lastKey)
+			}
 		}
 
 		if len(key) == 0 || (len(endKey) != 0 && bytes.Compare(key, endKey) >= 0) {
