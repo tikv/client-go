@@ -92,6 +92,7 @@ type replicaSelectorAccessPathCase struct {
 	accessErrInValid bool
 	expect           *accessPathResult
 	result           accessPathResult
+	resourceGroup    string                 // resource group the request runs as; empty leaves it unset.
 	beforeRun        func()                 // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
 	afterRun         func(*replicaSelector) // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
 }
@@ -2857,6 +2858,114 @@ func TestReplicaSelectorLeaderBusyProbe(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
+// A ServerIsBusy from a store whose health feedback blames the request's own
+// group does not count toward the suspect-not-leader probe: the pinned retries
+// stay on the cached leader for as long as the blame is fresh. Only an ordinary
+// ServerIsBusy(0) from the leader arms the probe.
+func TestReplicaSelectorNoisyTenantBusyDoesNotProbe(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	const group = "uds_006"
+	// The reply carries no group; the blame comes from the leader's health feedback.
+	blameLeader := func(at time.Time) func() {
+		return func() {
+			s.resetStoreState()
+			leader, ok := s.cache.stores.get(1)
+			s.True(ok)
+			leader.noisyGroups.replace([]string{group}, at)
+		}
+	}
+
+	// 2 rejections from the cached leader while it blames this group: each retry
+	// is pinned to the leader and backs off, and the probe is never armed, so the
+	// third attempt is on the leader again.
+	ca := replicaSelectorAccessPathCase{
+		reqType:       tikvrpc.CmdGet,
+		readType:      kv.ReplicaReadLeader,
+		resourceGroup: group,
+		accessErr:     []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		beforeRun: blameLeader(time.Now()),
+		afterRun: func(selector *replicaSelector) {
+			s.False(selector.leaderBusyProbed)
+			s.Equal(0, selector.leaderBusyCount)
+			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// A follower read pinned by a blamed rejection behaves the same: the pin keeps
+	// it on the leader and nothing is probed.
+	ca = replicaSelectorAccessPathCase{
+		reqType:       tikvrpc.CmdGet,
+		readType:      kv.ReplicaReadMixed,
+		resourceGroup: group,
+		accessErr:     []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		beforeRun: blameLeader(time.Now()),
+		afterRun: func(selector *replicaSelector) {
+			s.False(selector.leaderBusyProbed)
+			s.False(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// A blame the store has stopped reporting does not pin: the same two
+	// rejections take upstream's path and arm the probe.
+	ca = replicaSelectorAccessPathCase{
+		reqType:       tikvrpc.CmdGet,
+		readType:      kv.ReplicaReadLeader,
+		resourceGroup: group,
+		accessErr:     []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+		beforeRun: blameLeader(time.Now().Add(-noisyGroupsFreshDuration)),
+		afterRun: func(selector *replicaSelector) {
+			s.True(selector.leaderBusyProbed)
+			s.Equal(leaderBusyProbeThreshold, selector.leaderBusyCount)
+			s.True(selector.replicas[0].hasFlag(suspectNotLeaderFlag))
+			selector.invalidateRegion() // invalidate region to reload for next test case.
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
 func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
@@ -3412,6 +3521,9 @@ func (ca *replicaSelectorAccessPathCase) buildRequest(s *testReplicaSelectorSuit
 	default:
 		s.FailNow("unsupported reqType " + ca.reqType.String())
 	}
+	if ca.resourceGroup != "" {
+		req.ResourceControlContext = &kvrpcpb.ResourceControlContext{ResourceGroupName: ca.resourceGroup}
+	}
 	if ca.staleRead {
 		req.EnableStaleWithMixedReplicaRead()
 		req.ReadReplicaScope = oracle.GlobalTxnScope
@@ -3526,6 +3638,7 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
 		store.loadStats.Store(nil)
+		store.noisyGroups.replace(nil, time.Now())
 		store.healthStatus.clientSideSlowScore.resetSlowScore()
 		store.healthStatus.ResetTiKVServerSideSlowScoreForTest(1)
 		store.healthStatus.updateSlowFlag()
