@@ -411,7 +411,7 @@ func (b *Backoffer) ErrorsNum() int {
 // Reset resets the sleep state of the backoffer, so that following backoff
 // can sleep shorter. The reason why we don't create a new backoffer is that
 // backoffer is similar to context and it records some metrics that we
-// want to record for an entire process which is composed of serveral stages.
+// want to record for an entire process which is composed of several stages.
 func (b *Backoffer) Reset() {
 	b.fn = nil
 	b.totalSleep = 0
