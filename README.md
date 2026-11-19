@@ -42,7 +42,7 @@ To run unit tests, use following command
 go test ./...
 ```
 
-To run code linter, make sure `golangci-lint` is [installed](https://golangci-lint.run/usage/install/#local-installation). Then use following command
+To run code linter, make sure `golangci-lint` is [installed](https://golangci-lint.run/welcome/install/#local-installation). Then use following command
 
 ```bash
 golangci-lint run
