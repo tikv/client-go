@@ -142,3 +142,25 @@ func TestTraceIDContext(t *testing.T) {
 	extractedID2 := TraceIDFromContext(ctxWithTrace2)
 	require.Equal(t, traceID2, extractedID2)
 }
+
+func TestCheckFlightRecorderDumpTrigger(t *testing.T) {
+	original := globalCheckFlightRecorderDumpTriggerFunc.Load()
+	defer func() {
+		globalCheckFlightRecorderDumpTriggerFunc.Store(original)
+	}()
+
+	// Test default behavior (returns false)
+	ctx := context.Background()
+	CheckFlightRecorderDumpTrigger(ctx, "just cover some code", 42)
+
+	// Test custom behavior
+	var covered bool
+	mock := func(ctx context.Context, triggerName string, val any) {
+		covered = true
+	}
+	SetCheckFlightRecorderDumpTriggerFunc(CheckFlightRecorderDumpTriggerFunc(mock))
+
+	require.False(t, covered)
+	CheckFlightRecorderDumpTrigger(ctx, "custom trigger", 123)
+	require.True(t, covered)
+}
