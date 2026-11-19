@@ -212,6 +212,10 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 						zap.Uint64("txnStartTS", c.startTS))
 					return err
 				}
+				if c.txn.commitTSUpperBoundCheck != nil && !c.txn.commitTSUpperBoundCheck(commitTS) {
+					return errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
+						c.sessionID, c.startTS, commitTS)
+				}
 
 				c.mu.Lock()
 				c.commitTS = commitTS
