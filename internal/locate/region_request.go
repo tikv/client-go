@@ -524,7 +524,9 @@ func (s *RegionRequestSender) SendReqAsync(
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		// Make a snapshot to avoid `StaleRead` flag reset by later operations.
+		isStaleRead := req.StaleRead
+		if isStaleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
@@ -1431,7 +1433,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		// Make a snapshot to avoid `StaleRead` flag reset by later operations.
+		isStaleRead := req.StaleRead
+		if isStaleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
