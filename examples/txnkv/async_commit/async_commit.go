@@ -64,8 +64,8 @@ func main() {
 	k2 := []byte("k2")
 
 	// Async commit wouldn't work if the number or the total size of updated keys exceed the limit:
-	// - The number of keys to update should be less than 256(configable)
-	// - The size of keys should less than 4KB(configable)
+	// - The number of keys to update should be less than 256(configurable)
+	// - The size of keys should less than 4KB(configurable)
 	err = txn.Set(k1, k1)
 	errMustBeNil(err)
 	err = txn.Set(k2, k2)

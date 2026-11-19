@@ -77,7 +77,7 @@ func main() {
 		key := string(it.Key())
 		if evalue, ok := data[key]; ok {
 			if !bytes.Equal(evalue, it.Value()) {
-				fmt.Printf("Unexpect value, is the value changed by other transaction? key:%+v, expect value:%+v, real value:%+v\n", key, evalue, it.Value())
+				fmt.Printf("Unexpected value, is the value changed by other transaction? key:%+v, expect value:%+v, real value:%+v\n", key, evalue, it.Value())
 			}
 		}
 		err = it.Next()
