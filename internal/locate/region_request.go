@@ -503,6 +503,8 @@ func (s *RegionRequestSender) SendReqAsync(
 		},
 	}
 
+	// Make a snapshot to avoid `StaleRead` flag reset by later operations.
+	isStaleRead := req.StaleRead
 	cb.Inject(func(resp *tikvrpc.ResponseExt, err error) (*tikvrpc.ResponseExt, error) {
 		retryTimes := 0
 		if state.vars.sendTimes > 1 {
@@ -524,8 +526,6 @@ func (s *RegionRequestSender) SendReqAsync(
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		// Make a snapshot to avoid `StaleRead` flag reset by later operations.
-		isStaleRead := req.StaleRead
 		if isStaleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
@@ -1429,12 +1429,12 @@ func (s *RegionRequestSender) SendReqCtx(
 		},
 	}
 
+	// Make a snapshot to avoid `StaleRead` flag reset by later operations.
+	isStaleRead := req.StaleRead
 	defer func() {
 		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		// Make a snapshot to avoid `StaleRead` flag reset by later operations.
-		isStaleRead := req.StaleRead
 		if isStaleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
