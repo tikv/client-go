@@ -91,17 +91,8 @@ const forwardMetadataKey = "tikv-forwarded-host"
 // batchConnIdxMetadataKey is the key of gRPC metadata which represents the connection index in the batch client pool.
 const batchConnIdxMetadataKey = "tikv-batch-conn-index"
 
-<<<<<<< HEAD
-=======
 const keyspaceIdMetadataKey = "tikv-keyspace-id"
 
-const (
-	// Matches TiDB's kv.InternalTxnMViewMaintenance ("mview_maintain").
-	mvMaintenanceRequestSource = "internal_mview_maintain"
-	mvMaintenanceStreamHardTTL = 3 * time.Hour
-)
-
->>>>>>> 9f07697c (client: propagate keyspace ID in gRPC metadata (#2129))
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
