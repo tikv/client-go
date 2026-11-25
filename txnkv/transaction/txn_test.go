@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"context"
 	stderrs "errors"
-	"github.com/dgryski/go-farm"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/dgryski/go-farm"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -32,9 +32,11 @@ import (
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
@@ -1328,4 +1330,68 @@ func TestUpgradeRecentBlockersHonorWaitBudget(t *testing.T) {
 		require.True(t, done)
 		require.ErrorIs(t, err, tc.expected)
 	}
+}
+
+type sharedPrimaryCommitStore struct {
+	*recorderStore
+	oracle oracle.Oracle
+}
+
+func (*sharedPrimaryCommitStore) TxnLatches() *latch.LatchesScheduler { return nil }
+func (s *sharedPrimaryCommitStore) GetOracle() oracle.Oracle          { return s.oracle }
+func (*sharedPrimaryCommitStore) Ctx() context.Context                { return context.Background() }
+func (*sharedPrimaryCommitStore) Go(f func()) error                   { go f(); return nil }
+func (*sharedPrimaryCommitStore) IsClose() bool                       { return false }
+
+func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	startTS := oracle.GoTimeToTS(now)
+	txn := newTestTxn(t, startTS)
+	txn.SetPessimistic(true)
+	txn.SetEnable1PC(true)
+	txn.SetEnableAsyncCommit(true)
+	store := &sharedPrimaryCommitStore{
+		recorderStore: &recorderStore{mockStore: txn.store},
+		oracle:        oracles.NewLocalOracle(),
+	}
+	defer store.oracle.Close()
+	commitTS := startTS + 2
+	store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) { return commitTS, nil }
+	txn.KVTxn.store = store
+
+	key := []byte("primary")
+	var requests []tikvrpc.CmdType
+	txn.store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		requests = append(requests, req.Type)
+		switch req.Type {
+		case tikvrpc.CmdPessimisticLock:
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		case tikvrpc.CmdPrewrite:
+			prewrite := req.Prewrite()
+			require.False(t, prewrite.UseAsyncCommit)
+			require.False(t, prewrite.TryOnePc)
+			require.Equal(t, key, prewrite.PrimaryLock)
+			require.Len(t, prewrite.Mutations, 1)
+			require.Equal(t, kvrpcpb.Op_SharedLock, prewrite.Mutations[0].Op)
+			require.Equal(t, key, prewrite.Mutations[0].Key)
+			return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+		case tikvrpc.CmdCommit:
+			require.Equal(t, [][]byte{key}, req.Commit().Keys)
+			require.Equal(t, commitTS, req.Commit().CommitVersion)
+			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
+		case tikvrpc.CmdBatchRollback:
+			return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
+		default:
+			return nil, errors.Errorf("unexpected RPC: %v", req.Type)
+		}
+	}
+	lock := kv.NewLockCtx(startTS+1, kv.LockNoWait, now)
+	lock.InShareMode = true
+	lock.AllowSharedLockPrimary = true
+	require.NoError(t, txn.LockKeys(ctx, lock, key))
+	err := txn.Commit(ctx)
+	store.WaitGroup().Wait()
+	require.NoError(t, err)
+	require.Equal(t, []tikvrpc.CmdType{tikvrpc.CmdPessimisticLock, tikvrpc.CmdPrewrite, tikvrpc.CmdCommit}, requests)
 }

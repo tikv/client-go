@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
@@ -872,4 +874,130 @@ func (s *testSharedLockSuite) TestForceLockRetryOnSharedLock() {
 
 	// Cleanup
 	s.Nil(txn2.Rollback())
+}
+
+// Replay from the normal region retry loop after the store has already applied
+// the lock. SQL relies on the SDK to return the same RC value on this path.
+func (s *testSharedLockSuite) TestClassicSharedPrimaryReplayReturnsValue() {
+	if config.NextGen {
+		s.T().Skip("Classic shared-primary protocol")
+	}
+	ctx := context.Background()
+	key := s.key("classic_shared_primary_replay")
+	seed, err := s.store.Begin()
+	s.Require().NoError(err)
+	s.Require().NoError(seed.Set(key, []byte("watermark")))
+	s.Require().NoError(seed.Commit(ctx))
+	txn := s.begin()
+	defer func() {
+		if txn.Valid() {
+			s.NoError(txn.Rollback())
+		}
+	}()
+	readTS := s.getTS()
+	upgradeTS := s.getTS()
+	var reads, upgrades atomic.Int32
+	txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("shared-primary-replay", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			resp, err := next(target, req)
+			if err != nil || req.Type != tikvrpc.CmdPessimisticLock || resp == nil {
+				return resp, err
+			}
+			response, ok := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
+			if !ok || response.RegionError != nil || len(response.Errors) > 0 {
+				return resp, err
+			}
+			lock := req.PessimisticLock()
+			var calls int32
+			if lock.IsSharedLockUpgrade {
+				s.Equal(upgradeTS, lock.ForUpdateTs)
+				calls = upgrades.Add(1)
+			} else {
+				s.Equal(kvrpcpb.Op_SharedPessimisticLock, lock.Mutations[0].Op)
+				s.Equal(readTS, lock.ForUpdateTs)
+				s.True(lock.LockOnlyIfExists)
+				calls = reads.Add(1)
+			}
+			s.Equal(txn.StartTS(), lock.StartVersion)
+			if calls == 1 {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{
+					ServerIsBusy: &errorpb.ServerIsBusy{Reason: "retry the applied lock"},
+				}}}, nil
+			}
+			return resp, nil
+		}
+	}))
+	lock := kv.NewLockCtx(readTS, kv.LockAlwaysWait, time.Now())
+	lock.InShareMode = true
+	lock.AllowSharedLockPrimary = true
+	lock.LockOnlyIfExists = true
+	lock.InitReturnValues(1)
+	s.Require().NoError(txn.LockKeys(ctx, lock, key))
+	s.Equal(int32(2), reads.Load())
+	s.Equal([]byte("watermark"), lock.Values[string(key)].Value)
+	s.True(lock.Values[string(key)].Exists)
+	holders := s.scanLocks(key, s.getTS())
+	s.Require().Len(holders, 1)
+	s.Equal(txn.StartTS(), holders[0].TxnID)
+	s.Equal(key, txn.GetCommitter().GetPrimaryKey())
+	s.Require().NoError(txn.LockKeys(ctx, kv.NewLockCtx(upgradeTS, kv.LockAlwaysWait, time.Now()), key))
+	s.Equal(int32(2), upgrades.Load())
+	flags, err := txn.GetMemBuffer().GetFlags(key)
+	s.Require().NoError(err)
+	s.True(flags.HasLocked())
+	s.False(flags.HasLockedInShareMode())
+	s.Require().NoError(txn.Commit(ctx))
+	s.Empty(s.scanLocks(key, s.getTS()))
+}
+
+// Both prewrite and upgrade require the original shared holder even when no
+// writer acquired the key after its removal.
+func (s *testSharedLockSuite) TestClassicSharedPrimaryRejectsMissingSharedLock() {
+	if config.NextGen {
+		s.T().Skip("Classic shared-primary protocol")
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		writer  bool
+		upgrade bool
+	}{
+		{name: "prewrite"},
+		{name: "prewrite_after_lock_only_writer", writer: true},
+		{name: "upgrade", upgrade: true},
+		{name: "upgrade_after_lock_only_writer", writer: true, upgrade: true},
+	} {
+		s.Run(tc.name, func() {
+			owner := s.begin()
+			defer func() {
+				if owner.Valid() {
+					s.NoError(owner.Rollback())
+				}
+			}()
+			primary := s.key("classic_missing_shared_primary_" + tc.name)
+			read := s.key("classic_missing_shared_read_" + tc.name)
+			ts := s.getTS()
+			lock := kv.NewLockCtx(ts, kv.LockAlwaysWait, time.Now())
+			lock.InShareMode = true
+			lock.AllowSharedLockPrimary = true
+			s.Require().NoError(owner.LockKeys(ctx, lock, primary))
+			s.Require().NoError(owner.LockKeys(ctx, lock, read))
+			s.rollbackPessimisticKey(owner.StartTS(), ts, read)
+			s.Require().Empty(s.scanLocks(read, s.getTS()))
+			if tc.writer {
+				writer := s.begin()
+				s.Require().NoError(writer.LockKeys(ctx, kv.NewLockCtx(s.getTS(), kv.LockNoWait, time.Now()), read))
+				s.Require().NoError(writer.Commit(ctx))
+			}
+			if tc.upgrade {
+				err := owner.LockKeys(ctx, kv.NewLockCtx(s.getTS(), kv.LockNoWait, time.Now()), read)
+				var lost *tikverr.ErrSharedLockLost
+				s.Require().ErrorAs(err, &lost)
+				s.Equal(read, lost.GetKey())
+				s.Require().ErrorIs(owner.Commit(ctx), err)
+			} else {
+				s.Require().Error(owner.Commit(ctx))
+			}
+		})
+	}
 }
