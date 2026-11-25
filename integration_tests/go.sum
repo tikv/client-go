@@ -1489,8 +1489,8 @@ github.com/pingcap/fn v1.0.0/go.mod h1:u9WZ1ZiOD1RpNhcI42RucFh/lBuzTu6rw88a+oF2Z
 github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 h1:surzm05a8C9dN8dIUmo4Be2+pMRb6f55i+UIYrluu2E=
 github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989/go.mod h1:O17XtbryoCJhkKGbT62+L2OlrniwqiGLSqrmdHCMzZw=
 github.com/pingcap/kvproto v0.0.0-20241113043844-e1fa7ea8c302/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
-github.com/pingcap/kvproto v0.0.0-20261118070016-ee49790fe830 h1:VCzUL/PpyAt7455JmO0algzPZv8SyoOvgHh4hQN5Qxw=
-github.com/pingcap/kvproto v0.0.0-20261118070016-ee49790fe830/go.mod h1:qG7j7SYAf4RELZLKRljP02ivjFhr0gJL7ii1t13Js+k=
+github.com/pingcap/kvproto v0.0.0-20261125051439-1e6bf4c0ff22 h1:CHoS5e7r645lhU3JHt8X8teAWIiYYlzZK8cyznXGuBo=
+github.com/pingcap/kvproto v0.0.0-20261125051439-1e6bf4c0ff22/go.mod h1:qG7j7SYAf4RELZLKRljP02ivjFhr0gJL7ii1t13Js+k=
 github.com/pingcap/log v0.0.0-20210625125904-98ed8e2eb1c7/go.mod h1:8AanEdAHATuRurdGxZXBz0At+9avep+ub7U1AGYLIMM=
 github.com/pingcap/log v1.1.0/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/log v1.1.1-0.20261007233122-0034994d1a22 h1:roxS/6JKWcGS+hyfe5pioftbUmeTKbPkDBY67d7THIU=
