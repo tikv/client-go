@@ -1153,7 +1153,7 @@ func commitLock(batch *leveldb.Batch, lock mvccLock, key []byte, startTS, commit
 	switch lock.op {
 	case kvrpcpb.Op_Put:
 		valueType = typePut
-	case kvrpcpb.Op_Lock:
+	case kvrpcpb.Op_Lock, kvrpcpb.Op_SharedLock:
 		valueType = typeLock
 	default:
 		valueType = typeDelete

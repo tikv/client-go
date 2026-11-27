@@ -225,6 +225,24 @@ func TestGetWithLock(t *testing.T) {
 	mustGetOK(t, store, key, math.MaxUint64, "value")
 }
 
+func TestCommitSharedLockPreservesValue(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	defer store.Close()
+
+	key := "shared-key"
+	value := "shared-value"
+	mustPutOK(t, store, key, value, 5, 10)
+	mutations := []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Op_SharedLock,
+		Key: []byte(key),
+	}}
+	mustPrewriteOK(t, store, mutations, key, 20)
+	mustGetOK(t, store, key, 25, value)
+	mustCommitOK(t, store, [][]byte{[]byte(key)}, 20, 30)
+	mustGetOK(t, store, key, 35, value)
+}
+
 func TestDelete(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
