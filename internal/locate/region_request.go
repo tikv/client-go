@@ -119,6 +119,8 @@ type RegionRequestSender struct {
 	failProxyStoreIDs map[uint64]struct{}
 	Stats             *RegionRequestRuntimeStats
 	AccessStats       *ReplicaAccessStats
+	// ReturnOnServerIsBusy lets a caller bound backoff by its own wait deadline.
+	ReturnOnServerIsBusy bool
 }
 
 func (s *RegionRequestSender) String() string {
@@ -2184,6 +2186,9 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
+		if s.ReturnOnServerIsBusy {
+			return false, nil
+		}
 		// A blamed tenant is excluded: its deadline went on a queue of its own
 		// making, so it takes the backoff path below rather than retrying the
 		// same overloaded leader straight away.

@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
@@ -211,7 +212,7 @@ func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
 				txn.SetVars(vars)
 
 				if async {
-					txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+					<-txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0)
 				} else {
 					require.NoError(t, txn.Rollback())
 				}
@@ -1334,32 +1335,44 @@ func TestUpgradeRecentBlockersHonorWaitBudget(t *testing.T) {
 
 type sharedPrimaryCommitStore struct {
 	*recorderStore
-	oracle oracle.Oracle
+	oracle   oracle.Oracle
+	resolver *txnlock.LockResolver
 }
 
-func (*sharedPrimaryCommitStore) TxnLatches() *latch.LatchesScheduler { return nil }
-func (s *sharedPrimaryCommitStore) GetOracle() oracle.Oracle          { return s.oracle }
-func (*sharedPrimaryCommitStore) Ctx() context.Context                { return context.Background() }
-func (*sharedPrimaryCommitStore) Go(f func()) error                   { go f(); return nil }
-func (*sharedPrimaryCommitStore) IsClose() bool                       { return false }
+func (s *sharedPrimaryCommitStore) GetLockResolver() *txnlock.LockResolver { return s.resolver }
+func (*sharedPrimaryCommitStore) TxnLatches() *latch.LatchesScheduler      { return nil }
+func (s *sharedPrimaryCommitStore) GetOracle() oracle.Oracle               { return s.oracle }
+func (*sharedPrimaryCommitStore) Ctx() context.Context                     { return context.Background() }
+func (*sharedPrimaryCommitStore) Go(f func()) error                        { go f(); return nil }
+func (*sharedPrimaryCommitStore) IsClose() bool                            { return false }
 
-func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
-	ctx := context.Background()
-	now := time.Now()
-	startTS := oracle.GoTimeToTS(now)
+func newSharedPrimaryTestTxn(t *testing.T) (*testTxn, *sharedPrimaryCommitStore) {
+	t.Helper()
+	startTS := oracle.GoTimeToTS(time.Now())
 	txn := newTestTxn(t, startTS)
 	txn.SetPessimistic(true)
-	txn.SetEnable1PC(true)
-	txn.SetEnableAsyncCommit(true)
 	store := &sharedPrimaryCommitStore{
 		recorderStore: &recorderStore{mockStore: txn.store},
 		oracle:        oracles.NewLocalOracle(),
 	}
-	defer store.oracle.Close()
-	commitTS := startTS + 2
-	store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) { return commitTS, nil }
+	store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) { return startTS + 10, nil }
 	txn.KVTxn.store = store
+	t.Cleanup(func() {
+		store.WaitGroup().Wait()
+		if txn.committer != nil {
+			txn.committer.close()
+		}
+		store.oracle.Close()
+		store.cache.Close()
+	})
+	return txn, store
+}
 
+func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
+	ctx := context.Background()
+	txn, store := newSharedPrimaryTestTxn(t)
+	txn.SetEnable1PC(true)
+	txn.SetEnableAsyncCommit(true)
 	key := []byte("primary")
 	var requests []tikvrpc.CmdType
 	txn.store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
@@ -1378,7 +1391,7 @@ func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
 			return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
 		case tikvrpc.CmdCommit:
 			require.Equal(t, [][]byte{key}, req.Commit().Keys)
-			require.Equal(t, commitTS, req.Commit().CommitVersion)
+			require.Equal(t, txn.StartTS()+10, req.Commit().CommitVersion)
 			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
 		case tikvrpc.CmdBatchRollback:
 			return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
@@ -1386,7 +1399,7 @@ func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
 			return nil, errors.Errorf("unexpected RPC: %v", req.Type)
 		}
 	}
-	lock := kv.NewLockCtx(startTS+1, kv.LockNoWait, now)
+	lock := kv.NewLockCtx(txn.StartTS()+1, kv.LockNoWait, time.Now())
 	lock.InShareMode = true
 	lock.AllowSharedLockPrimary = true
 	require.NoError(t, txn.LockKeys(ctx, lock, key))

@@ -65,7 +65,7 @@ const MaxExecTimeExceededSignal uint32 = 2
 // checkMaxExecutionTimeExceeded checks if the max_execution_time deadline has been exceeded.
 // Returns an error if exceeded, nil otherwise.
 func checkMaxExecutionTimeExceeded(lockCtx *kv.LockCtx, now time.Time) error {
-	if !lockCtx.MaxExecutionDeadline.IsZero() && now.After(lockCtx.MaxExecutionDeadline) {
+	if !lockCtx.MaxExecutionDeadline.IsZero() && !now.Before(lockCtx.MaxExecutionDeadline) {
 		return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: MaxExecTimeExceededSignal})
 	}
 	return nil
@@ -232,6 +232,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			return errors.WithStack(tikverr.NewErrWriteConflict(nil))
 		}
 		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
+		sender.ReturnOnServerIsBusy = action.LockWaitTime() != kv.LockAlwaysWait || !action.MaxExecutionDeadline.IsZero()
 		startTime := time.Now()
 		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)
@@ -268,6 +269,16 @@ func (action actionPessimisticLock) handleSingleBatch(
 func (action actionPessimisticLock) handleRegionError(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error,
 ) (finished bool, err error) {
+	if busy := regionErr.GetServerIsBusy(); busy != nil {
+		if done, err := action.checkLockWaitBudget(); done {
+			return true, err
+		}
+		remaining := calculateEffectiveWaitTime(action.LockCtx, action.LockWaitTime(), action.WaitStartTime, time.Now())
+		if err := bo.BackoffWithCfgAndMaxSleep(retry.BoTiKVServerBusy, int(max(0, remaining)), errors.New(busy.String())); err != nil {
+			return true, err
+		}
+		return action.checkLockWaitBudget()
+	}
 	if err := retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 		return true, err
 	}
@@ -288,15 +299,15 @@ const skipResolveThresholdMs = 300
 
 func (action actionPessimisticLock) handleKeyErrorForResolve(
 	c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError,
-) (locks []*txnlock.Lock, finished bool, err error) {
+) (locks []*txnlock.Lock, skippedLive bool, err error) {
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
 			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
-			return nil, true, c.extractKeyExistsErr(e)
+			return nil, false, c.extractKeyExistsErr(e)
 		}
 		if deadlock := keyErr.Deadlock; deadlock != nil {
-			return nil, true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
+			return nil, false, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
 		}
 
 		// Do not resolve the lock if the lock was recently updated which indicates the txn holding the lock is
@@ -312,6 +323,7 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 					}
 					if sharedLockInfo.DurationToLastUpdateMs > 0 &&
 						sharedLockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+						skippedLive = true
 						continue
 					}
 					lock := txnlock.NewLock(sharedLockInfo)
@@ -322,6 +334,7 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 			}
 			if lockInfo.DurationToLastUpdateMs > 0 &&
 				lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+				skippedLive = true
 				continue
 			}
 		}
@@ -329,14 +342,11 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		// Extract lock from key error
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
-			return nil, true, err1
+			return nil, false, err1
 		}
 		locks = append(locks, lock)
 	}
-	if len(locks) == 0 {
-		return nil, false, nil
-	}
-	return locks, false, nil
+	return locks, skippedLive, nil
 }
 
 func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
@@ -399,9 +409,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		return true, nil
 	}
 
-	locks, finished, err := action.handleKeyErrorForResolve(c, keyErrs)
+	locks, skippedLive, err := action.handleKeyErrorForResolve(c, keyErrs)
 	if err != nil {
-		return finished, err
+		return true, err
 	}
 	if len(locks) == 0 {
 		// All blockers were recently updated (or our own S). Skipping the
@@ -435,7 +445,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 
 	// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 	// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
-	if resolveLockRes.TTL > 0 {
+	if skippedLive || resolveLockRes.TTL > 0 {
 		return action.checkLockWaitBudget()
 	}
 	return false, nil
@@ -450,7 +460,7 @@ func (action actionPessimisticLock) checkLockWaitBudget() (bool, error) {
 	if budget == kv.LockNoWait {
 		return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 	}
-	if budget > 0 && now.Sub(action.WaitStartTime).Milliseconds() >= budget {
+	if budget != kv.LockAlwaysWait && (budget == 0 || now.Sub(action.WaitStartTime).Milliseconds() >= budget) {
 		return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 	}
 	return false, nil
@@ -542,9 +552,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 		}
 	}
 
-	locks, finished, err := action.handleKeyErrorForResolve(c, keyErrs)
+	locks, skippedLive, err := action.handleKeyErrorForResolve(c, keyErrs)
 	if err != nil {
-		return finished, err
+		return true, err
 	}
 
 	if regionErr != nil {
@@ -580,29 +590,15 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 
 			// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 			// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
-			if resolveLockRes.TTL > 0 {
-				// Check max_execution_time deadline first
-				if err := checkMaxExecutionTimeExceeded(action.LockCtx, time.Now()); err != nil {
-					return true, err
-				}
-
-				if action.LockWaitTime() == kv.LockNoWait {
-					return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
-				} else if action.LockWaitTime() == kv.LockAlwaysWait {
-					// do nothing but keep wait
-				} else {
-					// the lockWaitTime is set, we should return wait timeout if we are still blocked by a lock
-					if time.Since(action.WaitStartTime).Milliseconds() >= action.LockWaitTime() {
-						return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
-					}
-				}
+			if skippedLive || resolveLockRes.TTL > 0 {
+				return action.checkLockWaitBudget()
 			}
 			return false, nil
 		}
 
 		// This can be the situation where KeyIsLocked errors are generated by timeout,
-		// and we decide not to resolve them. Instead, just retry
-		return false, nil
+		// and we decide not to resolve them. Retry within the remaining budget.
+		return action.checkLockWaitBudget()
 	}
 
 	if len(locks) != 0 {
@@ -655,6 +651,12 @@ func (actionPessimisticRollback) handleSingleBatch(
 			return err
 		}
 		return c.pessimisticRollbackMutations(bo, batch.mutations)
+	}
+	if resp.Resp == nil {
+		return errors.WithStack(tikverr.ErrBodyMissing)
+	}
+	if keyErrs := resp.Resp.(*kvrpcpb.PessimisticRollbackResponse).GetErrors(); len(keyErrs) != 0 {
+		return tikverr.ExtractKeyErr(keyErrs[0])
 	}
 	logutil.Logger(bo.GetCtx()).Debug("2PC pessimistic-rollback rpc finished",
 		zap.Uint64("txnStartTS", c.startTS),

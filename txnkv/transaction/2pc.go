@@ -2370,6 +2370,8 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 		defer cancel()
 	default:
 	}
+	lockAction, isLock := batchExe.action.(actionPessimisticLock)
+	preferDeadlock := isLock && batchExe.committer.txn.deadlockAbortsSharedTxn(lockAction.LockCtx)
 	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.
 	ch := make(chan error, len(batches))
@@ -2397,7 +2399,10 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 					atomic.StoreUint32(&batchExe.committer.prewriteCancelled, 1)
 					cancel()
 				}
-				if err == nil {
+				// A victim deadlock aborts the entire shared-read transaction, even
+				// when a different batch has already reported a statement error.
+				_, deadlock := errors.Cause(e).(*tikverr.ErrDeadlock)
+				if err == nil || (preferDeadlock && deadlock) {
 					err = e
 				}
 			}
