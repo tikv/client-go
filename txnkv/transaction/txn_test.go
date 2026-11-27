@@ -99,6 +99,14 @@ type recorderStore struct {
 	*mockStore
 	getTimestampWithRetry func(*retry.Backoffer, string) (uint64, error)
 	waitGroup             sync.WaitGroup
+	ctx                   context.Context
+}
+
+func (m *recorderStore) Ctx() context.Context {
+	if m.ctx != nil {
+		return m.ctx
+	}
+	return context.Background()
 }
 
 func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -215,6 +223,208 @@ func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
 				require.Equal(t, 2, rollbackRequests)
 			})
 		}
+	}
+}
+
+// stopRecordingContext is a context that is never done and records whether the callback registered on it through
+// context.AfterFunc is stopped.
+type stopRecordingContext struct {
+	context.Context
+	done       chan struct{}
+	registered int
+	stopped    int
+}
+
+func newStopRecordingContext() *stopRecordingContext {
+	return &stopRecordingContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *stopRecordingContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *stopRecordingContext) AfterFunc(func()) func() bool {
+	c.registered++
+	return func() bool {
+		c.stopped++
+		return true
+	}
+}
+
+func TestNewAsyncCleanupContext(t *testing.T) {
+	type ctxKey struct{}
+
+	waitDone := func(t *testing.T, ctx context.Context) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
+			require.FailNow(t, "context is not canceled")
+		}
+	}
+
+	t.Run("keeps request values but not request cancellation or deadline", func(t *testing.T) {
+		reqCtx, cancelReq := context.WithTimeout(context.WithValue(context.Background(), ctxKey{}, "value"), time.Hour)
+		ctx, cancel := newAsyncCleanupContext(context.Background(), reqCtx)
+		defer cancel()
+
+		cancelReq()
+		require.Error(t, reqCtx.Err())
+		require.NoError(t, ctx.Err())
+		_, hasDeadline := ctx.Deadline()
+		require.False(t, hasDeadline)
+		require.Equal(t, "value", ctx.Value(ctxKey{}))
+	})
+
+	t.Run("is canceled when the store context is canceled", func(t *testing.T) {
+		storeCtx, closeStore := context.WithCancel(context.Background())
+		ctx, cancel := newAsyncCleanupContext(storeCtx, context.Background())
+		defer cancel()
+
+		require.NoError(t, ctx.Err())
+		closeStore()
+		waitDone(t, ctx)
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	})
+
+	t.Run("is canceled when the store context is already canceled", func(t *testing.T) {
+		storeCtx, closeStore := context.WithCancel(context.Background())
+		closeStore()
+		ctx, cancel := newAsyncCleanupContext(storeCtx, context.Background())
+		defer cancel()
+
+		waitDone(t, ctx)
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	})
+
+	t.Run("cancel cancels the context and stops the store context callback", func(t *testing.T) {
+		storeCtx := newStopRecordingContext()
+		ctx, cancel := newAsyncCleanupContext(storeCtx, context.Background())
+		require.Equal(t, 1, storeCtx.registered)
+		require.Equal(t, 0, storeCtx.stopped)
+
+		cancel()
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+		require.Equal(t, 1, storeCtx.stopped)
+	})
+}
+
+func TestAsyncPessimisticRollbackIgnoresRequestCancellation(t *testing.T) {
+	type ctxKey struct{}
+	key := []byte("key")
+
+	newTxn := func(t *testing.T, storeCtx context.Context) (*testTxn, *recorderStore) {
+		txn := newTestTxn(t, 1)
+		store := &recorderStore{mockStore: txn.store, ctx: storeCtx}
+		txn.KVTxn.store = store
+		txn.SetPessimistic(true)
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticLock {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		}
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		require.NoError(t, txn.lockKeys(context.Background(), lockCtx, nil, key))
+		return txn, store
+	}
+	notLeader := func() (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{
+			RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{RegionId: 1}},
+		}}, nil
+	}
+
+	t.Run("sends and retries the rollback when the request context is already canceled", func(t *testing.T) {
+		txn, _ := newTxn(t, context.Background())
+		rollbackRequests := 0
+		var ctxErrs []error
+		var ctxValues []any
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticRollback {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			rollbackRequests++
+			ctxErrs = append(ctxErrs, ctx.Err())
+			ctxValues = append(ctxValues, ctx.Value(ctxKey{}))
+			if rollbackRequests == 1 {
+				return notLeader()
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+		}
+
+		reqCtx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "value"))
+		cancel()
+		txn.asyncPessimisticRollback(reqCtx, [][]byte{key}, 0).Wait()
+		require.Equal(t, 2, rollbackRequests)
+		require.Equal(t, []error{nil, nil}, ctxErrs)
+		require.Equal(t, []any{"value", "value"}, ctxValues)
+	})
+
+	t.Run("stops retrying the rollback when the store context is canceled", func(t *testing.T) {
+		storeCtx, closeStore := context.WithCancel(context.Background())
+		defer closeStore()
+		txn, _ := newTxn(t, storeCtx)
+		rollbackRequests := 0
+		canceled := false
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticRollback {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			rollbackRequests++
+			closeStore()
+			select {
+			case <-ctx.Done():
+				canceled = true
+			case <-time.After(3 * time.Second):
+			}
+			return notLeader()
+		}
+
+		txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+		require.True(t, canceled, "rollback context is not canceled after the store context is canceled")
+		require.Equal(t, 1, rollbackRequests)
+	})
+
+	// The rollback context must not outlive the rollback, whether it succeeds or fails: it is canceled and its
+	// callback on the store context is stopped.
+	for _, testCase := range []struct {
+		name     string
+		response func() (*tikvrpc.Response, error)
+	}{
+		{
+			name: "releases the rollback context after the rollback succeeds",
+			response: func() (*tikvrpc.Response, error) {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+			},
+		},
+		{
+			name: "releases the rollback context after the rollback fails",
+			response: func() (*tikvrpc.Response, error) {
+				return nil, errors.New("rollback failed")
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			storeCtx := newStopRecordingContext()
+			txn, store := newTxn(t, storeCtx)
+			rollbackRequests := 0
+			var rollbackCtx context.Context
+			txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+				if req.Type != tikvrpc.CmdPessimisticRollback {
+					return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+				}
+				rollbackRequests++
+				rollbackCtx = ctx
+				return testCase.response()
+			}
+
+			txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+			// The context is released when the goroutine exits, which the store's wait group tracks.
+			store.WaitGroup().Wait()
+			require.Equal(t, 1, rollbackRequests)
+			require.ErrorIs(t, rollbackCtx.Err(), context.Canceled)
+			require.Equal(t, 1, storeCtx.registered)
+			require.Equal(t, 1, storeCtx.stopped)
+		})
 	}
 }
 
