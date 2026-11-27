@@ -99,6 +99,14 @@ type recorderStore struct {
 	*mockStore
 	getTimestampWithRetry func(*retry.Backoffer, string) (uint64, error)
 	waitGroup             sync.WaitGroup
+	ctx                   context.Context
+}
+
+func (m *recorderStore) Ctx() context.Context {
+	if m.ctx != nil {
+		return m.ctx
+	}
+	return context.Background()
 }
 
 func (m *recorderStore) SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -216,6 +224,81 @@ func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestAsyncPessimisticRollbackIgnoresRequestCancellation(t *testing.T) {
+	type ctxKey struct{}
+	key := []byte("key")
+
+	newTxn := func(t *testing.T, storeCtx context.Context) *testTxn {
+		txn := newTestTxn(t, 1)
+		txn.KVTxn.store = &recorderStore{mockStore: txn.store, ctx: storeCtx}
+		txn.SetPessimistic(true)
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticLock {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		}
+		lockCtx := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		require.NoError(t, txn.lockKeys(context.Background(), lockCtx, nil, key))
+		return txn
+	}
+
+	t.Run("canceled request context", func(t *testing.T) {
+		txn := newTxn(t, context.Background())
+		rollbackRequests := 0
+		var ctxErrs []error
+		var ctxValues []any
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticRollback {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			rollbackRequests++
+			ctxErrs = append(ctxErrs, ctx.Err())
+			ctxValues = append(ctxValues, ctx.Value(ctxKey{}))
+			if rollbackRequests == 1 {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{
+					RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{RegionId: 1}},
+				}}, nil
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+		}
+
+		reqCtx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "value"))
+		cancel()
+		txn.asyncPessimisticRollback(reqCtx, [][]byte{key}, 0).Wait()
+		require.Equal(t, 2, rollbackRequests)
+		require.Equal(t, []error{nil, nil}, ctxErrs)
+		require.Equal(t, []any{"value", "value"}, ctxValues)
+	})
+
+	t.Run("closed store", func(t *testing.T) {
+		storeCtx, closeStore := context.WithCancel(context.Background())
+		defer closeStore()
+		txn := newTxn(t, storeCtx)
+		rollbackRequests := 0
+		canceled := false
+		txn.store.client.onSend = func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if req.Type != tikvrpc.CmdPessimisticRollback {
+				return nil, errors.Errorf("unexpected RPC command: %s", req.Type)
+			}
+			rollbackRequests++
+			closeStore()
+			select {
+			case <-ctx.Done():
+				canceled = true
+			case <-time.After(3 * time.Second):
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{
+				RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{RegionId: 1}},
+			}}, nil
+		}
+
+		txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+		require.True(t, canceled, "rollback context is not canceled after the store is closed")
+		require.Equal(t, 1, rollbackRequests)
+	})
 }
 
 func TestLockKeys(t *testing.T) {

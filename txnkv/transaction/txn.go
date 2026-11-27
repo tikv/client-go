@@ -2136,6 +2136,18 @@ func newCleanupBackoffer(ctx context.Context, maxSleep int, vars *tikv.Variables
 	return retry.NewBackofferWithVars(ctx, maxSleep, &cleanupVars)
 }
 
+// newAsyncCleanupContext returns a context for cleanup that runs in the background after the request that needs it
+// has returned. It keeps the values of reqCtx, but not its cancellation or deadline, and is canceled when storeCtx is
+// done, so that cleanup still stops when the store is closed.
+func newAsyncCleanupContext(storeCtx, reqCtx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(reqCtx))
+	stop := context.AfterFunc(storeCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // asyncPessimisticRollback rollbacks pessimistic locks of the current transaction on the specified keys asynchronously.
 // Pessimistic locks on specified keys with its forUpdateTS <= specifiedForUpdateTS will be unlocked. If 0 is passed
 // to specifiedForUpdateTS, the current forUpdateTS of the current transaction will be used.
@@ -2152,11 +2164,15 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS
 	}
+	// The caller's context is often already canceled when the locks need to be rolled back, e.g. the statement that
+	// requested the locks was killed. Do not let that cancellation abort the rollback.
+	ctx, cancel := newAsyncCleanupContext(txn.store.Ctx(), ctx)
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
 	txn.store.WaitGroup().Add(1)
 	go func() {
 		defer txn.store.WaitGroup().Done()
+		defer cancel()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
 				switch s {
