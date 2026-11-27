@@ -241,6 +241,29 @@ func TestCommitSharedLockPreservesValue(t *testing.T) {
 	mustGetOK(t, store, key, 25, value)
 	mustCommitOK(t, store, [][]byte{[]byte(key)}, 20, 30)
 	mustGetOK(t, store, key, 35, value)
+
+	// Committing Op_SharedLock on an absent key must not make a later
+	// Assertion_NotExist pessimistic lock treat the key as existing.
+	absentKey := "absent-shared-key"
+	absentMutations := []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Op_SharedLock,
+		Key: []byte(absentKey),
+	}}
+	mustPrewriteOK(t, store, absentMutations, absentKey, 40)
+	mustCommitOK(t, store, [][]byte{[]byte(absentKey)}, 40, 50)
+	mustGetNone(t, store, absentKey, 55)
+	resp := store.PessimisticLock(&kvrpcpb.PessimisticLockRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_PessimisticLock,
+			Key:       []byte(absentKey),
+			Assertion: kvrpcpb.Assertion_NotExist,
+		}},
+		PrimaryLock:  []byte(absentKey),
+		StartVersion: 60,
+		ForUpdateTs:  60,
+		LockTtl:      1000,
+	})
+	require.Empty(t, resp.Errors)
 }
 
 func TestDelete(t *testing.T) {

@@ -2221,6 +2221,9 @@ func (s *RegionRequestSender) onRegionError(
 	// We can't know whether the request is committed or not, so it's an undetermined error too,
 	// but we don't handle it now.
 	if regionErr.GetStaleCommand() != nil {
+		if s.ReturnOnServerIsBusy {
+			return false, nil
+		}
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `StaleCommand`", zap.Stringer("ctx", ctx))
 		if s.replicaSelector != nil {
 			// Needn't backoff because the new leader should be elected soon

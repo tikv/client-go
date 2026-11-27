@@ -15,7 +15,10 @@
 package transaction
 
 import (
+	"bytes"
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -423,4 +426,145 @@ func TestLockWaitBudgetOnServerIsBusy(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestLockWaitBudgetOnStaleCommand(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		txn, store := newSharedPrimaryTestTxn(t)
+		var waits []int64
+		store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdPessimisticRollback {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+			}
+			waits = append(waits, req.PessimisticLock().WaitTimeout)
+			time.Sleep(35 * time.Millisecond)
+			return tikvrpc.GenRegionErrorResp(req, &errorpb.Error{StaleCommand: &errorpb.StaleCommand{}})
+		}
+		start := time.Now()
+		lock := kv.NewLockCtx(txn.StartTS()+1, 20, start)
+		err := txn.LockKeys(context.Background(), lock, []byte("key"))
+		require.ErrorIs(t, err, tikverr.ErrLockWaitTimeout)
+		require.Len(t, waits, 1)
+	})
+}
+
+func TestNormalMultiKeyRollbackSerializedBeforeSharedLockAndHonorsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		txn, store := newSharedPrimaryTestTxn(t)
+		keyA, keyB := []byte("key-a"), []byte("key-b")
+		rollbackStarted := make(chan struct{})
+		releaseRollback := make(chan struct{})
+		var releaseOnce sync.Once
+		unblockRollback := func() { releaseOnce.Do(func() { close(releaseRollback) }) }
+		defer unblockRollback()
+		var sharedSeenAfterRollback atomic.Bool
+		var rollbackDone atomic.Bool
+
+		store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPessimisticLock:
+				p := req.PessimisticLock()
+				if len(p.Mutations) == 2 {
+					// Simulate partial failure across two keys (keyA locked, keyB conflict).
+					return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
+						Errors: []*kvrpcpb.KeyError{{
+							Conflict: &kvrpcpb.WriteConflict{
+								StartTs: txn.StartTS(), ConflictTs: txn.StartTS() + 1, Key: keyB,
+							},
+						}},
+					}}, nil
+				}
+				if len(p.Mutations) == 1 && bytes.Equal(p.Mutations[0].Key, keyA) && p.Mutations[0].Op == kvrpcpb.Op_SharedPessimisticLock {
+					sharedSeenAfterRollback.Store(rollbackDone.Load())
+					return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+				}
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+			case tikvrpc.CmdPessimisticRollback:
+				close(rollbackStarted)
+				<-releaseRollback
+				rollbackDone.Store(true)
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+			default:
+				return nil, errors.Errorf("unexpected RPC %s", req.Type)
+			}
+		}
+
+		// Multi-key non-aggressive X lock fails and starts async rollback of keyA & keyB.
+		err := txn.LockKeys(context.Background(), kv.NewLockCtx(txn.StartTS()+1, kv.LockAlwaysWait, time.Now()), keyA, keyB)
+		require.Error(t, err)
+		<-rollbackStarted
+
+		// A call with a short MaxExecutionDeadline must return promptly without waiting for the delayed rollback.
+		deadlineLock := kv.NewLockCtx(txn.StartTS()+1, kv.LockAlwaysWait, time.Now())
+		deadlineLock.InShareMode = true
+		deadlineLock.AllowSharedLockPrimary = true
+		deadlineLock.MaxExecutionDeadline = time.Now().Add(20 * time.Millisecond)
+		start := time.Now()
+		err = txn.LockKeys(context.Background(), deadlineLock, keyA)
+		require.ErrorContains(t, err, "query interrupted")
+		require.Less(t, time.Since(start), time.Second)
+
+		// Now let a normal shared lock wait on rollback and verify S RPC is sent only after rollback completes.
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			unblockRollback()
+		}()
+		sharedLock := kv.NewLockCtx(txn.StartTS()+1, kv.LockAlwaysWait, time.Now())
+		sharedLock.InShareMode = true
+		sharedLock.AllowSharedLockPrimary = true
+		require.NoError(t, txn.LockKeys(context.Background(), sharedLock, keyA))
+		require.True(t, sharedSeenAfterRollback.Load())
+		store.WaitGroup().Wait()
+	})
+}
+
+func TestAggressiveReacquireXSerializedBeforeSharedLock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		txn, store := newSharedPrimaryTestTxn(t)
+		key := []byte("agg-key")
+		rollbackStarted := make(chan struct{})
+		releaseRollback := make(chan struct{})
+		var releaseOnce sync.Once
+		unblockRollback := func() { releaseOnce.Do(func() { close(releaseRollback) }) }
+		defer unblockRollback()
+		var rollbackDone atomic.Bool
+		var xCalls atomic.Int32
+		var secondXAfterRollback atomic.Bool
+
+		store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPessimisticLock:
+				if xCalls.Add(1) == 2 {
+					secondXAfterRollback.Store(rollbackDone.Load())
+				}
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
+					Results: []*kvrpcpb.PessimisticLockKeyResult{{Type: kvrpcpb.PessimisticLockKeyResultType_LockResultNormal}},
+				}}, nil
+			case tikvrpc.CmdPessimisticRollback:
+				close(rollbackStarted)
+				<-releaseRollback
+				rollbackDone.Store(true)
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticRollbackResponse{}}, nil
+			default:
+				return nil, errors.Errorf("unexpected RPC %s", req.Type)
+			}
+		}
+
+		txn.StartAggressiveLocking()
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(txn.StartTS()+1, kv.LockAlwaysWait, time.Now()), key))
+		txn.RetryAggressiveLocking(context.Background())
+		// Second Retry schedules async cleanup of key from lastRetryUnnecessaryLocks.
+		txn.RetryAggressiveLocking(context.Background())
+		<-rollbackStarted
+
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			unblockRollback()
+		}()
+		// Reacquiring X on the same key must wait for the pending rollback first.
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(txn.StartTS()+1, kv.LockAlwaysWait, time.Now()), key))
+		require.True(t, secondXAfterRollback.Load())
+		txn.DoneAggressiveLocking(context.Background())
+		store.WaitGroup().Wait()
+	})
 }

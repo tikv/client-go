@@ -942,7 +942,7 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		}
 
 		switch dec.value.valueType {
-		case typePut, typeLock:
+		case typePut:
 			if needCheckShouldNotExistForPessimisticLock {
 				if writeConflictErr != nil {
 					return nil, writeConflictErr

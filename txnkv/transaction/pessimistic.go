@@ -279,6 +279,16 @@ func (action actionPessimisticLock) handleRegionError(
 		}
 		return action.checkLockWaitBudget()
 	}
+	if staleCmd := regionErr.GetStaleCommand(); staleCmd != nil {
+		if done, err := action.checkLockWaitBudget(); done {
+			return true, err
+		}
+		remaining := calculateEffectiveWaitTime(action.LockCtx, action.LockWaitTime(), action.WaitStartTime, time.Now())
+		if err := bo.BackoffWithCfgAndMaxSleep(retry.BoStaleCmd, int(max(0, remaining)), errors.New(staleCmd.String())); err != nil {
+			return true, err
+		}
+		return action.checkLockWaitBudget()
+	}
 	if err := retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 		return true, err
 	}

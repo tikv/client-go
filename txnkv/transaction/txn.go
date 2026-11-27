@@ -1174,12 +1174,12 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 // invocations that involves only one key, the pessimistic lock request will be performed in ForceLock mode
 // (kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock).
 func (txn *KVTxn) StartAggressiveLocking() {
+	if txn.IsInAggressiveLockingMode() {
+		panic("Trying to start aggressive locking while it's already started")
+	}
 	txn.aggressiveLockingDisabled = txn.usesSharedLockPrimary
 	if txn.aggressiveLockingDisabled {
 		return
-	}
-	if txn.IsInAggressiveLockingMode() {
-		panic("Trying to start aggressive locking while it's already started")
 	}
 	txn.aggressiveLockingContext = &aggressiveLockingContext{
 		lastRetryUnnecessaryLocks: nil,
@@ -1686,10 +1686,8 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	if err := txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput); err != nil {
 		return err
 	}
-	if nativeSharedRead {
-		if err := txn.waitForAggressiveRollbacks(ctx, keysInput); err != nil {
-			return err
-		}
+	if err := txn.waitForPendingRollbacks(ctx, lockCtx, keysInput, nativeSharedRead); err != nil {
+		return err
 	}
 
 	defer func() {
@@ -2186,9 +2184,19 @@ type pessimisticRollbackResult struct {
 	err  error // published by closing done
 }
 
-// Earlier retries can also have queued rollbacks. Only wait for batches that
-// touch the new S keys. Current-attempt X locks are retained in the membuffer.
-func (txn *KVTxn) waitForAggressiveRollbacks(ctx context.Context, keys [][]byte) (err error) {
+// Wait for any in-flight asynchronous pessimistic rollbacks (from either normal
+// multi-key lock failures or aggressive locking retries) that touch keys being
+// locked so a delayed rollback cannot delete a newly acknowledged lock.
+func (txn *KVTxn) waitForPendingRollbacks(ctx context.Context, lockCtx *tikv.LockCtx, keys [][]byte, nativeSharedRead bool) (err error) {
+	if err := checkMaxExecutionTimeExceeded(lockCtx, time.Now()); err != nil {
+		return err
+	}
+	var deadlineCh <-chan time.Time
+	if lockCtx != nil && !lockCtx.MaxExecutionDeadline.IsZero() {
+		timer := time.NewTimer(time.Until(lockCtx.MaxExecutionDeadline))
+		defer timer.Stop()
+		deadlineCh = timer.C
+	}
 	txn.aggressiveRollbacks.Range(func(batch, keySet any) bool {
 		rolledBackKeys := keySet.(map[string]struct{})
 		for _, key := range keys {
@@ -2198,11 +2206,21 @@ func (txn *KVTxn) waitForAggressiveRollbacks(ctx context.Context, keys [][]byte)
 			rollback := batch.(*pessimisticRollbackResult)
 			select {
 			case <-rollback.done:
-				if err = rollback.err; err != nil {
-					txn.setSharedLockAbort(err)
+				if rollback.err != nil {
+					if nativeSharedRead || txn.usesSharedLockPrimary {
+						err = rollback.err
+						txn.setSharedLockAbort(err)
+					} else {
+						txn.aggressiveRollbacks.Delete(batch)
+					}
 				}
 			case <-ctx.Done():
 				err = ctx.Err()
+			case <-deadlineCh:
+				err = checkMaxExecutionTimeExceeded(lockCtx, time.Now())
+				if err == nil {
+					err = errors.WithStack(tikverr.ErrQueryInterrupted)
+				}
 			}
 			break
 		}
@@ -2228,8 +2246,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		committer.forUpdateTS = specifiedForUpdateTS
 	}
 	result := &pessimisticRollbackResult{done: make(chan struct{})}
-	aggressive := txn.IsInAggressiveLockingMode()
-	if aggressive {
+	if len(keys) > 0 {
 		keySet := make(map[string]struct{}, len(keys))
 		for _, key := range keys {
 			keySet[string(key)] = struct{}{}
@@ -2241,7 +2258,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		defer txn.store.WaitGroup().Done()
 		defer func() {
 			close(result.done)
-			if aggressive && result.err == nil {
+			if result.err == nil {
 				txn.aggressiveRollbacks.Delete(result)
 			}
 		}()
