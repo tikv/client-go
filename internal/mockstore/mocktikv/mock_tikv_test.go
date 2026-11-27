@@ -225,6 +225,119 @@ func TestGetWithLock(t *testing.T) {
 	mustGetOK(t, store, key, math.MaxUint64, "value")
 }
 
+func TestCommitSharedLockPreservesValue(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	defer store.Close()
+
+	key := "shared-key"
+	value := "shared-value"
+	mustPutOK(t, store, key, value, 5, 10)
+	mutations := []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Op_SharedLock,
+		Key: []byte(key),
+	}}
+	mustPrewriteOK(t, store, mutations, key, 20)
+	mustGetOK(t, store, key, 25, value)
+	mustCommitOK(t, store, [][]byte{[]byte(key)}, 20, 30)
+	mustGetOK(t, store, key, 35, value)
+
+	// Strict Assertion_NotExist prewrite must scan past committed Op_SharedLock
+	// records and detect the older Put.
+	errs := store.Prewrite(&kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_Put,
+			Key:       []byte(key),
+			Value:     []byte("new-value"),
+			Assertion: kvrpcpb.Assertion_NotExist,
+		}},
+		PrimaryLock:    []byte(key),
+		StartVersion:   36,
+		LockTtl:        1000,
+		AssertionLevel: kvrpcpb.AssertionLevel_Strict,
+	})
+	require.Len(t, errs, 1)
+	_, ok := errs[0].(*ErrAssertionFailed)
+	require.True(t, ok, "expected ErrAssertionFailed, got %T: %v", errs[0], errs[0])
+
+	// Strict Assertion_Exist prewrite must scan past Op_SharedLock and pass when Put exists.
+	errs = store.Prewrite(&kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_Put,
+			Key:       []byte(key),
+			Value:     []byte("updated-value"),
+			Assertion: kvrpcpb.Assertion_Exist,
+		}},
+		PrimaryLock:    []byte(key),
+		StartVersion:   37,
+		LockTtl:        1000,
+		AssertionLevel: kvrpcpb.AssertionLevel_Strict,
+	})
+	require.Len(t, errs, 1)
+	require.NoError(t, errs[0])
+	mustRollbackOK(t, store, [][]byte{[]byte(key)}, 37)
+
+	// After Put -> Delete -> Op_SharedLock, Assertion_Exist must fail and Assertion_NotExist must pass.
+	deletedKey := "deleted-shared-key"
+	mustPutOK(t, store, deletedKey, "v1", 5, 10)
+	mustDeleteOK(t, store, deletedKey, 15, 20)
+	mustPrewriteOK(t, store, []*kvrpcpb.Mutation{{Op: kvrpcpb.Op_SharedLock, Key: []byte(deletedKey)}}, deletedKey, 25)
+	mustCommitOK(t, store, [][]byte{[]byte(deletedKey)}, 25, 30)
+	errs = store.Prewrite(&kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_Put,
+			Key:       []byte(deletedKey),
+			Value:     []byte("v2"),
+			Assertion: kvrpcpb.Assertion_Exist,
+		}},
+		PrimaryLock:    []byte(deletedKey),
+		StartVersion:   35,
+		LockTtl:        1000,
+		AssertionLevel: kvrpcpb.AssertionLevel_Strict,
+	})
+	require.Len(t, errs, 1)
+	_, ok = errs[0].(*ErrAssertionFailed)
+	require.True(t, ok, "expected ErrAssertionFailed for deleted key, got %T: %v", errs[0], errs[0])
+	errs = store.Prewrite(&kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_Put,
+			Key:       []byte(deletedKey),
+			Value:     []byte("v2"),
+			Assertion: kvrpcpb.Assertion_NotExist,
+		}},
+		PrimaryLock:    []byte(deletedKey),
+		StartVersion:   36,
+		LockTtl:        1000,
+		AssertionLevel: kvrpcpb.AssertionLevel_Strict,
+	})
+	require.Len(t, errs, 1)
+	require.NoError(t, errs[0])
+	mustRollbackOK(t, store, [][]byte{[]byte(deletedKey)}, 36)
+
+	// Committing Op_SharedLock on an absent key must not make a later
+	// Assertion_NotExist pessimistic lock treat the key as existing.
+	absentKey := "absent-shared-key"
+	absentMutations := []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Op_SharedLock,
+		Key: []byte(absentKey),
+	}}
+	mustPrewriteOK(t, store, absentMutations, absentKey, 40)
+	mustCommitOK(t, store, [][]byte{[]byte(absentKey)}, 40, 50)
+	mustGetNone(t, store, absentKey, 55)
+	resp := store.PessimisticLock(&kvrpcpb.PessimisticLockRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Op_PessimisticLock,
+			Key:       []byte(absentKey),
+			Assertion: kvrpcpb.Assertion_NotExist,
+		}},
+		PrimaryLock:  []byte(absentKey),
+		StartVersion: 60,
+		ForUpdateTs:  60,
+		LockTtl:      1000,
+	})
+	require.Empty(t, resp.Errors)
+}
+
 func TestDelete(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)

@@ -119,6 +119,8 @@ type RegionRequestSender struct {
 	failProxyStoreIDs map[uint64]struct{}
 	Stats             *RegionRequestRuntimeStats
 	AccessStats       *ReplicaAccessStats
+	// ReturnOnServerIsBusy lets a caller bound backoff by its own wait deadline.
+	ReturnOnServerIsBusy bool
 }
 
 func (s *RegionRequestSender) String() string {
@@ -2184,6 +2186,9 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
+		if s.ReturnOnServerIsBusy {
+			return false, nil
+		}
 		// A blamed tenant is excluded: its deadline went on a queue of its own
 		// making, so it takes the backoff path below rather than retrying the
 		// same overloaded leader straight away.
@@ -2216,6 +2221,9 @@ func (s *RegionRequestSender) onRegionError(
 	// We can't know whether the request is committed or not, so it's an undetermined error too,
 	// but we don't handle it now.
 	if regionErr.GetStaleCommand() != nil {
+		if s.ReturnOnServerIsBusy {
+			return false, nil
+		}
 		logutil.Logger(bo.GetCtx()).Debug("tikv reports `StaleCommand`", zap.Stringer("ctx", ctx))
 		if s.replicaSelector != nil {
 			// Needn't backoff because the new leader should be elected soon

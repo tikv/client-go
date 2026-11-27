@@ -69,7 +69,10 @@ type LockCtx struct {
 	InShareMode      bool
 	// AllowSharedLockUpgrade allows LockKeys to upgrade pessimistic shared
 	// locks already held by the transaction to exclusive locks.
-	AllowSharedLockUpgrade  bool
+	AllowSharedLockUpgrade bool
+	// AllowSharedLockPrimary enables the shared-primary protocol for a pessimistic
+	// shared locking read. The transaction keeps these semantics after taking S.
+	AllowSharedLockPrimary  bool
 	Values                  map[string]ReturnedValue
 	MaxLockedWithConflictTS uint64
 	ValuesLock              sync.Mutex

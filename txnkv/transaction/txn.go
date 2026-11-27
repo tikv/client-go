@@ -164,6 +164,9 @@ type KVTxn struct {
 	vars      *tikv.Variables
 	committer *twoPhaseCommitter
 	lockedCnt int
+	// Uses the shared-primary protocol after a successful opt-in locking read,
+	// including when all shared locks are subsequently upgraded to exclusive.
+	usesSharedLockPrimary bool
 
 	valid bool
 
@@ -201,6 +204,10 @@ type KVTxn struct {
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   atomic.Bool
+	// LockKeys can end a stage before its caller calls Done or Cancel.
+	aggressiveLockingDisabled bool
+	// An outstanding rollback of an older X must finish before acquiring S.
+	aggressiveRollbacks sync.Map // *pessimisticRollbackResult -> set of keys in that rollback
 
 	forUpdateTSChecks map[string]uint64
 
@@ -1170,6 +1177,10 @@ func (txn *KVTxn) StartAggressiveLocking() {
 	if txn.IsInAggressiveLockingMode() {
 		panic("Trying to start aggressive locking while it's already started")
 	}
+	txn.aggressiveLockingDisabled = txn.usesSharedLockPrimary
+	if txn.aggressiveLockingDisabled {
+		return
+	}
 	txn.aggressiveLockingContext = &aggressiveLockingContext{
 		lastRetryUnnecessaryLocks: nil,
 		currentLockedKeys:         make(map[string]tempLockBufferEntry),
@@ -1184,6 +1195,9 @@ func (txn *KVTxn) StartAggressiveLocking() {
 // If some locks is acquired in the previous attempt but not needed in the current attempt, after calling this function,
 // these locks will then be released.
 func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
+	if txn.aggressiveLockingDisabled {
+		return
+	}
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to retry aggressive locking while it's not started")
 	}
@@ -1210,6 +1224,10 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 // CancelAggressiveLocking cancels the current aggressive locking state. All pessimistic locks that were acquired
 // during the aggressive locking state will be rolled back by PessimisticRollback.
 func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
+	if txn.aggressiveLockingDisabled {
+		txn.aggressiveLockingDisabled = false
+		return
+	}
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
@@ -1249,6 +1267,10 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 // DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
 // these keys are locked in nomral way. If there's any unneeded locks, they will be released.
 func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
+	if txn.aggressiveLockingDisabled {
+		txn.aggressiveLockingDisabled = false
+		return
+	}
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
@@ -1401,17 +1423,14 @@ func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, lockC
 	if !txn.IsInAggressiveLockingMode() {
 		return nil
 	}
-	if lockCtx.InShareMode {
+	if lockCtx.InShareMode && !lockCtx.AllowSharedLockPrimary {
 		return errors.New("shared lock is not supported in aggressive/fair locking mode")
 	}
-	if len(keys) > 1 {
-		// Only allow fair locking if it only needs to lock one key. Considering that it's possible that a
-		// statement causes multiple calls to `LockKeys` (which means some keys may have been locked in fair
-		// locking mode), here we exit fair locking mode by calling DoneFairLocking instead of cancelling.
-		// Then the previously-locked keys during execution in this statement (if any) will be turned into the state
-		// as if they were locked in normal way.
-		// Note that the issue https://github.com/pingcap/tidb/issues/35682 also exists here.
+	if lockCtx.InShareMode || len(keys) > 1 {
+		// ForceLock supports one exclusive key. Transfer X locks already
+		// acquired in this attempt to the membuffer before switching modes.
 		txn.DoneAggressiveLocking(ctx)
+		txn.aggressiveLockingDisabled = true
 	}
 	return nil
 }
@@ -1438,6 +1457,10 @@ func (txn *KVTxn) recordSharedLockAbort(err error) {
 	if !errors.As(err, &sharedLockLost) && !errors.As(err, &lockUpgradeConflict) {
 		return
 	}
+	txn.setSharedLockAbort(err)
+}
+
+func (txn *KVTxn) setSharedLockAbort(err error) {
 	txn.sharedLockAbortMu.Lock()
 	defer txn.sharedLockAbortMu.Unlock()
 	if txn.sharedLockAbortErr == nil {
@@ -1458,6 +1481,24 @@ func (txn *KVTxn) getTxnStateErr() error {
 	return txn.getSharedLockAbortErr()
 }
 
+func (txn *KVTxn) deadlockAbortsSharedTxn(lockCtx *tikv.LockCtx) bool {
+	return txn.usesSharedLockPrimary || (lockCtx.InShareMode && lockCtx.AllowSharedLockPrimary)
+}
+
+// A statement retry cannot release previously returned shared reads. Preserve
+// the deadlock diagnostic and poison the whole transaction when it is the victim.
+func (txn *KVTxn) onLockDeadlock(lockCtx *tikv.LockCtx, dl *tikverr.ErrDeadlock, keys [][]byte) {
+	if txn.deadlockAbortsSharedTxn(lockCtx) {
+		dl.IsRetryable = false
+		txn.setSharedLockAbort(dl)
+	} else if hashInKeys(dl.DeadlockKeyHash, keys) {
+		dl.IsRetryable = true
+	}
+	if lockCtx.OnDeadlock != nil {
+		lockCtx.OnDeadlock(dl)
+	}
+}
+
 func (txn *KVTxn) lockPessimisticKeyGroup(
 	ctx context.Context,
 	lockCtx *tikv.LockCtx,
@@ -1466,7 +1507,7 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 ) (int, error) {
 	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 	txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-	err := txn.committer.pessimisticLockMutations(bo, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &PlainMutations{keys: keys})
+	err := txn.committer.pessimisticLockMutations(bo, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &PlainMutations{keys: keys}, isUpgrade && txn.usesSharedLockPrimary)
 	if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 		atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 		lockCtx.Stats.Mu.Lock()
@@ -1488,6 +1529,9 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		}
 
 		if isUpgrade {
+			if dl, ok := errors.Cause(err).(*tikverr.ErrDeadlock); ok && txn.usesSharedLockPrimary {
+				txn.onLockDeadlock(lockCtx, dl, keys)
+			}
 			txn.recordSharedLockAbort(err)
 			return 0, err
 		}
@@ -1496,24 +1540,19 @@ func (txn *KVTxn) lockPessimisticKeyGroup(
 		if len(keys) > 1 || keyMayBeLocked {
 			dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
 			if isDeadlock {
-				if hashInKeys(dl.DeadlockKeyHash, keys) {
-					dl.IsRetryable = true
-				}
-				if lockCtx.OnDeadlock != nil {
-					lockCtx.OnDeadlock(dl)
-				}
+				txn.onLockDeadlock(lockCtx, dl, keys)
 			}
 
 			rollbackForUpdateTS := lockCtx.ForUpdateTS
 			if lockCtx.MaxLockedWithConflictTS > rollbackForUpdateTS {
 				rollbackForUpdateTS = lockCtx.MaxLockedWithConflictTS
 			}
-			wg := txn.asyncPessimisticRollback(ctx, keys, rollbackForUpdateTS)
+			rollbackDone := txn.asyncPessimisticRollback(ctx, keys, rollbackForUpdateTS)
 
 			if isDeadlock {
 				logutil.Logger(ctx).Debug("deadlock error received", zap.Uint64("startTS", txn.startTS), zap.Stringer("deadlockInfo", dl))
 				if dl.IsRetryable {
-					wg.Wait()
+					<-rollbackDone
 					time.Sleep(time.Millisecond * 5)
 					if _, err := util.EvalFailpoint("SingleStmtDeadLockRetrySleep"); err == nil {
 						time.Sleep(300 * time.Millisecond)
@@ -1636,12 +1675,21 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	startTime := time.Now()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
+	if fn != nil {
+		defer fn()
+	}
 
 	if err := txn.getTxnStateErr(); err != nil {
 		return err
 	}
-	err = txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput)
-	if err != nil {
+	nativeSharedRead := lockCtx.InShareMode && lockCtx.AllowSharedLockPrimary
+	if nativeSharedRead && lockCtx.ForUpdateTS == 0 {
+		return errors.New("shared primary lock requires ForUpdateTS to be greater than zero")
+	}
+	if err := txn.exitAggressiveLockingIfInapplicable(ctx, lockCtx, keysInput); err != nil {
+		return err
+	}
+	if err := txn.waitForPendingRollbacks(ctx, lockCtx, keysInput, nativeSharedRead); err != nil {
 		return err
 	}
 
@@ -1668,9 +1716,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 	}()
-	if fn != nil {
-		defer fn()
-	}
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
@@ -1707,9 +1752,12 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
 
+		if lockedInShareMode && lockCtx.InShareMode && lockCtx.AllowSharedLockPrimary {
+			txn.usesSharedLockPrimary = true
+		}
 		upgradeCandidate := lockedInShareMode && !lockCtx.InShareMode
 		if upgradeCandidate {
-			if !txn.IsPessimistic() || !lockCtx.AllowSharedLockUpgrade {
+			if !txn.IsPessimistic() || (!txn.usesSharedLockPrimary && !lockCtx.AllowSharedLockUpgrade) {
 				memBuf.RUnlock()
 				return errors.New("upgrading a shared lock to an exclusive lock is not supported")
 			}
@@ -1814,9 +1862,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 		if txn.committer.primaryKey == nil {
-			if lockCtx.InShareMode {
-				// TODO(slock): currently a shared locked key can not be selected as primary key, that is, some keys
-				// should be locked in exclusive mode before acquiring shared locks.
+			if lockCtx.InShareMode && !lockCtx.AllowSharedLockPrimary {
 				return errors.New("pessimistic lock in share mode requires primary key to be selected")
 			}
 			assignedPrimaryKey = true
@@ -1860,7 +1906,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		// If the number of keys greater than 1, it can be on different region,
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWakeUpMode, &PlainMutations{keys: keys})
+		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWakeUpMode, &PlainMutations{keys: keys}, false)
 		if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
@@ -1890,13 +1936,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			if len(keys) > 1 || keyMayBeLocked {
 				dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
 				if isDeadlock {
-					if hashInKeys(dl.DeadlockKeyHash, keys) {
-						dl.IsRetryable = true
-					}
-					if lockCtx.OnDeadlock != nil {
-						// Call OnDeadlock before pessimistic rollback.
-						lockCtx.OnDeadlock(dl)
-					}
+					txn.onLockDeadlock(lockCtx, dl, keys)
 				}
 
 				// TODO: It's possible that there are some locks successfully locked with conflict but the client didn't
@@ -1906,7 +1946,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				if lockCtx.MaxLockedWithConflictTS > rollbackForUpdateTS {
 					rollbackForUpdateTS = lockCtx.MaxLockedWithConflictTS
 				}
-				wg := txn.asyncPessimisticRollback(ctx, allKeys, rollbackForUpdateTS)
+				rollbackDone := txn.asyncPessimisticRollback(ctx, allKeys, rollbackForUpdateTS)
 				txn.lockedCnt -= len(allKeys) - len(keys)
 				if txn.IsInAggressiveLockingMode() {
 					for _, k := range allKeys {
@@ -1918,7 +1958,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 					logutil.Logger(ctx).Debug("deadlock error received", zap.Uint64("startTS", txn.startTS), zap.Stringer("deadlockInfo", dl))
 					if dl.IsRetryable {
 						// Wait for the pessimistic rollback to finish before we retry the statement.
-						wg.Wait()
+						<-rollbackDone
 						// Sleep a little, wait for the other transaction that blocked by this transaction to acquire the lock.
 						time.Sleep(time.Millisecond * 5)
 						if _, err := util.EvalFailpoint("SingleStmtDeadLockRetrySleep"); err == nil {
@@ -1992,6 +2032,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			setLockMode := tikv.SetKeyLockedInExclusiveMode
 			if lockCtx.InShareMode && txn.IsPessimistic() {
 				setLockMode = tikv.SetKeyLockedInShareMode
+				if lockCtx.AllowSharedLockPrimary {
+					txn.usesSharedLockPrimary = true
+				}
 			}
 			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists, setLockMode)
 		}
@@ -2136,10 +2179,58 @@ func newCleanupBackoffer(ctx context.Context, maxSleep int, vars *tikv.Variables
 	return retry.NewBackofferWithVars(ctx, maxSleep, &cleanupVars)
 }
 
+type pessimisticRollbackResult struct {
+	done chan struct{}
+	err  error // published by closing done
+}
+
+// Wait for any in-flight asynchronous pessimistic rollbacks (from either normal
+// multi-key lock failures or aggressive locking retries) that touch keys being
+// locked so a delayed rollback cannot delete a newly acknowledged lock.
+func (txn *KVTxn) waitForPendingRollbacks(ctx context.Context, lockCtx *tikv.LockCtx, keys [][]byte, nativeSharedRead bool) (err error) {
+	if err := checkMaxExecutionTimeExceeded(lockCtx, time.Now()); err != nil {
+		return err
+	}
+	var deadlineCh <-chan time.Time
+	if lockCtx != nil && !lockCtx.MaxExecutionDeadline.IsZero() {
+		timer := time.NewTimer(time.Until(lockCtx.MaxExecutionDeadline))
+		defer timer.Stop()
+		deadlineCh = timer.C
+	}
+	txn.aggressiveRollbacks.Range(func(batch, keySet any) bool {
+		rolledBackKeys := keySet.(map[string]struct{})
+		for _, key := range keys {
+			if _, overlaps := rolledBackKeys[string(key)]; !overlaps {
+				continue
+			}
+			rollback := batch.(*pessimisticRollbackResult)
+			select {
+			case <-rollback.done:
+				if rollback.err != nil {
+					err = rollback.err
+					if nativeSharedRead || txn.usesSharedLockPrimary {
+						txn.setSharedLockAbort(err)
+					}
+				}
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-deadlineCh:
+				err = checkMaxExecutionTimeExceeded(lockCtx, time.Now())
+				if err == nil {
+					err = errors.WithStack(tikverr.ErrQueryInterrupted)
+				}
+			}
+			break
+		}
+		return err == nil
+	})
+	return err
+}
+
 // asyncPessimisticRollback rollbacks pessimistic locks of the current transaction on the specified keys asynchronously.
 // Pessimistic locks on specified keys with its forUpdateTS <= specifiedForUpdateTS will be unlocked. If 0 is passed
 // to specifiedForUpdateTS, the current forUpdateTS of the current transaction will be used.
-func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, specifiedForUpdateTS uint64) *sync.WaitGroup {
+func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, specifiedForUpdateTS uint64) <-chan struct{} {
 	// Clone a new committer for execute in background.
 	committer := &twoPhaseCommitter{
 		store:       txn.committer.store,
@@ -2152,18 +2243,29 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS
 	}
-	wg := new(sync.WaitGroup)
-	wg.Add(1)
+	result := &pessimisticRollbackResult{done: make(chan struct{})}
+	if len(keys) > 0 {
+		keySet := make(map[string]struct{}, len(keys))
+		for _, key := range keys {
+			keySet[string(key)] = struct{}{}
+		}
+		txn.aggressiveRollbacks.Store(result, keySet)
+	}
 	txn.store.WaitGroup().Add(1)
 	go func() {
 		defer txn.store.WaitGroup().Done()
+		defer func() {
+			if result.err == nil {
+				txn.aggressiveRollbacks.Delete(result)
+			}
+			close(result.done)
+		}()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
 				switch s {
 				case "skip":
 					logutil.Logger(ctx).Info("[failpoint] injected skip async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS))
-					wg.Done()
 					return
 				case "delay":
 					duration := time.Duration(rand.Int63n(int64(time.Second) * 2))
@@ -2174,13 +2276,12 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 			}
 		}
 
-		err := committer.pessimisticRollbackMutations(newCleanupBackoffer(ctx, pessimisticRollbackMaxBackoff, txn.vars), &PlainMutations{keys: keys})
-		if err != nil {
-			logutil.Logger(ctx).Warn("[kv] pessimisticRollback failed.", zap.Error(err))
+		result.err = committer.pessimisticRollbackMutations(newCleanupBackoffer(ctx, pessimisticRollbackMaxBackoff, txn.vars), &PlainMutations{keys: keys})
+		if result.err != nil {
+			logutil.Logger(ctx).Warn("[kv] pessimisticRollback failed.", zap.Error(result.err))
 		}
-		wg.Done()
 	}()
-	return wg
+	return result.done
 }
 
 func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {

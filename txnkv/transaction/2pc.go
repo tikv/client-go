@@ -729,7 +729,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			}
 		}
 
-		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && op != kvrpcpb.Op_SharedLock {
+		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists && (op != kvrpcpb.Op_SharedLock || txn.usesSharedLockPrimary) {
 			c.primaryKey = key
 		}
 	}
@@ -740,8 +740,8 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	if c.mutations.Len() == 0 {
 		return nil
-	} else if primaryKeyIsSharedLock || len(c.primaryKey) == 0 && sharedLockCnt > 0 {
-		// A shared-locked key is not allowed to be the primary key for now. `LockKeys` already guarantees
+	} else if !txn.usesSharedLockPrimary && (primaryKeyIsSharedLock || len(c.primaryKey) == 0 && sharedLockCnt > 0) {
+		// Legacy shared-lock clients require an exclusive primary. `LockKeys` already guarantees
 		// that (it's the only place that sets `flagKeyLockedInShareMode`). Here we just double check it.
 		// Only report error when there are shared locks - if all keys are CheckNotExists (delete-your-writes),
 		// we allow the transaction to continue and use the first key as primary via the primary() fallback.
@@ -798,7 +798,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
 		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
 	}
-	c.hasSharedLocks = sharedLockCnt > 0
+	c.hasSharedLocks = sharedLockCnt > 0 || txn.usesSharedLockPrimary
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
@@ -2370,6 +2370,8 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 		defer cancel()
 	default:
 	}
+	lockAction, isLock := batchExe.action.(actionPessimisticLock)
+	preferDeadlock := isLock && batchExe.committer.txn.deadlockAbortsSharedTxn(lockAction.LockCtx)
 	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.
 	ch := make(chan error, len(batches))
@@ -2397,7 +2399,10 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 					atomic.StoreUint32(&batchExe.committer.prewriteCancelled, 1)
 					cancel()
 				}
-				if err == nil {
+				// A victim deadlock aborts the entire shared-read transaction, even
+				// when a different batch has already reported a statement error.
+				_, deadlock := errors.Cause(e).(*tikverr.ErrDeadlock)
+				if err == nil || (preferDeadlock && deadlock) {
 					err = e
 				}
 			}

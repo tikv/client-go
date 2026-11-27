@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgryski/go-farm"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -31,10 +32,13 @@ import (
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
@@ -208,7 +212,7 @@ func TestPessimisticRollbackIgnoresKillSignal(t *testing.T) {
 				txn.SetVars(vars)
 
 				if async {
-					txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0).Wait()
+					<-txn.asyncPessimisticRollback(context.Background(), [][]byte{key}, 0)
 				} else {
 					require.NoError(t, txn.Rollback())
 				}
@@ -457,6 +461,83 @@ func TestSharedLockUpgrade(t *testing.T) {
 			ret[i] = string(key)
 		}
 		return ret
+	}
+
+	t.Run("SharedPrimaryKeepsProtocolAfterUpgrade", func(t *testing.T) {
+		primary := []byte("primary")
+		var upgradeFlags []bool
+		txn, _ := newRecorderTxn(t, func(_ int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			require.Equal(t, primary, req.PrimaryLock)
+			require.Equal(t, uint64(1), req.StartVersion)
+			upgradeFlags = append(upgradeFlags, req.IsSharedLockUpgrade)
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		})
+		txn.StartAggressiveLocking()
+		lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lock.InShareMode = true
+		lock.AllowSharedLockPrimary = true
+		require.NoError(t, txn.LockKeys(context.Background(), lock, primary))
+		require.True(t, txn.usesSharedLockPrimary)
+		require.False(t, txn.IsInAggressiveLockingMode())
+		require.NoError(t, txn.committer.initKeysAndMutations(context.Background()))
+		require.Equal(t, kvrpcpb.Op_SharedLock, txn.committer.mutations.GetOp(0))
+		// The session option may be turned off while this transaction is open.
+		txn.StartAggressiveLocking()
+		require.False(t, txn.IsInAggressiveLockingMode())
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(3, kv.LockNoWait, time.Now()), primary))
+		require.NoError(t, txn.LockKeys(context.Background(), kv.NewLockCtx(4, kv.LockNoWait, time.Now()), []byte("other")))
+		require.Equal(t, []bool{false, true, false}, upgradeFlags)
+		require.NoError(t, txn.committer.initKeysAndMutations(context.Background()))
+		require.True(t, txn.committer.hasSharedLocks)
+		require.Equal(t, primary, txn.committer.primaryKey)
+		require.NoError(t, txn.Rollback())
+	})
+
+	t.Run("MissingRCKeyDoesNotSelectSharedPrimary", func(t *testing.T) {
+		txn, _ := newRecorderTxn(t, func(_ int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{Values: [][]byte{nil}, NotFounds: []bool{true}}}, nil
+		})
+		lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+		lock.InShareMode = true
+		lock.AllowSharedLockPrimary = true
+		lock.LockOnlyIfExists = true
+		lock.InitReturnValues(1)
+		require.NoError(t, txn.LockKeys(context.Background(), lock, []byte("missing")))
+		require.Empty(t, txn.committer.primaryKey)
+		require.False(t, txn.usesSharedLockPrimary)
+		require.Empty(t, txn.collectLockedKeys())
+	})
+	for _, upgrade := range []bool{false, true} {
+		name := "DeadlockOnNewKeyAbortsSharedTransaction"
+		if upgrade {
+			name = "UpgradeDeadlockAbortsSharedTransaction"
+		}
+		t.Run(name, func(t *testing.T) {
+			txn, _ := newRecorderTxn(t, func(call int, req *kvrpcpb.PessimisticLockRequest) (*tikvrpc.Response, error) {
+				response := &kvrpcpb.PessimisticLockResponse{}
+				if call == 1 {
+					response.Errors = []*kvrpcpb.KeyError{{Deadlock: &kvrpcpb.Deadlock{
+						LockKey: req.Mutations[0].Key, DeadlockKeyHash: farm.Fingerprint64(req.Mutations[0].Key),
+					}}}
+				}
+				return &tikvrpc.Response{Resp: response}, nil
+			})
+			lock := kv.NewLockCtx(2, kv.LockNoWait, time.Now())
+			lock.AllowSharedLockPrimary = true
+			lock.InShareMode = true
+			key := []byte("primary")
+			require.NoError(t, txn.LockKeys(context.Background(), lock, key))
+			if !upgrade {
+				key = []byte("new-key")
+			}
+			err := txn.LockKeys(context.Background(), kv.NewLockCtx(3, kv.LockNoWait, time.Now()), key)
+			var deadlock *tikverr.ErrDeadlock
+			require.ErrorAs(t, err, &deadlock)
+			require.False(t, deadlock.IsRetryable)
+			txn.KVTxn.store.WaitGroup().Wait()
+			require.Same(t, deadlock, txn.Commit(context.Background()))
+			require.NoError(t, txn.Rollback())
+		})
 	}
 
 	t.Run("LockKeysWithWaitTimeReturnsAbortBeforeTSO", func(t *testing.T) {
@@ -946,7 +1027,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		var lockFuncLost *tikverr.ErrSharedLockLost
 		require.ErrorAs(t, lockFuncErr, &lockFuncLost)
 		require.Same(t, firstLost, lockFuncLost)
-		require.False(t, callbackCalled)
+		require.True(t, callbackCalled, "LockKeysFunc must run cleanup callback even on early abort return")
 		require.Len(t, *requests, requestCount)
 
 		commitErr := txn.Commit(context.Background())
@@ -1228,4 +1309,102 @@ func TestPipelinedFlushChecksTransactionKillSignal(t *testing.T) {
 			require.ErrorIs(t, err, tc.wantErr)
 		})
 	}
+}
+
+func TestUpgradeRecentBlockersHonorWaitBudget(t *testing.T) {
+	txn := newTestTxn(t, 1)
+	txn.SetPessimistic(true)
+	c, err := newTwoPhaseCommitter(txn.KVTxn, 0)
+	require.NoError(t, err)
+	key := []byte("k")
+	resp := &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.LockInfo{
+		Key: key, LockType: kvrpcpb.Op_SharedLock, SharedLockInfos: []*kvrpcpb.LockInfo{
+			{Key: key, LockVersion: 1}, {Key: key, LockVersion: 2, DurationToLastUpdateMs: 1},
+		},
+	}}}}}
+	for _, tc := range []struct {
+		wait     int64
+		expected error
+	}{{kv.LockNoWait, tikverr.ErrLockAcquireFailAndNoWaitSet}, {10, tikverr.ErrLockWaitTimeout}} {
+		a := actionPessimisticLock{LockCtx: kv.NewLockCtx(2, tc.wait, time.Now().Add(-time.Second)), isSharedLockUpgrade: true}
+		done, err := a.handlePessimisticLockResponseNormalMode(c, nil, nil, nil, resp, nil)
+		require.True(t, done)
+		require.ErrorIs(t, err, tc.expected)
+	}
+}
+
+type sharedPrimaryCommitStore struct {
+	*recorderStore
+	oracle   oracle.Oracle
+	resolver *txnlock.LockResolver
+}
+
+func (s *sharedPrimaryCommitStore) GetLockResolver() *txnlock.LockResolver { return s.resolver }
+func (*sharedPrimaryCommitStore) TxnLatches() *latch.LatchesScheduler      { return nil }
+func (s *sharedPrimaryCommitStore) GetOracle() oracle.Oracle               { return s.oracle }
+func (*sharedPrimaryCommitStore) Ctx() context.Context                     { return context.Background() }
+func (*sharedPrimaryCommitStore) Go(f func()) error                        { go f(); return nil }
+func (*sharedPrimaryCommitStore) IsClose() bool                            { return false }
+
+func newSharedPrimaryTestTxn(t *testing.T) (*testTxn, *sharedPrimaryCommitStore) {
+	t.Helper()
+	startTS := oracle.GoTimeToTS(time.Now())
+	txn := newTestTxn(t, startTS)
+	txn.SetPessimistic(true)
+	store := &sharedPrimaryCommitStore{
+		recorderStore: &recorderStore{mockStore: txn.store},
+		oracle:        oracles.NewLocalOracle(),
+	}
+	store.getTimestampWithRetry = func(*retry.Backoffer, string) (uint64, error) { return startTS + 10, nil }
+	txn.KVTxn.store = store
+	t.Cleanup(func() {
+		store.WaitGroup().Wait()
+		if txn.committer != nil {
+			txn.committer.close()
+		}
+		store.oracle.Close()
+		store.cache.Close()
+	})
+	return txn, store
+}
+
+func TestSharedPrimaryCommitsWithOrdinary2PC(t *testing.T) {
+	ctx := context.Background()
+	txn, store := newSharedPrimaryTestTxn(t)
+	txn.SetEnable1PC(true)
+	txn.SetEnableAsyncCommit(true)
+	key := []byte("primary")
+	var requests []tikvrpc.CmdType
+	txn.store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+		requests = append(requests, req.Type)
+		switch req.Type {
+		case tikvrpc.CmdPessimisticLock:
+			return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{}}, nil
+		case tikvrpc.CmdPrewrite:
+			prewrite := req.Prewrite()
+			require.False(t, prewrite.UseAsyncCommit)
+			require.False(t, prewrite.TryOnePc)
+			require.Equal(t, key, prewrite.PrimaryLock)
+			require.Len(t, prewrite.Mutations, 1)
+			require.Equal(t, kvrpcpb.Op_SharedLock, prewrite.Mutations[0].Op)
+			require.Equal(t, key, prewrite.Mutations[0].Key)
+			return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+		case tikvrpc.CmdCommit:
+			require.Equal(t, [][]byte{key}, req.Commit().Keys)
+			require.Equal(t, txn.StartTS()+10, req.Commit().CommitVersion)
+			return &tikvrpc.Response{Resp: &kvrpcpb.CommitResponse{}}, nil
+		case tikvrpc.CmdBatchRollback:
+			return &tikvrpc.Response{Resp: &kvrpcpb.BatchRollbackResponse{}}, nil
+		default:
+			return nil, errors.Errorf("unexpected RPC: %v", req.Type)
+		}
+	}
+	lock := kv.NewLockCtx(txn.StartTS()+1, kv.LockNoWait, time.Now())
+	lock.InShareMode = true
+	lock.AllowSharedLockPrimary = true
+	require.NoError(t, txn.LockKeys(ctx, lock, key))
+	err := txn.Commit(ctx)
+	store.WaitGroup().Wait()
+	require.NoError(t, err)
+	require.Equal(t, []tikvrpc.CmdType{tikvrpc.CmdPessimisticLock, tikvrpc.CmdPrewrite, tikvrpc.CmdCommit}, requests)
 }
