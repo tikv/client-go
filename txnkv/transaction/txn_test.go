@@ -1027,7 +1027,7 @@ func TestSharedLockUpgrade(t *testing.T) {
 		var lockFuncLost *tikverr.ErrSharedLockLost
 		require.ErrorAs(t, lockFuncErr, &lockFuncLost)
 		require.Same(t, firstLost, lockFuncLost)
-		require.False(t, callbackCalled)
+		require.True(t, callbackCalled, "LockKeysFunc must run cleanup callback even on early abort return")
 		require.Len(t, *requests, requestCount)
 
 		commitErr := txn.Commit(context.Background())

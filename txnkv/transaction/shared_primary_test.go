@@ -568,3 +568,69 @@ func TestAggressiveReacquireXSerializedBeforeSharedLock(t *testing.T) {
 		store.WaitGroup().Wait()
 	})
 }
+
+func TestFailedRollbackRejectsOverlappingExclusiveReacquire(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		txn, store := newSharedPrimaryTestTxn(t)
+		keyA, keyB := []byte("uncertain-a"), []byte("uncertain-b")
+		var lockCalls atomic.Int32
+
+		store.client.onSend = func(_ context.Context, _ string, req *tikvrpc.Request, _ time.Duration) (*tikvrpc.Response, error) {
+			switch req.Type {
+			case tikvrpc.CmdPessimisticLock:
+				lockCalls.Add(1)
+				return &tikvrpc.Response{Resp: &kvrpcpb.PessimisticLockResponse{
+					Errors: []*kvrpcpb.KeyError{{
+						Conflict: &kvrpcpb.WriteConflict{
+							StartTs: txn.StartTS(), ConflictTs: txn.StartTS() + 1, Key: keyB,
+						},
+					}},
+				}}, nil
+			case tikvrpc.CmdPessimisticRollback:
+				return nil, context.Canceled
+			default:
+				return nil, errors.Errorf("unexpected RPC %s", req.Type)
+			}
+		}
+
+		xTS := txn.StartTS() + 1
+		err := txn.LockKeys(context.Background(), kv.NewLockCtx(xTS, kv.LockNoWait, time.Now()), keyA, keyB)
+		require.Error(t, err)
+		store.WaitGroup().Wait()
+		require.Equal(t, int32(1), lockCalls.Load())
+
+		// Overlapping X reacquisition must fail and keep the uncertain rollback recorded.
+		err = txn.LockKeys(context.Background(), kv.NewLockCtx(xTS, kv.LockNoWait, time.Now()), keyA)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, int32(1), lockCalls.Load())
+
+		// A subsequent overlapping S read must still observe the uncertain rollback and fail.
+		err = txn.LockKeys(context.Background(), sharedReadCtx(xTS), keyA)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, int32(1), lockCalls.Load())
+	})
+}
+
+func TestLockKeysFuncRunsCallbackOnEarlyErrors(t *testing.T) {
+	txn, _ := newSharedPrimaryTestTxn(t)
+	key := []byte("early-err-key")
+
+	// Expired MaxExecutionDeadline before any RPC or pending rollback.
+	expiredCtx := kv.NewLockCtx(txn.StartTS()+1, kv.LockNoWait, time.Now())
+	expiredCtx.MaxExecutionDeadline = time.Now().Add(-time.Second)
+	called := 0
+	err := txn.LockKeysFunc(context.Background(), expiredCtx, func() { called++ }, key)
+	require.ErrorContains(t, err, "query interrupted")
+	require.Equal(t, 1, called)
+
+	// Zero ForUpdateTS for native shared read.
+	err = txn.LockKeysFunc(context.Background(), sharedReadCtx(0), func() { called++ }, key)
+	require.ErrorContains(t, err, "ForUpdateTS")
+	require.Equal(t, 2, called)
+
+	// Already-aborted shared transaction.
+	txn.setSharedLockAbort(errors.New("shared lock aborted"))
+	err = txn.LockKeysFunc(context.Background(), sharedReadCtx(txn.StartTS()+1), func() { called++ }, key)
+	require.ErrorContains(t, err, "shared lock aborted")
+	require.Equal(t, 3, called)
+}

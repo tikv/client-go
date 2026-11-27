@@ -1675,6 +1675,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	startTime := time.Now()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
+	if fn != nil {
+		defer fn()
+	}
 
 	if err := txn.getTxnStateErr(); err != nil {
 		return err
@@ -1713,9 +1716,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 	}()
-	if fn != nil {
-		defer fn()
-	}
 
 	if !txn.IsPessimistic() && txn.IsInAggressiveLockingMode() {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
@@ -2207,11 +2207,9 @@ func (txn *KVTxn) waitForPendingRollbacks(ctx context.Context, lockCtx *tikv.Loc
 			select {
 			case <-rollback.done:
 				if rollback.err != nil {
+					err = rollback.err
 					if nativeSharedRead || txn.usesSharedLockPrimary {
-						err = rollback.err
 						txn.setSharedLockAbort(err)
-					} else {
-						txn.aggressiveRollbacks.Delete(batch)
 					}
 				}
 			case <-ctx.Done():
@@ -2257,10 +2255,10 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 	go func() {
 		defer txn.store.WaitGroup().Done()
 		defer func() {
-			close(result.done)
 			if result.err == nil {
 				txn.aggressiveRollbacks.Delete(result)
 			}
+			close(result.done)
 		}()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
